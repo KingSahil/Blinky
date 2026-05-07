@@ -1,0 +1,9 @@
+dxcam==0.0.5
+easyocr==1.7.2
+numpy==1.26.4
+pillow==10.4.0
+psutil==6.1.0
+pywin32==306
+pywinauto==0.6.8
+requests==2.32.3
+typing-extensions==4.12.2

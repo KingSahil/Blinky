@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://clicky.local/schemas/clicky-result.schema.json",
+  "title": "ClickyTutorResult",
+  "type": "object",
+  "required": ["summary", "steps", "active_app", "ocr", "elapsed_ms", "warnings"],
+  "properties": {
+    "summary": { "type": "string" },
+    "steps": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "required": ["step", "instruction", "target_text"],
+        "properties": {
+          "step": { "type": "integer", "minimum": 1 },
+          "instruction": { "type": "string" },
+          "target_text": { "type": "string" },
+          "match": {
+            "anyOf": [
+              { "$ref": "#/$defs/ocrItem" },
+              { "type": "null" }
+            ]
+          }
+        }
+      }
+    },
+    "active_app": {
+      "type": "object",
+      "required": ["title", "process", "supported"],
+      "properties": {
+        "title": { "type": "string" },
+        "process": { "type": "string" },
+        "supported": { "type": "boolean" }
+      }
+    },
+    "ocr": {
+      "type": "object",
+      "required": ["count", "items"],
+      "properties": {
+        "count": { "type": "integer" },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ocrItem" }
+        }
+      }
+    },
+    "screenshot": {
+      "type": "object",
+      "required": ["path", "width", "height"],
+      "properties": {
+        "path": { "type": "string" },
+        "width": { "type": "integer" },
+        "height": { "type": "integer" }
+      }
+    },
+    "elapsed_ms": { "type": "integer" },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "ocrItem": {
+      "type": "object",
+      "required": ["text", "x", "y", "width", "height", "confidence"],
+      "properties": {
+        "text": { "type": "string" },
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "width": { "type": "integer" },
+        "height": { "type": "integer" },
+        "confidence": { "type": "number" }
+      }
+    }
+  }
+}

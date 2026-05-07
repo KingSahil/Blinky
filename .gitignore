@@ -1,0 +1,9 @@
+node_modules/
+.venv/
+tmp/
+frontend/dist/
+src-tauri/target/
+*.log
+__pycache__/
+*.pyc
+.DS_Store

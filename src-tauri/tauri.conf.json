@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Clicky",
+  "version": "0.1.0",
+  "identifier": "app.clicky.tutor",
+  "build": {
+    "beforeDevCommand": "vite --config frontend/vite.config.ts",
+    "beforeBuildCommand": "vite build --config frontend/vite.config.ts",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Clicky",
+        "width": 1120,
+        "height": 760,
+        "minWidth": 900,
+        "minHeight": 620,
+        "resizable": true,
+        "center": true,
+        "decorations": true,
+        "transparent": false
+      },
+      {
+        "label": "command",
+        "title": "Clicky Command",
+        "url": "/command",
+        "width": 720,
+        "height": 108,
+        "resizable": false,
+        "center": true,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true
+      },
+      {
+        "label": "overlay",
+        "title": "Clicky Overlay",
+        "url": "/overlay",
+        "fullscreen": true,
+        "alwaysOnTop": true,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "resizable": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "resources": [
+      "../python",
+      "../requirements.txt"
+    ]
+  }
+}
