@@ -32,7 +32,7 @@
         "resizable": false,
         "center": true,
         "decorations": false,
-        "transparent": true,
+        "transparent": false,
         "visible": false,
         "alwaysOnTop": true,
         "skipTaskbar": true

@@ -1,8 +1,10 @@
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Loader2, MonitorUp, Play, X } from 'lucide-react';
+import { GripVertical, Loader2, MonitorUp, Play, X } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { runTutor, showOverlay } from './lib/tauri';
+import { hideOverlay, runTutor, showOverlay } from './lib/tauri';
+
+const OVERLAY_AUTO_HIDE_MS = 3500;
 
 export function CommandBar() {
   const [question, setQuestion] = useState('');
@@ -27,23 +29,45 @@ export function CommandBar() {
 
     setIsRunning(true);
     setStatus('Reading the screen...');
+    const currentWindow = getCurrentWindow();
     try {
-      await getCurrentWindow().hide();
+      await currentWindow.hide();
       const result = await runTutor(trimmed);
       await showOverlay();
+      window.setTimeout(() => {
+        void hideOverlay();
+      }, OVERLAY_AUTO_HIDE_MS);
+      await currentWindow.show();
+      await currentWindow.setFocus();
       setStatus(result.summary);
       setQuestion('');
     } catch (error) {
-      await getCurrentWindow().show();
+      await currentWindow.show();
+      await currentWindow.setFocus();
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
       setIsRunning(false);
     }
   }
 
+  async function startDrag() {
+    await getCurrentWindow().startDragging();
+  }
+
   return (
     <main className="command-window">
       <form className="command-popup standalone" onSubmit={submit}>
+        <div
+          className="drag-handle"
+          aria-label="Move command bar"
+          data-tauri-drag-region
+          onMouseDown={(event) => {
+            event.preventDefault();
+            void startDrag();
+          }}
+        >
+          <GripVertical size={18} />
+        </div>
         <div className="command-icon">
           <MonitorUp size={20} />
         </div>

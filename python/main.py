@@ -5,7 +5,7 @@ import sys
 import time
 from pathlib import Path
 
-from ai.ollama_client import ask_gemma
+from ai.client import ask_model, get_provider_label
 from ai.local_intents import answer_local_question
 from ai.prompt import build_prompt
 from capture.screen import capture_screen
@@ -38,7 +38,7 @@ def run(question: str) -> dict:
             active_app=active_app,
             ocr_items=visible_items,
         )
-        ai_result = ask_gemma(prompt)
+        ai_result = ask_model(prompt=prompt, screenshot_path=screenshot.path)
 
     steps = attach_matches(ai_result.get("steps", []), visible_items)
 
@@ -54,6 +54,7 @@ def run(question: str) -> dict:
             "height": screenshot.height,
         },
         "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
         "warnings": warnings + ai_result.get("warnings", []),
     }
 
@@ -61,7 +62,9 @@ def run(question: str) -> dict:
 def merge_visible_items(ocr_items: list[dict], uia_items: list[dict]) -> list[dict]:
     merged: list[dict] = []
     seen: set[tuple] = set()
-    for item in [*uia_items, *ocr_items]:
+    # Keep OCR coordinates first because they are in screenshot pixel space and
+    # align best with overlay placement. UIA remains as a fallback source.
+    for item in [*ocr_items, *uia_items]:
         key = (
             str(item.get("text", "")).lower(),
             int(item.get("x", 0) / 8),

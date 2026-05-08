@@ -47,7 +47,6 @@ button {
 }
 
 .brand,
-.window-actions,
 .hotkey,
 .ready-pill,
 .ghost-action,
@@ -91,23 +90,6 @@ p {
 .preview-meta small {
   color: #8fa2b7;
   font-size: 12px;
-}
-
-.window-actions {
-  gap: 4px;
-}
-
-.window-actions button {
-  width: 34px;
-  height: 30px;
-  border-radius: 8px;
-  background: transparent;
-  color: #b6c8dc;
-}
-
-.window-actions button:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #ffffff;
 }
 
 .workspace {
@@ -458,9 +440,10 @@ p {
 .command-window {
   width: 100vw;
   height: 100vh;
-  display: grid;
-  place-items: center;
-  background: transparent;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  background: #0b121c;
 }
 
 .command-popup {
@@ -468,15 +451,18 @@ p {
   gap: 14px;
   padding: 12px;
   border-radius: 20px;
-  background: rgba(11, 18, 28, 0.9);
+  background: #0b121c;
   border: 1px solid rgba(255, 255, 255, 0.13);
   box-shadow: 0 28px 90px rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(28px);
 }
 
 .command-popup.standalone {
-  width: calc(100vw - 22px);
-  min-height: 84px;
+  width: 100vw;
+  min-height: 100vh;
+  background: transparent;
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
 }
 
 .command-stack {
@@ -506,6 +492,24 @@ p {
   color: #dcecff !important;
 }
 
+.drag-handle {
+  width: 30px;
+  min-width: 30px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 !important;
+  background: transparent !important;
+  color: #8fa2b7 !important;
+  cursor: grab;
+  user-select: none;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
 .spin {
   animation: spin 0.8s linear infinite;
 }
@@ -533,38 +537,6 @@ p {
   border: 1px solid rgba(56, 232, 255, 0.8);
   border-radius: 14px;
   animation: pulse 1.5s ease-out infinite;
-}
-
-.target-tooltip {
-  position: absolute;
-  top: calc(100% + 12px);
-  left: 0;
-  max-width: 340px;
-  min-width: 220px;
-  display: flex;
-  gap: 9px;
-  align-items: flex-start;
-  padding: 11px 12px;
-  border-radius: 14px;
-  background: rgba(7, 16, 21, 0.88);
-  color: #eef7ff;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  backdrop-filter: blur(22px);
-  font-size: 13px;
-  line-height: 1.35;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
-}
-
-.target-tooltip span {
-  flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: #a7ff7a;
-  color: #071015;
-  font-weight: 900;
 }
 
 @keyframes spin {

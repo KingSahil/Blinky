@@ -56,6 +56,7 @@ def _windows_ocr(image_path: Path) -> list[dict[str, Any]]:
                         "width": int(box.width),
                         "height": int(box.height),
                         "confidence": 0.92,
+                        "source": "ocr",
                     }
                 )
         stream.close()
@@ -85,6 +86,7 @@ def _easy_ocr(image_path: Path) -> list[dict[str, Any]]:
                     "width": int(max(xs) - min(xs)),
                     "height": int(max(ys) - min(ys)),
                     "confidence": round(float(confidence), 3),
+                    "source": "ocr",
                 }
             )
         LOGGER.info("EasyOCR returned %s items", len(items))
@@ -102,5 +104,6 @@ def _easy_ocr(image_path: Path) -> list[dict[str, Any]]:
                 "width": 240,
                 "height": 36,
                 "confidence": 0.0,
+                "source": "ocr",
             }
         ]

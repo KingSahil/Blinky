@@ -32,6 +32,7 @@ export interface TutorResult {
     path: string;
   };
   elapsed_ms: number;
+  provider?: string;
   warnings: string[];
 }
 

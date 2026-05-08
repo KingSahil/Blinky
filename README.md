@@ -1,12 +1,14 @@
 # Clicky
 
-Clicky is a hackathon-ready Windows desktop AI tutor. It captures the current screen, extracts visible text, asks a local Gemma model through Ollama for short steps, and highlights the target UI text with a transparent always-on-top overlay.
+Clicky is a hackathon-ready Windows desktop AI tutor. It captures the current screen, extracts visible text, asks an AI model for short steps, and highlights the target UI text with a transparent always-on-top overlay.
 
 ## Stack
 
 - Tauri 2, React, TypeScript
 - Python 3.11 worker scripts
-- Ollama model: `gemma4:e4b`
+- AI providers:
+  - Ollama model (default): `gemma4:e4b`
+  - Groq vision model (optional): `llama-3.2-90b-vision-preview`
 - OCR: Windows OCR API first, EasyOCR fallback
 - Capture: `dxcam`
 - Active window and UI fallback: `pywinauto`
@@ -18,7 +20,7 @@ Clicky is a hackathon-ready Windows desktop AI tutor. It captures the current sc
    - Rust stable
    - Python 3.11+
    - Ollama
-2. Pull the local model:
+2. Pull the local model (default provider):
    ```powershell
    ollama pull gemma4:e4b
    ```
@@ -30,7 +32,31 @@ Clicky is a hackathon-ready Windows desktop AI tutor. It captures the current sc
    npm run dev
    ```
 
-Press `Ctrl + Shift + Space` to open the small command popup. Ask something like "How do I install Python extension?" and Clicky will capture the current screen, run OCR, call Ollama, and highlight the matched target text.
+Press `Ctrl + Shift + Enter` to open the small command popup. `Ctrl + Shift + Space` also works as a fallback. Ask something like "How do I install Python extension?" and Clicky will capture the current screen, run OCR, call the configured AI provider, and highlight the matched target text.
+
+## Provider Configuration
+
+By default Clicky uses Ollama. To switch to Groq with image understanding, set these environment variables before running:
+
+```powershell
+$env:CLICKY_AI_PROVIDER="groq"
+$env:GROQ_API_KEY="your-groq-api-key"
+```
+
+Optional overrides:
+
+```powershell
+$env:CLICKY_GROQ_MODEL="llama-3.2-90b-vision-preview"
+$env:CLICKY_GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
+```
+
+For Ollama overrides:
+
+```powershell
+$env:CLICKY_AI_PROVIDER="ollama"
+$env:CLICKY_OLLAMA_MODEL="gemma4:e4b"
+$env:CLICKY_OLLAMA_URL="http://localhost:11434/api/generate"
+```
 
 ## Project Structure
 

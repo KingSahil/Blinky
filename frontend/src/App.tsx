@@ -1,5 +1,4 @@
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   Bot,
   CheckCircle2,
@@ -7,18 +6,17 @@ import {
   EyeOff,
   Keyboard,
   Loader2,
-  Maximize2,
   MessageSquareText,
-  Minus,
   MonitorUp,
   Play,
   Search,
   Sparkles,
-  X,
 } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { hideOverlay, runTutor, showOverlay } from './lib/tauri';
 import type { ChatMessage, TutorResult } from './lib/types';
+
+const OVERLAY_AUTO_HIDE_MS = 3500;
 
 const starterMessages: ChatMessage[] = [
   {
@@ -75,6 +73,9 @@ export function App() {
       const result = await runTutor(trimmed);
       if (overlayEnabled) {
         await showOverlay();
+        window.setTimeout(() => {
+          void hideOverlay();
+        }, OVERLAY_AUTO_HIDE_MS);
       }
       setMessages((current) => [
         ...current,
@@ -123,17 +124,6 @@ export function App() {
             <span>AI tutor for the screen in front of you</span>
           </div>
         </div>
-        <div className="window-actions">
-          <button aria-label="Minimize" onClick={() => getCurrentWindow().minimize()}>
-            <Minus size={16} />
-          </button>
-          <button aria-label="Maximize" onClick={() => getCurrentWindow().toggleMaximize()}>
-            <Maximize2 size={15} />
-          </button>
-          <button aria-label="Close" onClick={() => getCurrentWindow().close()}>
-            <X size={16} />
-          </button>
-        </div>
       </header>
 
       <section className="workspace">
@@ -141,7 +131,7 @@ export function App() {
           <div className="hotkey">
             <Keyboard size={19} />
             <div>
-              <span>Ctrl + Shift + Space</span>
+              <span>Ctrl + Shift + Enter</span>
               <small>Open command popup</small>
             </div>
           </div>
@@ -189,7 +179,7 @@ export function App() {
                 </div>
                 <div className="bubble loading-bubble">
                   <Loader2 className="spin" size={18} />
-                  Capturing screen, reading UI text, and asking Gemma...
+                  Capturing screen, reading UI text, and asking the model...
                 </div>
               </article>
             ) : null}
@@ -244,7 +234,7 @@ function StatusGrid({ result, isRunning }: { result?: TutorResult; isRunning: bo
     ['Screen', isRunning ? 'Capturing' : result?.screenshot ? 'Captured' : 'Idle'],
     ['OCR', result ? `${result.ocr.count} texts` : 'Waiting'],
     ['App', result?.active_app.process || 'Unknown'],
-    ['Ollama', result ? `${result.elapsed_ms} ms` : 'Local'],
+    [result?.provider || 'Provider', result ? `${result.elapsed_ms} ms` : 'Local'],
   ];
 
   return (

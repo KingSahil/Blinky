@@ -31,9 +31,15 @@ def find_best_match(target: str, ocr_items: list[dict]) -> dict | None:
             score = 0.86
         else:
             score = SequenceMatcher(None, target_norm, text_norm).ratio()
+            if score < 0.65:
+                continue
 
         confidence = float(item.get("confidence") or 0)
-        weighted = score * 0.84 + confidence * 0.16
+        source = str(item.get("source", "")).lower()
+        # OCR boxes are captured from the exact screenshot pixels used by the
+        # overlay, so prefer OCR over UIA for final on-screen placement.
+        source_bonus = 0.02 if source == "ocr" else 0.0
+        weighted = score * 0.94 + confidence * 0.06 + source_bonus
         if weighted > best_score:
             best_score = weighted
             best_item = item

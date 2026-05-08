@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from typing import Any
@@ -11,18 +12,21 @@ from utils.logging import get_logger
 
 LOGGER = get_logger("clicky.ollama")
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "gemma4:e4b"
+DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
+DEFAULT_OLLAMA_MODEL = "gemma4:e4b"
 
 
-def ask_gemma(prompt: str) -> dict[str, Any]:
+def ask_ollama(prompt: str) -> dict[str, Any]:
+    ollama_url = os.getenv("CLICKY_OLLAMA_URL", DEFAULT_OLLAMA_URL).strip() or DEFAULT_OLLAMA_URL
+    model = os.getenv("CLICKY_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL).strip() or DEFAULT_OLLAMA_MODEL
+
     last_error: Exception | None = None
     for attempt in range(2):
         try:
             response = requests.post(
-                OLLAMA_URL,
+                ollama_url,
                 json={
-                    "model": MODEL,
+                    "model": model,
                     "prompt": prompt,
                     "stream": False,
                     "format": "json",
@@ -42,7 +46,7 @@ def ask_gemma(prompt: str) -> dict[str, Any]:
             time.sleep(0.4)
 
     raise RuntimeError(
-        f"Ollama did not return valid guidance. Is Ollama running with {MODEL}? {last_error}"
+        f"Ollama did not return valid guidance. Is Ollama running with {model}? {last_error}"
     )
 
 

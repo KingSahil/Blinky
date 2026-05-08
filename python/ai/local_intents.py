@@ -13,19 +13,22 @@ def answer_local_question(question: str, visible_items: list[dict]) -> dict | No
         return None
 
     target = _best_visible_frontend_target(visible_items)
-    target_text = target["text"] if target else "frontend"
+    if not target:
+        return None
+
+    target_text = target["text"]
 
     return {
         "summary": "The frontend lives in the `frontend` folder in this project.",
         "steps": [
             {
                 "step": 1,
-                "instruction": "Look for the `frontend` folder in the Explorer or open file path.",
+                "instruction": "Open the `frontend` folder in your project tree.",
                 "target_text": target_text,
             },
             {
                 "step": 2,
-                "instruction": "Open `frontend/src/App.tsx` for the main React screen.",
+                "instruction": "Expand that folder and open the file you want from inside it.",
                 "target_text": target_text,
             },
         ],

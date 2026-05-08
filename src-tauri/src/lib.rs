@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -10,23 +10,17 @@ struct TutorRequest {
     question: String,
 }
 
-#[derive(Debug, Serialize)]
-struct WorkerError {
-    error: String,
-}
-
 #[tauri::command]
 async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::Value, String> {
-    let output = run_python_worker(&app, &request.question)
-        .map_err(|error| serde_json::to_string(&WorkerError { error }).unwrap_or_default())?;
+    let output = run_python_worker(&app, &request.question).map_err(|error| error)?;
 
     let parsed: serde_json::Value = serde_json::from_str(&output)
         .map_err(|err| format!("Python worker returned invalid JSON: {err}. Raw: {output}"))?;
 
     if let Some(overlay) = app.get_webview_window("overlay") {
+        configure_overlay_passthrough(&overlay);
         let _ = overlay.emit("clicky://guidance", parsed.clone());
         let _ = overlay.show();
-        let _ = overlay.set_focus();
     }
 
     Ok(parsed)
@@ -35,6 +29,7 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
 #[tauri::command]
 fn show_overlay(app: AppHandle) -> Result<(), String> {
     if let Some(overlay) = app.get_webview_window("overlay") {
+        configure_overlay_passthrough(&overlay);
         overlay.show().map_err(|err| err.to_string())?;
     }
     Ok(())
@@ -56,6 +51,7 @@ fn run_python_worker(app: &AppHandle, question: &str) -> Result<String, String> 
     let mut child = Command::new(python)
         .arg(script)
         .current_dir(&root)
+        .env("PYTHONWARNINGS", "ignore")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -74,11 +70,24 @@ fn run_python_worker(app: &AppHandle, question: &str) -> Result<String, String> 
         .map_err(|err| format!("Python worker failed: {err}"))?;
 
     if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        if let Some(error) = parse_worker_error(&stdout) {
+            return Err(error);
+        }
+
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Python worker exited with {}: {stderr}", output.status));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn parse_worker_error(stdout: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
+    parsed
+        .get("error")
+        .and_then(|error| error.as_str())
+        .map(|error| error.to_string())
 }
 
 fn project_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -108,6 +117,8 @@ fn python_executable(root: &PathBuf) -> PathBuf {
 }
 
 fn configure_overlay_passthrough(window: &WebviewWindow) {
+    let _ = window.set_ignore_cursor_events(true);
+
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::Foundation::HWND;
@@ -140,20 +151,50 @@ pub fn run() {
                 configure_overlay_passthrough(&overlay);
             }
 
-            let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space);
             let app_handle = app.handle().clone();
-            app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-                if event.state() == ShortcutState::Pressed {
-                    if let Some(command) = app_handle.get_webview_window("command") {
-                        let _ = command.emit("clicky://open-command", ());
-                        let _ = command.show();
-                        let _ = command.set_focus();
+
+            for code in [Code::Enter, Code::Space] {
+                let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), code);
+                let app_handle = app_handle.clone();
+                if let Err(err) = app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        show_command_window(&app_handle);
                     }
+                }) {
+                    eprintln!("Failed to register command shortcut {code:?}: {err}");
                 }
-            })?;
+            }
 
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("failed to run Clicky");
+}
+
+fn show_command_window(app: &AppHandle) {
+    if let Some(command) = app.get_webview_window("command") {
+        let _ = command.emit("clicky://open-command", ());
+        let _ = command.show();
+        let _ = command.set_focus();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_worker_error;
+
+    #[test]
+    fn parses_worker_json_error_from_stdout() {
+        let stdout = r#"{"error":"Ollama is not running","steps":[],"warnings":[]}"#;
+
+        assert_eq!(
+            parse_worker_error(stdout),
+            Some("Ollama is not running".to_string())
+        );
+    }
+
+    #[test]
+    fn ignores_non_json_worker_stdout() {
+        assert_eq!(parse_worker_error("not json"), None);
+    }
 }
