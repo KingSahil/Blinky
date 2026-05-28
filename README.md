@@ -4,42 +4,114 @@
 
 ### *Ask. Learn. Click. Done.*
 
-- Tauri 2, React, TypeScript
-- Python 3.11 worker scripts
-- AI providers:
-  - Ollama model (default): `gemma4:e4b`
-  - Groq vision model (optional): `llama-3.2-90b-vision-preview`
-- OCR: Windows OCR API first, EasyOCR fallback
-- Capture: `dxcam`
-- Active window and UI fallback: `pywinauto`
+<br>
+
+<p align="center">
+
+<img src="https://img.shields.io/badge/Tauri-2.x-orange?style=for-the-badge">
+<img src="https://img.shields.io/badge/React-TypeScript-61dafb?style=for-the-badge">
+<img src="https://img.shields.io/badge/Python-3.11-yellow?style=for-the-badge">
+
+</p>
+
+<p align="center">
+
+<img src="https://img.shields.io/badge/Ollama-gemma4:e4b-green?style=for-the-badge">
+<img src="https://img.shields.io/badge/Groq-Vision-purple?style=for-the-badge">
+<img src="https://img.shields.io/badge/OCR-Windows%20OCR-blue?style=for-the-badge">
+
+</p>
+
+<p align="center">
+
+<img src="https://img.shields.io/badge/EasyOCR-Fallback-red?style=for-the-badge">
+<img src="https://img.shields.io/badge/dxcam-Screen%20Capture-black?style=for-the-badge">
+<img src="https://img.shields.io/badge/pywinauto-Window%20Detection-darkgreen?style=for-the-badge">
+
+</p>
+
+<br>
 
 ![Platform](https://img.shields.io/badge/platform-Windows-blue)
-![Tauri](https://img.shields.io/badge/Tauri-2.x-orange)
-![React](https://img.shields.io/badge/React-TypeScript-61dafb)
-![Python](https://img.shields.io/badge/Python-3.11-yellow)
-![AI](https://img.shields.io/badge/AI-Gemma4%3Ae4b-green)
 ![License](https://img.shields.io/badge/license-MIT-purple)
+
+</div>
+
+---
 
 An AI-powered Windows desktop tutor that teaches users software directly on their screen using local AI.
 
-1. Install prerequisites:
-   - Node.js 20+
-   - Rust stable
-   - Python 3.11+
-   - Ollama
-2. Pull the local model (default provider):
-   ```powershell
-   ollama pull gemma4:e4b
-   ```
-3. Install app dependencies:
-   ```powershell
-   npm install
-   npm run setup:python
-   npm run check:ollama
-   npm run dev
-   ```
+# ⚡ Quick Start
 
-Press `Ctrl + Shift + Enter` to open the small command popup. `Ctrl + Shift + Space` also works as a fallback. Ask something like "How do I install Python extension?" and Clicky will capture the current screen, run OCR, call the configured AI provider, and highlight the matched target text.
+## 1️⃣ Install Prerequisites
+
+Install the following software:
+
+- Node.js 20+
+- Rust Stable
+- Python 3.11+
+- Ollama
+
+---
+
+## 2️⃣ Pull the AI Model
+
+```powershell
+ollama pull gemma4:e4b
+````
+
+---
+
+## 3️⃣ Install Dependencies
+
+```powershell
+npm install
+npm run setup:python
+npm run check:ollama
+```
+
+---
+
+## 4️⃣ Start Clicky
+
+```powershell
+npm run dev
+```
+
+
+## ⌨️ Open Clicky
+
+### Main Hotkey
+
+```text
+CTRL + SHIFT + SPACE
+```
+
+### Fallback Hotkey
+
+```text
+CTRL + SHIFT + ENTER
+```
+
+---
+
+Ask something like:
+
+```text
+How do I install Python extension?
+```
+
+Clicky will:
+
+* Capture the current screen
+* Run OCR
+* Detect the active application
+* Generate AI instructions
+* Highlight matching UI elements
+
+```
+```
+
 
 ## Provider Configuration
 
