@@ -1,0 +1,14 @@
+{
+  "files": [
+    {"path": "frontend/src/App.tsx", "desc": "Main React UI and command popup"},
+    {"path": "frontend/src/lib/tauri.ts", "desc": "Tauri JS helpers to call Rust and show/hide overlay"},
+    {"path": "python/main.py", "desc": "Python worker entrypoint that runs capture+OCR+AI and returns JSON"},
+    {"path": "python/ai/client.py", "desc": "Routes requests to Ollama or Groq"},
+    {"path": "python/ocr/extract.py", "desc": "OCR extraction pipeline (Windows OCR, EasyOCR fallback)"},
+    {"path": "python/capture/screen.py", "desc": "Screen capture using dxcam"},
+    {"path": "python/utils/matching.py", "desc": "Match AI steps to visible OCR/UI items"},
+    {"path": "src-tauri/Cargo.toml", "desc": "Rust crate/Tauri configuration and native deps"},
+    {"path": "package.json", "desc": "Top-level scripts and dev/runtime deps"},
+    {"path": "README.md", "desc": "Project overview and setup instructions"}
+  ]
+}

@@ -27,15 +27,18 @@
         "label": "command",
         "title": "Clicky Command",
         "url": "/command",
-        "width": 720,
-        "height": 108,
+        "width": 760,
+        "height": 220,
+        "minWidth": 560,
+        "minHeight": 140,
         "resizable": false,
         "center": true,
         "decorations": false,
-        "transparent": false,
+        "transparent": true,
         "visible": false,
         "alwaysOnTop": true,
-        "skipTaskbar": true
+        "skipTaskbar": true,
+        "shadow": false
       },
       {
         "label": "overlay",
