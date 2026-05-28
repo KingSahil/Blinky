@@ -12,3 +12,7 @@ export async function showOverlay(): Promise<void> {
 export async function hideOverlay(): Promise<void> {
   return invoke('hide_overlay');
 }
+
+export async function showCommandBar(): Promise<void> {
+  return invoke('show_command_bar');
+}

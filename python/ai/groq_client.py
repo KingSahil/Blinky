@@ -14,7 +14,8 @@ from utils.logging import get_logger
 LOGGER = get_logger("clicky.groq")
 
 DEFAULT_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_GROQ_MODEL = "llama-3.2-90b-vision-preview"
+DEFAULT_GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+DECOMMISSIONED_GROQ_MODELS = {"llama-3.2-90b-vision-preview"}
 
 
 def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
@@ -22,7 +23,7 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is required when CLICKY_AI_PROVIDER=groq.")
 
-    model = os.getenv("CLICKY_GROQ_MODEL", DEFAULT_GROQ_MODEL).strip() or DEFAULT_GROQ_MODEL
+    model = _active_groq_model()
     groq_url = os.getenv("CLICKY_GROQ_URL", DEFAULT_GROQ_URL).strip() or DEFAULT_GROQ_URL
 
     image_payload = _image_to_data_url(screenshot_path)
@@ -36,6 +37,7 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
             "model": model,
             "temperature": 0.1,
             "max_tokens": 700,
+            "response_format": {"type": "json_object"},
             "messages": [
                 {
                     "role": "user",
@@ -48,10 +50,37 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
         },
         timeout=45,
     )
-    response.raise_for_status()
+    if not response.ok:
+        raise RuntimeError(_format_groq_error(response))
     body = response.json()
     content = _extract_content(body)
     return _validate_response(_parse_json(content))
+
+
+def _active_groq_model() -> str:
+    model = os.getenv("CLICKY_GROQ_MODEL", DEFAULT_GROQ_MODEL).strip() or DEFAULT_GROQ_MODEL
+    if model in DECOMMISSIONED_GROQ_MODELS:
+        LOGGER.warning("Ignoring decommissioned Groq model %s; using %s", model, DEFAULT_GROQ_MODEL)
+        return DEFAULT_GROQ_MODEL
+    return model
+
+
+def _format_groq_error(response: requests.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return f"Groq request failed with HTTP {response.status_code}: {response.text[:300]}"
+
+    error = payload.get("error", {})
+    if isinstance(error, dict):
+        message = str(error.get("message", "")).strip()
+        code = str(error.get("code", "")).strip()
+        if message and code:
+            return f"Groq request failed ({code}): {message}"
+        if message:
+            return f"Groq request failed: {message}"
+
+    return f"Groq request failed with HTTP {response.status_code}: {payload}"
 
 
 def _image_to_data_url(screenshot_path: Path) -> str:

@@ -10,7 +10,7 @@ Clicky is a hackathon-ready Windows desktop AI tutor. It captures the current sc
 - Python 3.11 worker scripts
 - AI providers:
   - Ollama model (default): `gemma4:e4b`
-  - Groq vision model (optional): `llama-3.2-90b-vision-preview`
+  - Groq vision model (optional): `meta-llama/llama-4-scout-17b-16e-instruct`
 - OCR: Windows OCR API first, EasyOCR fallback
 - Capture: `dxcam`
 - Active window and UI fallback: `pywinauto`
@@ -55,7 +55,7 @@ $env:GROQ_API_KEY="your-groq-api-key"
 Optional overrides:
 
 ```powershell
-$env:CLICKY_GROQ_MODEL="llama-3.2-90b-vision-preview"
+$env:CLICKY_GROQ_MODEL="meta-llama/llama-4-scout-17b-16e-instruct"
 $env:CLICKY_GROQ_URL="https://api.groq.com/openai/v1/chat/completions"
 ```
 
