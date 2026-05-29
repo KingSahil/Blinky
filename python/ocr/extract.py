@@ -69,7 +69,7 @@ def _easy_ocr(image_path: Path) -> list[dict[str, Any]]:
     try:
         import easyocr
 
-        reader = easyocr.Reader(["en"], gpu=False, verbose=False)
+        reader = easyocr.Reader(["en"], gpu=True, verbose=False)
         results = reader.readtext(str(image_path), paragraph=False)
         items = []
         for box, text, confidence in results:
