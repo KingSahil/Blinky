@@ -686,7 +686,7 @@ h3 {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.steps li > span {
+.steps li>span {
   width: 26px;
   height: 26px;
   display: grid;
@@ -838,12 +838,13 @@ h3 {
   width: 100vw;
   height: 100vh;
   display: grid;
-  place-items: center;
-  padding: 16px 24px 34px;
+  place-items: start center;
+  padding: 60px 24px 34px;
   background: transparent;
 }
 
 .command-popup {
+  position: relative;
   width: 100%;
   max-width: 860px;
   display: flex;
@@ -1042,11 +1043,13 @@ h3 {
 }
 
 @keyframes slowPulse {
+
   0%,
   100% {
     transform: translateY(0) scale(1);
     opacity: 0.7;
   }
+
   50% {
     transform: translateY(-18px) scale(1.02);
     opacity: 0.95;
@@ -1058,6 +1061,7 @@ h3 {
     transform: translateY(12px);
     opacity: 0;
   }
+
   to {
     transform: translateY(0);
     opacity: 1;
@@ -1075,6 +1079,7 @@ h3 {
     transform: scale(0.98);
     opacity: 0.75;
   }
+
   to {
     transform: scale(1.1);
     opacity: 0;
@@ -1082,12 +1087,13 @@ h3 {
 }
 
 @media (max-width: 1050px) {
+
   .workspace,
   .settings-workspace,
   .app-workspace {
     grid-template-columns: 220px 1fr;
   }
-  
+
   .app-workspace.settings-closed {
     grid-template-columns: 220px 1fr;
   }
@@ -1102,6 +1108,7 @@ h3 {
 }
 
 @media (max-width: 760px) {
+
   .workspace,
   .settings-workspace,
   .app-workspace {
@@ -1113,4 +1120,173 @@ h3 {
   .nav-rail {
     display: none;
   }
+}
+
+/* ==========================================================================
+   Combined Command Bar & Settings Dropdown Styling
+   ========================================================================== */
+
+.command-settings-toggle.active {
+  background: rgba(255, 110, 95, 0.15);
+  color: var(--accent-strong);
+  box-shadow: 0 0 10px rgba(255, 110, 95, 0.3);
+}
+
+.command-settings-dropdown {
+  position: absolute;
+  top: 52px;
+  right: 14px;
+  width: 260px;
+  background: var(--panel-strong);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  z-index: 100;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+  animation: slideDownIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes slideDownIn {
+  from {
+    transform: translateY(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.dropdown-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dropdown-section h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  margin: 0 0 2px 0;
+}
+
+.dropdown-options {
+  display: grid;
+  gap: 6px;
+}
+
+.dropdown-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid transparent;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.dropdown-option:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.dropdown-option.active {
+  background: rgba(255, 110, 95, 0.1);
+  border-color: rgba(255, 110, 95, 0.25);
+  color: var(--accent-strong);
+}
+
+.dropdown-option .active-dot {
+  color: var(--accent);
+}
+
+.dropdown-about {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dropdown-about strong {
+  color: var(--text-strong);
+}
+
+/* Command Bar Results Styling */
+.command-result-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  margin-top: 12px;
+  animation: riseIn 0.3s ease-out both;
+}
+
+.command-summary-bubble {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.summary-sparkle {
+  color: var(--accent);
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.command-summary-bubble .command-status {
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  color: var(--text-strong);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.command-steps-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px;
+  border-radius: 18px;
+  background: rgba(12, 9, 12, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.command-steps-panel h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  margin: 0;
+}
+
+.target-text-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(56, 232, 255, 0.12);
+  color: #38e8ff;
+  font-size: 11px;
+}
+
+.target-text-badge code {
+  font-family: inherit;
+  font-weight: 600;
 }

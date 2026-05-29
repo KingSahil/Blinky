@@ -12,25 +12,13 @@
   "app": {
     "windows": [
       {
-        "label": "main",
-        "title": "Clicky",
-        "width": 1120,
-        "height": 760,
-        "minWidth": 900,
-        "minHeight": 620,
-        "resizable": true,
-        "center": true,
-        "decorations": false,
-        "transparent": true
-      },
-      {
         "label": "command",
         "title": "Clicky Command",
         "url": "/command",
         "width": 760,
-        "height": 220,
+        "height": 580,
         "minWidth": 560,
-        "minHeight": 140,
+        "minHeight": 580,
         "resizable": false,
         "center": true,
         "decorations": false,

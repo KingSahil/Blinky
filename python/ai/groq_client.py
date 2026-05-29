@@ -86,7 +86,7 @@ def _format_groq_error(response: requests.Response) -> str:
 def _image_to_data_url(screenshot_path: Path) -> str:
     raw = screenshot_path.read_bytes()
     encoded = base64.b64encode(raw).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
+    return f"data:image/jpeg;base64,{encoded}"
 
 
 def _extract_content(payload: dict[str, Any]) -> str:

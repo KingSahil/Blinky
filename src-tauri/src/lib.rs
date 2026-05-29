@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
@@ -216,7 +216,6 @@ pub fn run() {
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show_command" => show_command_window(app),
-            "show_settings" => show_main_window(app),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -225,6 +224,11 @@ pub fn run() {
 
             if let Some(overlay) = app.get_webview_window("overlay") {
                 configure_overlay_passthrough(&overlay);
+            }
+
+            if let Some(command) = app.get_webview_window("command") {
+                let _ = command.show();
+                let _ = command.set_focus();
             }
 
             let app_handle = app.handle().clone();
@@ -249,15 +253,25 @@ pub fn run() {
 }
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let show_command = MenuItem::with_id(app, "show_command", "Show Chat Bar", true, None::<&str>)?;
-    let show_settings = MenuItem::with_id(app, "show_settings", "Settings", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Clicky", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_command, &show_settings, &quit])?;
+    let show_command = MenuItem::with_id(app, "show_command", "Open", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Exit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show_command, &quit])?;
 
     let mut tray = TrayIconBuilder::with_id("clicky")
         .tooltip("Clicky")
         .menu(&menu)
-        .show_menu_on_left_click(true);
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                show_command_window(app);
+            }
+        });
 
     if let Some(icon) = app.default_window_icon().cloned() {
         tray = tray.icon(icon);
@@ -265,13 +279,6 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
 
     tray.build(app)?;
     Ok(())
-}
-
-fn show_main_window(app: &AppHandle) {
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.show();
-        let _ = main.set_focus();
-    }
 }
 
 fn show_command_window(app: &AppHandle) {

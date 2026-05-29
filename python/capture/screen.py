@@ -22,8 +22,15 @@ def capture_screen() -> Screenshot:
     """Capture the primary display with dxcam, falling back to PIL ImageGrab."""
     captures_dir = Path("tmp") / "captures"
     captures_dir.mkdir(parents=True, exist_ok=True)
-    path = captures_dir / f"screen-{int(time.time() * 1000)}.png"
+    path = captures_dir / f"screen-{int(time.time() * 1000)}.jpg"
 
+    from PIL import Image
+    try:
+        resample_filter = Image.Resampling.LANCZOS
+    except AttributeError:
+        resample_filter = Image.LANCZOS
+
+    image = None
     try:
         import dxcam
 
@@ -32,14 +39,15 @@ def capture_screen() -> Screenshot:
         if frame is None:
             raise RuntimeError("dxcam returned no frame")
 
-        from PIL import Image
-
         image = Image.fromarray(frame)
-        image.save(path)
-        LOGGER.info("Captured screen with dxcam: %s", path)
-        return Screenshot(path=path, width=image.width, height=image.height)
+        LOGGER.info("Captured screen with dxcam")
     except Exception as exc:
         LOGGER.warning("dxcam capture failed, using ImageGrab: %s", exc)
         image = ImageGrab.grab(all_screens=False)
-        image.save(path)
-        return Screenshot(path=path, width=image.width, height=image.height)
+
+    image.thumbnail((1920, 1080), resample=resample_filter)
+    image = image.convert("RGB")
+    image.save(path, format="JPEG", quality=75, optimize=True)
+    LOGGER.info("Saved optimized screenshot: %s (size: %dx%d)", path, image.width, image.height)
+
+    return Screenshot(path=path, width=image.width, height=image.height)
