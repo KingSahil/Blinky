@@ -1,42 +1,163 @@
-import {
-  ArrowUp,
-  Bookmark,
-  CheckCircle2,
-  Clock,
-  Keyboard,
-  MessageSquareText,
-  Settings,
-  Sparkles,
-  UserCircle2,
-  Loader2,
-  Minus,
-  Square,
-  X
-} from 'lucide-react';
-import { useState, FormEvent } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { hideOverlay, showCommandBar, showOverlay, runTutor } from './lib/tauri';
+import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check } from 'lucide-react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
+import { runTutor, showOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow } from './lib/tauri';
 
 export function App() {
-  const [overlayEnabled, setOverlayEnabled] = useState(true);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  
   const [question, setQuestion] = useState('');
   const [isRunning, setIsRunning] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
-  
-  const [activeTab, setActiveTab] = useState<'chats' | 'history' | 'saved'>('chats');
-  const [shortcutKey, setShortcutKey] = useState('Enter');
+  const defaultStatus = 'Ask anything on your screen';
 
-  async function toggleOverlay() {
-    const next = !overlayEnabled;
-    setOverlayEnabled(next);
-    if (next) {
-      await showOverlay();
-    } else {
-      await hideOverlay();
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeRef = useRef<{
+    startX: number;
+    initialWidth: number;
+    initialHeight: number;
+    initialX: number;
+    initialY: number;
+    scaleFactor: number;
+    side: 'left' | 'right';
+  } | null>(null);
+
+  const startResize = async (event: React.PointerEvent<HTMLDivElement>, side: 'left' | 'right') => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    
+    const appWindow = getCurrentWindow();
+    const size = await appWindow.innerSize();
+    const position = await appWindow.outerPosition();
+    const scaleFactor = await appWindow.scaleFactor();
+
+    resizeRef.current = {
+      startX: event.screenX,
+      initialWidth: size.width / scaleFactor,
+      initialHeight: size.height / scaleFactor,
+      initialX: position.x / scaleFactor,
+      initialY: position.y / scaleFactor,
+      scaleFactor,
+      side
+    };
+    setIsResizing(true);
+  };
+
+  const handleResize = async (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isResizing || !resizeRef.current) return;
+    
+    const { startX, initialWidth, initialHeight, initialX, initialY, scaleFactor, side } = resizeRef.current;
+    const dx = (event.screenX - startX) / scaleFactor;
+
+    if (side === 'right') {
+      const newWidth = Math.max(560, initialWidth + dx);
+      await resizeAndMoveCommandWindow(initialX, initialY, newWidth, initialHeight);
+    } else if (side === 'left') {
+      const newWidth = Math.max(560, initialWidth - dx);
+      const newX = initialX + (initialWidth - newWidth);
+      await resizeAndMoveCommandWindow(newX, initialY, newWidth, initialHeight);
     }
-  }
+  };
+
+  const stopResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isResizing) return;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    setIsResizing(false);
+    resizeRef.current = null;
+  };
+  const [status, setStatus] = useState(defaultStatus);
+  const [steps, setSteps] = useState<any[]>([]);
+  const [showSettings, setShowSettings] = useState(false);
+  const [provider, setProvider] = useState('groq');
+  const [shortcut, setShortcut] = useState('Enter');
+
+  // Load settings on mount
+  useEffect(() => {
+    getSettings()
+      .then((settings) => {
+        setProvider(settings.provider);
+        setShortcut(settings.shortcut);
+      })
+      .catch((err) => console.error('Failed to load settings:', err));
+  }, []);
+
+  // Always focus the window on mouse enter to ensure one-click interaction
+  useEffect(() => {
+    const handleMouseEnter = () => {
+      void getCurrentWindow().setFocus();
+    };
+    
+    document.addEventListener('mouseenter', handleMouseEnter);
+    return () => {
+      document.removeEventListener('mouseenter', handleMouseEnter);
+    };
+  }, []);
+
+  const updateProvider = async (newProvider: string) => {
+    setProvider(newProvider);
+    try {
+      await saveSettings(newProvider, shortcut);
+    } catch (err) {
+      console.error('Failed to save provider:', err);
+    }
+  };
+
+  const updateShortcut = async (newShortcut: string) => {
+    setShortcut(newShortcut);
+    try {
+      await saveSettings(provider, newShortcut);
+    } catch (err) {
+      console.error('Failed to save shortcut:', err);
+    }
+  };
+
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const toggleButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  const showStatus = isRunning || status !== defaultStatus;
+
+  // Focus input when open-command event is heard
+  useEffect(() => {
+    const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 60);
+    focusInput();
+
+    const unlisten = listen('clicky://open-command', focusInput);
+    return () => {
+      unlisten.then((dispose) => dispose());
+    };
+  }, []);
+
+  // Handle clicking outside settings dropdown
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        dropdownRef.current &&
+        !dropdownRef.current.contains(event.target as Node) &&
+        toggleButtonRef.current &&
+        !toggleButtonRef.current.contains(event.target as Node)
+      ) {
+        setShowSettings(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Automatically resize command window height based on UI expansion state
+  useEffect(() => {
+    const isExpanded = showSettings || steps.length > 0 || isRunning;
+    const targetHeight = isExpanded ? 580 : 170;
+    void resizeCommandWindow(targetHeight);
+  }, [showSettings, steps, isRunning]);
+
+  const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setQuestion(event.target.value);
+    const textarea = event.target;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  };
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -45,206 +166,202 @@ export function App() {
 
     setIsRunning(true);
     setStatus('Reading the screen...');
+    setSteps([]);
+    const currentWindow = getCurrentWindow();
     try {
       const result = await runTutor(trimmed);
       await showOverlay();
+      await currentWindow.setFocus();
       setStatus(result.summary);
+      setSteps(result.steps || []);
       setQuestion('');
+      if (inputRef.current) {
+        inputRef.current.style.height = 'auto'; // Reset textarea height on submit
+      }
     } catch (error) {
+      await currentWindow.setFocus();
       setStatus(error instanceof Error ? error.message : String(error));
+      setSteps([]);
     } finally {
       setIsRunning(false);
     }
   }
 
+  async function startDrag() {
+    await getCurrentWindow().startDragging();
+  }
+
   return (
-    <main className="app-shell">
-      <div className="ambient-grid" aria-hidden="true" />
-      <header className="titlebar" data-tauri-drag-region>
-        <div className="brand" data-tauri-drag-region>
-          <div className="brand-mark">
+    <main className="command-window">
+      <form className="command-popup command-mini" onSubmit={submit}>
+        <div 
+          className="resize-handle resize-handle-left" 
+          onPointerDown={(e) => startResize(e, 'left')}
+          onPointerMove={handleResize}
+          onPointerUp={stopResize}
+          onPointerCancel={stopResize}
+        />
+        <div 
+          className="resize-handle resize-handle-right" 
+          onPointerDown={(e) => startResize(e, 'right')}
+          onPointerMove={handleResize}
+          onPointerUp={stopResize}
+          onPointerCancel={stopResize}
+        />
+        <div 
+          className="command-header" 
+          data-tauri-drag-region
+          onMouseDown={(event) => {
+            // Only start dragging if not clicking a button
+            if ((event.target as HTMLElement).tagName !== 'BUTTON' && (event.target as HTMLElement).parentElement?.tagName !== 'BUTTON') {
+              event.preventDefault();
+              void startDrag();
+            }
+          }}
+        >
+          <div className="command-icon">
             <Sparkles size={18} />
           </div>
+          
+          <div className="command-top-hint" data-tauri-drag-region>
+            Clicky app <span className="keys">Ctrl + Shift + {shortcut === 'Space' ? 'Space' : 'Enter'}</span>
+          </div>
+
+          <div className="command-actions">
+            <button
+              ref={toggleButtonRef}
+              type="button"
+              className={`icon-action command-settings-toggle ${showSettings ? 'active' : ''}`}
+              aria-label="Settings"
+              onClick={() => setShowSettings(!showSettings)}
+            >
+              <Settings size={18} />
+            </button>
+            <button
+              type="button"
+              className="icon-action"
+              aria-label="Minimize"
+              onClick={() => getCurrentWindow().minimize()}
+            >
+              <Minus size={18} />
+            </button>
+            <button
+              type="button"
+              className="icon-action"
+              aria-label="Close"
+              onClick={() => getCurrentWindow().hide()}
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
-        <div className="titlebar-actions">
-          <div className="ready-pill">
-            <CheckCircle2 size={15} />
-            Ready
-          </div>
-          <div className="window-controls">
-            <button className="window-control-btn hint" onClick={() => getCurrentWindow().minimize()}>
-              <Minus size={16} />
-            </button>
-            <button className="window-control-btn hint" onClick={() => getCurrentWindow().toggleMaximize()}>
-              <Square size={14} />
-            </button>
-            <button className="window-control-btn close-btn" onClick={() => getCurrentWindow().close()}>
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-      </header>
 
-      <section className={`app-workspace ${!settingsOpen ? 'settings-closed' : ''}`}>
-        <aside className="nav-rail">
-          <div className="nav-section">
-            <button 
-              className={`nav-item ${activeTab === 'chats' ? 'active' : ''}`}
-              onClick={() => setActiveTab('chats')}
-            >
-              <MessageSquareText size={16} />
-              Chats
-            </button>
-            <button 
-              className={`nav-item ${activeTab === 'history' ? 'active' : ''}`}
-              onClick={() => setActiveTab('history')}
-            >
-              <Clock size={16} />
-              History
-            </button>
-            <button 
-              className={`nav-item ${activeTab === 'saved' ? 'active' : ''}`}
-              onClick={() => setActiveTab('saved')}
-            >
-              <Bookmark size={16} />
-              Saved
-            </button>
-          </div>
-
-          <div className="nav-footer">
-            <div className="user-card">
-              <div className="user-avatar">
-                <UserCircle2 size={20} />
-              </div>
-              <div>
-                <strong>Arjun</strong>
-                <span>Pro Plan</span>
-              </div>
-            </div>
-            <button 
-              className={`nav-item settings-item ${settingsOpen ? 'active' : ''}`}
-              onClick={() => setSettingsOpen(!settingsOpen)}
-            >
-              <Settings size={16} />
-              Settings
-            </button>
-          </div>
-        </aside>
-
-        <section className="center-panel">
-          {activeTab === 'chats' && (
-            <>
-              <div className="hero-card">
-                <h2>How can I help you today?</h2>
-                <p>Ask anything. Get instant answers.</p>
-              </div>
-
-              {status && <div className="status-tile"><strong>{status}</strong></div>}
-
-              <form className="composer hero-composer" onSubmit={submit}>
-                <input 
-                  placeholder="Ask anything..." 
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                />
-                <button className="send-button" aria-label="Send message" type="submit" disabled={isRunning || !question.trim()}>
-                  {isRunning ? <Loader2 size={16} className="spin" /> : <ArrowUp size={16} />}
+        {/* Google-Style Dropdown Menu */}
+        {showSettings && (
+          <div ref={dropdownRef} className="command-settings-dropdown">
+            <div className="dropdown-section">
+              <h4>Change Model</h4>
+              <div className="dropdown-options">
+                <button
+                  type="button"
+                  className={`dropdown-option ${provider === 'groq' ? 'active' : ''}`}
+                  onClick={() => updateProvider('groq')}
+                >
+                  <span>Groq</span>
+                  {provider === 'groq' && <Check size={14} className="active-dot" />}
                 </button>
-              </form>
-
-              <div className="hint-row">
-                <Keyboard size={14} />
-                <span>Press Ctrl + Shift + {shortcutKey} to open full window</span>
+                <button
+                  type="button"
+                  className={`dropdown-option ${provider === 'ollama' ? 'active' : ''}`}
+                  onClick={() => updateProvider('ollama')}
+                >
+                  <span>Ollama</span>
+                  {provider === 'ollama' && <Check size={14} className="active-dot" />}
+                </button>
               </div>
-            </>
-          )}
-
-          {activeTab === 'history' && (
-            <div className="hero-card">
-              <h2>History</h2>
-              <p>Your previous conversations will appear here.</p>
             </div>
-          )}
 
-          {activeTab === 'saved' && (
-            <div className="hero-card">
-              <h2>Saved</h2>
-              <p>Your saved snippets and chats will appear here.</p>
+            <div className="dropdown-section">
+              <h4>Shortcut Key</h4>
+              <div className="dropdown-options">
+                <button
+                  type="button"
+                  className={`dropdown-option ${shortcut === 'Enter' ? 'active' : ''}`}
+                  onClick={() => updateShortcut('Enter')}
+                >
+                  <span>Ctrl + Shift + Enter</span>
+                  {shortcut === 'Enter' && <Check size={14} className="active-dot" />}
+                </button>
+                <button
+                  type="button"
+                  className={`dropdown-option ${shortcut === 'Space' ? 'active' : ''}`}
+                  onClick={() => updateShortcut('Space')}
+                >
+                  <span>Ctrl + Shift + Space</span>
+                  {shortcut === 'Space' && <Check size={14} className="active-dot" />}
+                </button>
+              </div>
             </div>
-          )}
-        </section>
 
-        <aside className="settings-panel">
-          <div className="settings-header">
-            <div>
-              <h2>Settings</h2>
-              <p>Change LLM</p>
-            </div>
-            <div className="ready-pill">
-              <CheckCircle2 size={15} />
-              Ready
-            </div>
-          </div>
-
-          <div className="settings-section">
-            <h3>Change LLM</h3>
-            <div className="provider-list">
-              <button className="provider-option active">
-                <span>Groq</span>
-                <span className="provider-chip">Active</span>
-              </button>
-              <button className="provider-option">
-                <span>Ollama</span>
-              </button>
+            <div className="dropdown-section dropdown-about">
+              <span>Theme: <strong>Ember</strong></span>
+              <span>About: <strong>v1.0.0</strong></span>
             </div>
           </div>
+        )}
 
-          <div className="settings-section">
-            <h3>Overlay</h3>
-            <button className="toggle-row" onClick={toggleOverlay} aria-pressed={overlayEnabled}>
-              <span>Enable overlay</span>
-              <span className={`toggle ${overlayEnabled ? 'on' : ''}`} />
+        <div className="command-stack">
+          <div className="command-input">
+            <textarea
+              ref={inputRef}
+              rows={1}
+              value={question}
+              onChange={handleInputChange}
+              placeholder="Ask anything..."
+              autoFocus
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  void submit(event);
+                }
+              }}
+            />
+            <button className="command-send" type="submit" disabled={isRunning || question.trim().length === 0}>
+              {isRunning ? <Loader2 className="spin" size={16} /> : <ArrowUp size={16} />}
             </button>
           </div>
 
-          <div className="settings-section">
-            <h3>Global shortcut</h3>
-            <div className="shortcut-row">
-              <span>Ctrl</span>
-              <span>Shift</span>
-              <select 
-                className="shortcut-select"
-                value={shortcutKey}
-                onChange={(e) => setShortcutKey(e.target.value)}
-              >
-                <option value="Enter">Enter</option>
-                <option value="Space">Space</option>
-                <option value="P">P</option>
-                <option value="K">K</option>
-              </select>
-            </div>
-          </div>
+          {showStatus && (
+            <div className="command-result-container">
+              <div className="command-summary-bubble">
+                <Sparkles size={14} className="summary-sparkle" />
+                <span className="command-status">{status}</span>
+              </div>
 
-          <div className="settings-section">
-            <h3>Open chat bar</h3>
-            <button className="primary-action" onClick={() => void showCommandBar()}>
-              <MessageSquareText size={18} />
-              Open chat bar
-            </button>
-          </div>
-
-          <div className="settings-section info">
-            <div className="info-row">
-              <span>Theme</span>
-              <strong>Ember</strong>
+              {steps.length > 0 && (
+                <div className="command-steps-panel">
+                  <h3>Action Guide</h3>
+                  <ul className="steps">
+                    {steps.map((step, idx) => (
+                      <li key={step.step || idx}>
+                        <span>{step.step || (idx + 1)}</span>
+                        <div>
+                          <p>{step.instruction}</p>
+                          {step.target_text && (
+                            <small className="target-text-badge">
+                              Target: <code>{step.target_text}</code>
+                            </small>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
-            <div className="info-row">
-              <span>About Clicky</span>
-              <strong>v1.0.0</strong>
-            </div>
-          </div>
-        </aside>
-      </section>
+          )}
+        </div>
+      </form>
     </main>
   );
 }

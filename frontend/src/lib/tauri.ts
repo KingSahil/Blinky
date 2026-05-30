@@ -21,6 +21,10 @@ export async function resizeCommandWindow(height: number): Promise<void> {
   return invoke('resize_command_window', { height });
 }
 
+export async function resizeAndMoveCommandWindow(x: number, y: number, width: number, height: number): Promise<void> {
+  return invoke('resize_and_move_command_window', { x, y, width, height });
+}
+
 export interface ClickySettings {
   provider: string;
   shortcut: string;

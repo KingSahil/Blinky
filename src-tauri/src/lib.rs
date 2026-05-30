@@ -67,8 +67,22 @@ fn show_command_bar(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn resize_command_window(app: AppHandle, height: f64) -> Result<(), String> {
     if let Some(command) = app.get_webview_window("command") {
-        let size = tauri::LogicalSize::new(760.0, height);
-        command.set_size(size).map_err(|err| err.to_string())?;
+        let current_size = command.inner_size().unwrap_or(tauri::PhysicalSize::new(760, 580));
+        let scale_factor = command.scale_factor().unwrap_or(1.0);
+        let current_logical_width = current_size.width as f64 / scale_factor;
+        let size = tauri::LogicalSize::new(current_logical_width, height);
+        let _ = command.set_size(size);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn resize_and_move_command_window(app: AppHandle, x: f64, y: f64, width: f64, height: f64) -> Result<(), String> {
+    if let Some(command) = app.get_webview_window("command") {
+        let size = tauri::LogicalSize::new(width, height);
+        let pos = tauri::LogicalPosition::new(x, y);
+        let _ = command.set_size(size);
+        let _ = command.set_position(pos);
     }
     Ok(())
 }
@@ -297,6 +311,7 @@ pub fn run() {
             hide_overlay,
             show_command_bar,
             resize_command_window,
+            resize_and_move_command_window,
             get_settings,
             save_settings
         ])

@@ -2,12 +2,67 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { runTutor, showOverlay, resizeCommandWindow, getSettings, saveSettings } from './lib/tauri';
+import { runTutor, showOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow } from './lib/tauri';
 
 export function CommandBar() {
   const [question, setQuestion] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const defaultStatus = 'Ask anything on your screen';
+
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeRef = useRef<{
+    startX: number;
+    initialWidth: number;
+    initialHeight: number;
+    initialX: number;
+    initialY: number;
+    scaleFactor: number;
+    side: 'left' | 'right';
+  } | null>(null);
+
+  const startResize = async (event: React.PointerEvent<HTMLDivElement>, side: 'left' | 'right') => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    
+    const appWindow = getCurrentWindow();
+    const size = await appWindow.innerSize();
+    const position = await appWindow.outerPosition();
+    const scaleFactor = await appWindow.scaleFactor();
+
+    resizeRef.current = {
+      startX: event.screenX,
+      initialWidth: size.width / scaleFactor,
+      initialHeight: size.height / scaleFactor,
+      initialX: position.x / scaleFactor,
+      initialY: position.y / scaleFactor,
+      scaleFactor,
+      side
+    };
+    setIsResizing(true);
+  };
+
+  const handleResize = async (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isResizing || !resizeRef.current) return;
+    
+    const { startX, initialWidth, initialHeight, initialX, initialY, scaleFactor, side } = resizeRef.current;
+    const dx = (event.screenX - startX) / scaleFactor;
+
+    if (side === 'right') {
+      const newWidth = Math.max(560, initialWidth + dx);
+      await resizeAndMoveCommandWindow(initialX, initialY, newWidth, initialHeight);
+    } else if (side === 'left') {
+      const newWidth = Math.max(560, initialWidth - dx);
+      const newX = initialX + (initialWidth - newWidth);
+      await resizeAndMoveCommandWindow(newX, initialY, newWidth, initialHeight);
+    }
+  };
+
+  const stopResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!isResizing) return;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    setIsResizing(false);
+    resizeRef.current = null;
+  };
   const [status, setStatus] = useState(defaultStatus);
   const [steps, setSteps] = useState<any[]>([]);
   const [showSettings, setShowSettings] = useState(false);
@@ -29,7 +84,7 @@ export function CommandBar() {
     const handleMouseEnter = () => {
       void getCurrentWindow().setFocus();
     };
-    
+
     document.addEventListener('mouseenter', handleMouseEnter);
     return () => {
       document.removeEventListener('mouseenter', handleMouseEnter);
@@ -140,7 +195,21 @@ export function CommandBar() {
     <main className="command-window">
       <form className="command-popup command-mini" onSubmit={submit}>
         <div 
-          className="command-header" 
+          className="resize-handle resize-handle-left" 
+          onPointerDown={(e) => startResize(e, 'left')}
+          onPointerMove={handleResize}
+          onPointerUp={stopResize}
+          onPointerCancel={stopResize}
+        />
+        <div 
+          className="resize-handle resize-handle-right" 
+          onPointerDown={(e) => startResize(e, 'right')}
+          onPointerMove={handleResize}
+          onPointerUp={stopResize}
+          onPointerCancel={stopResize}
+        />
+        <div
+          className="command-header"
           data-tauri-drag-region
           onMouseDown={(event) => {
             // Only start dragging if not clicking a button
@@ -153,7 +222,7 @@ export function CommandBar() {
           <div className="command-icon">
             <Sparkles size={18} />
           </div>
-          
+
           <div className="command-top-hint" data-tauri-drag-region>
             Clicky app <span className="keys">Ctrl + Shift + {shortcut === 'Space' ? 'Space' : 'Enter'}</span>
           </div>
@@ -258,7 +327,7 @@ export function CommandBar() {
               }}
             />
             <button className="command-send" type="submit" disabled={isRunning || question.trim().length === 0}>
-              {isRunning ? <Loader2 className="spin" size={16} /> : <ArrowUp size={16} />}
+              {isRunning ? <Loader2 className="spin" size={18} /> : <ArrowUp size={18} />}
             </button>
           </div>
 
