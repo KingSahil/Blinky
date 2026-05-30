@@ -1,48 +1,59 @@
-# Clicky — Repository Summary
+# Slicky — AI Directory & Developer Guides
 
-Quick summary:
-- Purpose: Local, privacy-first AI desktop tutor for Windows that captures the screen, runs OCR, queries a local AI model, and highlights UI elements via an overlay.
-- Tech stack: Tauri 2 (Rust) shell, React + TypeScript frontend, Python 3.11 worker for capture/OCR/AI integration, local AI providers (Ollama, optional Groq), Windows OCR / EasyOCR fallback, `dxcam` for capture, `pywinauto` for window/UI fallback.
+Welcome to the AI integration and developer documentation directory for **Slicky** (referred to as Clicky). 
 
-Architecture & flow:
-1. Frontend (Tauri + React) exposes a small command popup and overlay UI. Global hotkeys trigger a capture.
-2. When the user asks a question, the frontend calls the Tauri backend which invokes the Python worker.
-3. Python worker captures the screen (`capture.screen`), runs OCR (`ocr.extract`) and UI text collection (`utils.uia`).
-4. The AI pipeline (`python/ai`) either answers from local intents or calls the configured provider (`ollama` or `groq`) via `ai.client`.
-5. AI returns a short JSON-friendly set of `summary` + `steps`. Steps are matched to visible items (`utils.matching`) and returned to the frontend.
-6. Overlay: the Tauri overlay window highlights matched targets on the screen.
+This directory contains comprehensive guides designed to ramp up human developers quickly and instruct offline AI coding agents on the systems architectures, API interfaces, and coordinate mapping formulas used throughout the codebase.
 
-Key entry points:
-- Frontend UI: `frontend/src/App.tsx` — main React UI and submit flow.
-- Tauri frontend <-> Rust: `src-tauri/src/main.rs` (Tauri app shell). (See `src-tauri/` for Rust integration and global shortcut wiring.)
-- Python worker entry: `python/main.py` — accepts JSON on stdin, runs `run(question)` and prints JSON result.
-- AI client: `python/ai/client.py` — routes to Ollama or Groq clients.
+---
 
-Where AI logic lives:
-- `python/ai/` — model clients and prompt helpers (e.g., `ollama_client.py`, `groq_client.py`, `prompt.py`, `local_intents.py`).
+## 📖 Available Guides
 
-How to run (dev):
-1. Install Node 20+, Rust, Python 3.11+, Ollama (if using default provider).
-2. Pull model: `ollama pull gemma4:e4b`.
-3. Install deps and python setup:
-   - `npm install`
-   - `npm run setup:python`
-   - `npm run dev`
+For a detailed walkthrough of the codebase, select one of the core guides below:
 
-Notable files & folders (quick):
-- `frontend/` — React UI, overlay renderer, Tauri client helpers.
-- `python/` — capture, OCR, AI integration, matching utilities.
-- `src-tauri/` — Tauri Rust shell, `Cargo.toml`, native bindings.
-- `shared/` — JSON schemas and example payloads.
-- `scripts/` — helper PowerShell scripts: `setup-python.ps1`, `check-ollama.ps1`.
+| Guide | Description | Target Audience |
+| :--- | :--- | :--- |
+| 🏗️ **[System Architecture](file:///c:/projects/Jarvis/ai/architecture.md)** | Multi-process models, high-level Mermaid flowcharts, sequence diagrams, IPC protocols, and coordinate scaling mechanics. | Architects, System Integrators, AI Agents |
+| 📝 **[Per-File Specifications](file:///c:/projects/Jarvis/ai/detailed_summaries.md)** | Detailed function signatures, mathematical formulas, coordinate scaling bounds, bucketing, and search scoring algorithms. | Developers, AI Agents |
+| 🗂️ **[Files Index](file:///c:/projects/Jarvis/ai/files_index.json)** | Machine-readable JSON listing of core codebase assets and their functional descriptions. | AI Agents, Automations |
 
-Notes for AI consumption:
-- The Python worker (`python/main.py`) expects a `question` in stdin JSON and returns a JSON result with `summary`, `steps`, `ocr` and `screenshot` metadata.
-- The project emphasizes local-only models and privacy; environment variables control provider and endpoints (`CLICKY_AI_PROVIDER`, `CLICKY_OLLAMA_URL`, etc.).
+---
 
-Where to look next for contributions:
-- Add more UI adapters in `utils/uia.py` for other apps.
-- Improve OCR heuristics in `ocr/extract.py`.
-- Expand `ai/local_intents.py` for canned answers.
+## 🚀 Quick Repository Overview
 
-Generated on: 2026-05-28
+```text
+  c:\projects\Jarvis  (Slicky Project Root)
+   ├── ai/                      ──► AI Documentation Hub (this folder)
+   ├── frontend/src/            ──► React TypeScript GUI and Canvas viewports
+   ├── src-tauri/src/           ──► Rust Native Core & Mouse Click hooks
+   ├── python/                  ──► Capture, OCR Extraction & Targets Fuzzy Matching
+   └── tmp/captures/            ──► Captured Telemetry Screen Buffers (temporary)
+```
+
+* **Purpose**: Privacy-first, local AI-powered tutor that captures screen states, extracts visible UI controls, coordinates elements fuzzy-matching, and places graphical click targets overlays on screen.
+* **Core Tech Stack**: 
+  * **Tauri (v2) + Rust**: OS-level hooks, shortcuts, window controllers.
+  * **React + TypeScript**: Form inputs, dynamic height rendering, canvas overlay graphics.
+  * **Python 3.11**: Screen captures (`dxcam`), WinRT OCR / EasyOCR, UI elements extraction (`pywinauto`).
+  * **LLM Intelligence**: Local Ollama (Ollama CLI) or cloud-hosted Groq Vision API.
+
+---
+
+## 🛠️ Rapid Dev Commands
+
+Set up Slicky locally using the following commands:
+
+```powershell
+# 1. Install standard dependencies
+npm install
+
+# 2. Configure Python virtual environments and pull EasyOCR
+npm run setup:python
+
+# 3. Pull default local AI models
+ollama pull gemma4:e4b
+
+# 4. Start the application in development mode
+npm run dev
+```
+
+*For details on configuring `.env` variables and custom shortcut hotkeys, please refer to the [System Architecture Guide](file:///c:/projects/Jarvis/ai/architecture.md#6-environment--settings-variables).*

@@ -1,14 +1,20 @@
 {
   "files": [
-    {"path": "frontend/src/App.tsx", "desc": "Main React UI and command popup"},
-    {"path": "frontend/src/lib/tauri.ts", "desc": "Tauri JS helpers to call Rust and show/hide overlay"},
-    {"path": "python/main.py", "desc": "Python worker entrypoint that runs capture+OCR+AI and returns JSON"},
-    {"path": "python/ai/client.py", "desc": "Routes requests to Ollama or Groq"},
-    {"path": "python/ocr/extract.py", "desc": "OCR extraction pipeline (Windows OCR, EasyOCR fallback)"},
-    {"path": "python/capture/screen.py", "desc": "Screen capture using dxcam"},
-    {"path": "python/utils/matching.py", "desc": "Match AI steps to visible OCR/UI items"},
-    {"path": "src-tauri/Cargo.toml", "desc": "Rust crate/Tauri configuration and native deps"},
-    {"path": "package.json", "desc": "Top-level scripts and dev/runtime deps"},
-    {"path": "README.md", "desc": "Project overview and setup instructions"}
+    {"path": "ai/repo_summary.md", "desc": "Master entryway and quick overview table of available AI guides"},
+    {"path": "ai/architecture.md", "desc": "Detailed system architecture, multi-process block flows, request sequences, IPC contracts, and coordinates scaling calculations"},
+    {"path": "ai/detailed_summaries.md", "desc": "Function-by-function reference specifications, math mapping equations, and fuzzy string similarity algorithms"},
+    {"path": "frontend/src/App.tsx", "desc": "Tutor container routing and state shell"},
+    {"path": "frontend/src/CommandBar.tsx", "desc": "Responsive command popup input and settings bar UI"},
+    {"path": "frontend/src/Overlay.tsx", "desc": "Fullscreen coordinate canvas placing pulsars on target bounds"},
+    {"path": "frontend/src/lib/tauri.ts", "desc": "Tauri JS interfaces mapping React commands to Rust bindings"},
+    {"path": "python/main.py", "desc": "Python processing loop running capture + OCR + UIA context merging"},
+    {"path": "python/ai/client.py", "desc": "Model router connecting prompt compilers to Ollama / Groq endpoints"},
+    {"path": "python/ocr/extract.py", "desc": "OCR pipeline attempting native Windows WinRT OCR with EasyOCR fallbacks"},
+    {"path": "python/capture/screen.py", "desc": "Display capture engine mapping to dxcam frame grabbers"},
+    {"path": "python/utils/matching.py", "desc": "Attach steps and map text strings to screen coordinates via fuzzy metrics"},
+    {"path": "python/utils/uia.py", "desc": "UI Automation tree traverser targeting VS Code file explorer structures"},
+    {"path": "src-tauri/src/lib.rs", "desc": "Rust native backend managing system trays, shortcuts, and global click hook threads"},
+    {"path": "package.json", "desc": "Workspace setup script actions and dev tool definitions"},
+    {"path": "README.md", "desc": "Developer onboarding specs and standard local install instructions"}
   ]
 }

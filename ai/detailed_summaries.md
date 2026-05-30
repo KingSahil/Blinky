@@ -1,99 +1,187 @@
-# Clicky — Detailed Per-File Summaries
+# Clicky — Granular Per-File API & Contract Specifications
 
-This document provides concise, AI-friendly summaries for key files listed in `ai/files_index.json`.
+This reference document provides developer-level documentation for all key source files in Slicky. It details classes, functions, argument types, return values, and implementation specifics.
 
-- [frontend/src/App.tsx](frontend/src/App.tsx): Main React UI and command popup
-  - Purpose: User-facing chat UI and command popup that triggers screen captures and displays results.
-  - Key functions/components:
-    - `App()` — React root component managing messages, overlay toggle, and `submitAsk()` flow.
-    - `submitAsk()` — Sends question to backend via `runTutor()` (Tauri invoke) and appends results.
-    - `StatusGrid`, `Steps`, `Preview` — small UI helpers for status and rendering matched steps.
-  - Inputs/Outputs: Calls `runTutor(question)` and expects a `TutorResult` object containing `summary`, `steps`, `ocr`, `screenshot`, `provider`, and `warnings`.
-  - Notes: Hotkey listener listens to `clicky://open-command` and uses `runTutor` from `frontend/src/lib/tauri.ts`.
+---
 
-- [frontend/src/lib/tauri.ts](frontend/src/lib/tauri.ts): Tauri JS helpers
-  - Purpose: Thin client wrapper over Tauri `invoke` calls used by the React UI.
-  - Exports: `runTutor(question)`, `showOverlay()`, `hideOverlay()`, `showCommandBar()`.
-  - Contract: `runTutor` invokes the Rust command `run_tutor` and returns a `TutorResult`.
+## 1. Native Integration & System Logic
 
-- [python/main.py](python/main.py): Python worker entrypoint
-  - Purpose: CLI-style worker that accepts a JSON payload on stdin (expects `question`) and returns JSON result on stdout.
-  - Key flow (`run(question)`):
-    1. `capture_screen()` — captures screenshot and returns `Screenshot(path,width,height)`.
-    2. `get_active_window()` — returns active window metadata.
-    3. `extract_visible_text(screenshot.path)` — OCR items.
-    4. `get_visible_ui_text()` — optional UIA items.
-    5. `merge_visible_items()` — dedupe and order items (OCR preferred).
-    6. `answer_local_question()` — fast deterministic intents.
-    7. If no local answer: `build_prompt()` then `ask_model()` via `python/ai/client.py`.
-    8. `attach_matches()` — map AI step `target_text` to OCR/UI items.
-  - Output: JSON with `summary`, `steps` (with `match` field), `active_app`, `ocr` metadata, `screenshot` info, `provider`, `elapsed_ms`, and `warnings`.
-  - Error handling: Exceptions are logged and returned as `error`/`warnings` JSON.
+### 1.1 `src-tauri/src/lib.rs` (Tauri App Core)
+Orchestrates Tauri commands, system tray lifecycle, and schedules asynchronous system tasks.
 
-- [python/ai/client.py](python/ai/client.py): AI routing
-  - Purpose: Routes prompt requests to the selected provider determined by env `CLICKY_AI_PROVIDER`.
-  - Providers: `ollama` (default) via `python/ai/ollama_client.py`, or `groq` via `python/ai/groq_client.py`.
-  - API: `ask_model(prompt, screenshot_path)` returns a dict containing `summary` and `steps`.
-  - `get_provider_label()` returns a human-friendly provider name.
+* **Commands Exposed to Frontend**:
+  * `async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<Value, String>`
+    * *Inputs*: `TutorRequest { question: String }`
+    * *Outputs*: Resolves with the `TutorResult` JSON output from the Python worker.
+    * *Side-effects*: Invokes `run_python_worker()`, emits `clicky://guidance` with result payload to `/overlay`, and shows the overlay window.
+  * `fn show_overlay(app: AppHandle) -> Result<(), String>`
+    * Sets overlay window cursor-passthrough style and makes the window visible.
+  * `fn hide_overlay(app: AppHandle) -> Result<(), String>`
+    * Hides the full-screen overlay window.
+  * `fn show_command_bar(app: AppHandle) -> Result<(), String>`
+    * Focuses and reveals the command bar popup.
+  * `fn resize_command_window(app: AppHandle, height: f64) -> Result<(), String>`
+    * Resizes the command bar height to dynamically match the webview's DOM height.
+  * `async fn get_settings(app: AppHandle) -> Result<ClickySettings, String>`
+    * Reads key-value pairs from `.env` to return configured providers and shortcuts.
+  * `async fn save_settings(app: AppHandle, provider: String, shortcut: String) -> Result<(), String>`
+    * Writes updated provider and shortcut entries back to `.env`.
 
-- [python/ai/prompt.py](python/ai/prompt.py): Prompt builder
-  - Purpose: Turns the question, active app metadata, and visible OCR items into a compact textual prompt for the model.
-  - Rules enforced in prompt:
-    - Only reference visible UI elements.
-    - Never invent UI not present in OCR items.
-    - Output must be valid JSON with `summary` and `steps` (max 6 steps).
-  - Practical note: Compact the first ~180 OCR items to avoid overly large prompts.
+* **Internal Helpers**:
+  * `fn run_python_worker(app: &AppHandle, question: &str) -> Result<String, String>`
+    * Spawns `python.exe` targeting `python/main.py`. Pipes prompt input as JSON into standard input, reads standard output synchronously, and checks standard error.
+  * `fn start_global_click_listener(app: AppHandle)`
+    * Spawns a background OS thread running a `loop` that uses the Windows `GetAsyncKeyState` API to capture mouse clicks. Emits `clicky://global-click` with cursor metrics.
 
-- [python/ai/local_intents.py](python/ai/local_intents.py): Deterministic answers
-  - Purpose: Provide immediate deterministic responses for common demo questions (e.g., "where is frontend?") to avoid noisy model inference.
-  - Behavior: Checks visible items and returns a small JSON `summary` + `steps` when a match is found.
+---
 
-- [python/ocr/extract.py](python/ocr/extract.py): OCR pipeline
-  - Purpose: Extract visible text boxes from a screenshot using Windows OCR (WinRT) first, falling back to `easyocr`.
-  - Functions:
-    - `extract_visible_text(image_path)` — tries `_windows_ocr()` then `_easy_ocr()`.
-    - `_windows_ocr()` — uses WinRT OCR engine via `winrt` packages (async wrapper run via `asyncio.run`).
-    - `_easy_ocr()` — uses `easyocr.Reader(...).readtext()` and converts results into `{'text','x','y','width','height','confidence','source'}` boxes.
-  - Fallback: If OCR fails entirely, returns a single placeholder item so the pipeline still returns predictable JSON.
+## 2. Frontend Interface & Coordinate Mapping
 
-- [python/capture/screen.py](python/capture/screen.py): Capture helper
-  - Purpose: Capture primary display using `dxcam` when available, else fall back to PIL `ImageGrab`.
-  - Returns: `Screenshot(path, width, height)` and saves captures under `tmp/captures`.
-
-- [python/utils/matching.py](python/utils/matching.py): Match AI targets to OCR boxes
-  - Purpose: Given AI `steps` (with `target_text`), find the best matching OCR/UI item to allow overlay highlight placement.
-  - Logic: Normalizes text, uses `SequenceMatcher` ratio for fuzzy matches, boosts exact/substring matches, factors in OCR `confidence`, and prefers items from OCR (`source == 'ocr'`).
-  - Thresholds: Discards matches below a weighted threshold (~0.52).
-
-- [src-tauri/Cargo.toml](src-tauri/Cargo.toml): Tauri / Rust native deps
-  - Purpose: Rust crate config for Tauri integration, plugin deps (global shortcut, shell), and Windows native features.
-  - Note: Check `src-tauri/src/main.rs` for Tauri command handlers such as `run_tutor`, overlay management, and global shortcut registration.
-
-- [package.json](package.json): Scripts and dependencies
-  - Notable scripts: `dev` (runs `tauri dev`), `build` (typecheck + `vite build`), `setup:python` (PowerShell to set up Python venv), `check:ollama`.
-  - Frontend deps: React, Vite, TypeScript; Tauri CLI in devDependencies.
-
-- [README.md](README.md): Project overview and setup
-  - Usage: lists prerequisites, model pull, setup commands, provider env var overrides, hotkeys, and architecture diagram.
-
-## How to use these summaries programmatically
-- The Python worker expects `question` via stdin JSON; you can call `python/python/main.py` manually by piping JSON:
-
-```powershell
-echo '{"question": "How do I open frontend?"}' | python python/main.py
+```text
+          ┌────────────────────────┐
+          │  Vite Entry (main.tsx) │
+          └────────────────────────┘
+                       │
+                       ▼
+          [ window.location.pathname ]
+                       │
+         ┌─────────────┼─────────────┐
+         ▼             ▼             ▼
+    ( "/overlay" ) ( "/command" ) ( default / )
+         │             │             │
+         ▼             ▼             ▼
+    ┌───────────┐ ┌───────────┐ ┌───────────┐
+    │  Overlay  │ │CommandBar │ │    App    │
+    │(Overlay.ts│ │(CommandBar│ │ (App.tsx) │
+    └───────────┘ └───────────┘ └───────────┘
 ```
 
-- To run the app in dev mode (Tauri + frontend):
+### 2.1 `frontend/src/Overlay.tsx` (Target pulse Canvas)
+A transparent, fullscreen React view that maps raw text coordinates onto the active viewport and handles targets dismissal.
 
-```powershell
-npm install
-npm run setup:python
-npm run dev
+* **Coordinate Scaling Formula**:
+  Computes scale variables mapping from the $1920 \times 1080$ saved image size:
+  ```typescript
+  const scaleX = window.innerWidth / screenshotWidth;
+  const scaleY = window.innerHeight / screenshotHeight;
+  ```
+  Applies scaling transforms to create visible highlight nodes:
+  ```typescript
+  left: Math.round(match.x * scaleX),
+  top: Math.round(match.y * scaleY),
+  width: Math.max(8, Math.round(match.width * scaleX)),
+  height: Math.max(8, Math.round(match.height * scaleY)),
+  ```
+
+* **Interactive Target Dismissal (`containsClick`)**:
+  Determines if a low-level OS mouse-click coordinate $(x_{click}, y_{click})$ matches a visible overlay frame.
+  * *Calculation*: Checks bounds with a `10px` clickable margin tolerance:
+    ```typescript
+    x >= frame.left - 10 && x <= frame.left + frame.width + 10 &&
+    y >= frame.top - 10  && y <= frame.top + frame.height + 10
+    ```
+  * *Side-effects*: If matched, adds the highlight's key to the `dismissedKeys` state to hide the pulsing ring.
+
+### 2.2 `frontend/src/CommandBar.tsx` (Chat & Control UI)
+The user interface for prompt input, status displays, settings configuration, and window layouts.
+
+* **Dynamic Size Manager**:
+  Spawns a `ResizeObserver` on mount that watches the main container's DOM height. When the input grows or settings open, it calls the `resizeCommandWindow` command to dynamically adjust Tauri's window height.
+* **Settings & Shortcut Synchronizer**:
+  Uses React hooks to bind the `provider` state (Groq vs Ollama) and `shortcut` key (Enter vs Space). Saves these variables directly to `.env` using Tauri's backend file system bindings.
+
+---
+
+## 3. Python Processing Engine
+
+```text
+           ┌────────────────────────┐
+           │     python/main.py     │
+           │  (Worker Orchestrator) │
+           └────────────────────────┘
+                       │
+     ┌───────┬─────────┴─────────┬───────┐
+     ▼       ▼                   ▼       ▼
+ ┌──────┐ ┌──────┐            ┌──────┐ ┌──────┐
+ │screen│ │window│            │ex-   │ │uia.py│
+ │.py   │ │.py   │            │tract │ │      │
+ └──────┘ └──────┘            └──────┘ └──────┘
+  Screen   Active              WinRT    Active
+  dxcam    Window              OCR      UIA
+     │       │                   │       │
+     └───────┼─────────┬─────────┴───────┘
+               ▼         ▼
+           ┌──────┐   ┌──────┐
+           │prompt│   │client│ ──► [Groq/Ollama]
+           │.py   │   │.py   │
+           └──────┘   └──────┘
+             Prompt     Model
+             Builder    Router
+               │
+               ▼
+           ┌──────┐
+           │match-│ ──► Coordinates Fuzzy Matcher
+           │ing.py│
+           └──────┘
 ```
 
-## Next steps I can take (pick any):
-- Produce per-file, function-level markdown files under `ai/` (one file per source file).
-- Bundle file contents into `ai/context_bundle.jsonl` for embedding.
-- Add short unit-test stubs for `utils/matching.py` and `python/ocr/extract.py`.
+### 3.1 `python/main.py` (Worker orchestrator)
+The standard input/output interface for processing questions and screen coordinates.
 
-Generated: 2026-05-28
+* **`run(question: str) -> dict`**:
+  Executes the primary pipeline:
+  1. Grabs display frames via `capture_screen()`.
+  2. Queries active window process metadata using `get_active_window()`.
+  3. Extracts OCR text elements using WinRT/EasyOCR.
+  4. Inspects UIA element nodes using `get_visible_ui_text()`.
+  5. Dedupes overlapping text items using `merge_visible_items()`.
+  6. Intercepts queries using local intents, or compiles the system prompt and calls the model router.
+  7. Fuzzy matches returned steps back to screen rectangles via `attach_matches()`.
+  8. Returns the final data payload.
+
+* **`merge_visible_items(ocr_items: list, uia_items: list) -> list`**:
+  Combines OCR text blocks and UI Automation tree items.
+  * *Deduplication logic*: Divides coordinates by $8$ pixels to group items into bucket grids. If a text string overlaps inside a bucket grid, **the OCR entry is prioritized**, ensuring higher alignment precision for visual overlays.
+
+### 3.2 `python/ocr/extract.py` (OCR Parser)
+Extracts visible text and coordinates from captured screenshot images.
+
+* **`extract_visible_text(image_path: Path) -> list[dict]`**:
+  Attempts native Windows WinRT OCR engine first. If WinRT modules are unavailable or raise errors, falls back to local EasyOCR.
+* **`_windows_ocr(image_path: Path) -> list[dict]`**:
+  Loads WinRT's native OCR APIs (`winrt.windows.media.ocr.OcrEngine`) using async event loops. Translates lines and word bounding rects into standard coordinate structures.
+* **`_easy_ocr(image_path: Path) -> list[dict]`**:
+  Initializes an offline `easyocr.Reader(["en"])` instance. Runs text bounding-box detections on the screenshot image and converts PyTorch coordinates into normal formats.
+
+### 3.3 `python/utils/matching.py` (Fuzzy Matcher)
+Maps LLM target text recommendations back to concrete physical text boxes on screen.
+
+* **`find_best_match(target: str, ocr_items: list[dict]) -> dict | None`**:
+  Normalizes search strings and scores elements using fuzzy string ratios:
+  * Exact matches get `1.0`.
+  * Substring overlaps get `0.86`.
+  * Other pairs are evaluated using `difflib.SequenceMatcher.ratio()`. Ratio values below `0.65` are skipped.
+  * *Score Weighting Formula*:
+    $$\text{Score} = (\text{Fuzzy Ratio} \times 0.94) + (\text{OCR Confidence} \times 0.06) + \text{Bonus}$$
+    Where $\text{Bonus} = 0.02$ if the element was parsed via OCR.
+  * *Threshold*: If the best score is $< 0.52$, it returns `None`.
+
+### 3.4 `python/utils/uia.py` (UI Automation Tree Inspector)
+Inspects structural desktop components that are difficult for OCR to extract (such as VS Code file explorers).
+
+* **`get_visible_ui_text() -> list[dict]`**:
+  Initializes a pywinauto UIA Desktop instance (`Desktop(backend="uia")`). Fetches the active window handle, scans descendant elements, and extracts coordinate boxes where width/height are $\ge 4\text{ px}$.
+
+### 3.5 `python/ai/prompt.py` (Prompt Builder)
+Formats screen context into a compact markdown instruction set for the model.
+
+* **Slicky UI Filtering Heuristics**:
+  To prevent the AI model from instructing users to click inside the Slicky app itself, `build_prompt()` filters out any OCR coordinates containing words from the `slicky_ignored_terms` set (e.g. "Slicky app", "groq", "ollama", "ask anything"). It also filters out OCR elements that match the user's input question.
+* **Text Length Optimization**:
+  To avoid exceeding LLM context limits, the prompt builder limits the OCR elements list to the first $180$ elements.
+
+### 3.6 `python/ai/local_intents.py` (Deterministic router)
+Intercepts common queries to provide immediate, reliable answers.
+
+* **`answer_local_question(question: str, visible_items: list) -> dict | None`**:
+  Checks if the normalized query contains the word "frontend". If found, it searches `visible_items` for files matching `frontend/src/app.tsx` or `app.tsx`. If found, it returns immediate, structured navigation steps, bypassing model inference completely.
