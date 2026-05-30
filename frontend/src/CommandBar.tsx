@@ -224,7 +224,7 @@ export function CommandBar() {
           </div>
 
           <div className="command-top-hint" data-tauri-drag-region>
-            Clicky app <span className="keys">Ctrl + Shift + {shortcut === 'Space' ? 'Space' : 'Enter'}</span>
+            Slicky app <span className="keys">Ctrl + Shift + {shortcut === 'Space' ? 'Space' : 'Enter'}</span>
           </div>
 
           <div className="command-actions">

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Clicky",
+  "productName": "Slicky",
   "version": "0.1.0",
-  "identifier": "app.clicky.tutor",
+  "identifier": "app.slicky.tutor",
   "build": {
     "beforeDevCommand": "vite --config frontend/vite.config.ts",
     "beforeBuildCommand": "vite build --config frontend/vite.config.ts",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "command",
-        "title": "Clicky Command",
+        "title": "Slicky Command",
         "url": "/command",
         "width": 760,
         "height": 580,
@@ -30,7 +30,7 @@
       },
       {
         "label": "overlay",
-        "title": "Clicky Overlay",
+        "title": "Slicky Overlay",
         "url": "/overlay",
         "fullscreen": true,
         "alwaysOnTop": true,

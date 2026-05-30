@@ -364,7 +364,7 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("failed to run Clicky");
+        .expect("failed to run Slicky");
 }
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
@@ -373,7 +373,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&show_command, &quit])?;
 
     let mut tray = TrayIconBuilder::with_id("clicky")
-        .tooltip("Clicky")
+        .tooltip("Slicky")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
