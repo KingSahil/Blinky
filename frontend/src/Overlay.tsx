@@ -38,11 +38,6 @@ export function Overlay() {
   const scaleX = window.innerWidth / screenshotWidth;
   const scaleY = window.innerHeight / screenshotHeight;
   const frames = useMemo<HighlightFrame[]>(() => {
-    // Maximum size the highlight box will grow to.
-    // UIA elements in Electron can have large bounding rects (e.g. full
-    // sidebar width); we cap and center so the indicator stays icon-sized.
-    const MAX_BOX = 50;
-
     return (
       result?.steps
         .map((step) => {
@@ -57,10 +52,30 @@ export function Overlay() {
           const rawWidth = Math.max(8, Math.round(match.width * scaleX));
           const rawHeight = Math.max(8, Math.round(match.height * scaleY));
 
-          // Cap to MAX_BOX × MAX_BOX, keeping the element center fixed
-          const displayWidth = Math.min(rawWidth, MAX_BOX);
-          const displayHeight = Math.min(rawHeight, MAX_BOX);
-          const displayLeft = rawLeft + Math.round((rawWidth - displayWidth) / 2);
+          // Cap to MAX_BOX, keeping the element center fixed
+          // EXCEPT for wide elements (like sidebar lists) where we align to the left edge (with a small margin)
+          // where the folder icon and text are actually situated!
+          const MAX_BOX_WIDTH = 120;
+          const MAX_BOX_HEIGHT = 40;
+          const displayHeight = Math.min(rawHeight, MAX_BOX_HEIGHT);
+
+          let displayWidth = Math.min(rawWidth, MAX_BOX_WIDTH);
+          let displayLeft = rawLeft;
+
+          if (rawWidth > 120) {
+            // Wide elements (likely list/sidebar rows):
+            // Snugly fit the width by estimating character length (icon offset + chars * 7px + padding)
+            const textLength = match.text ? String(match.text).length : 8;
+            const estimatedWidth = 24 + textLength * 7.2 + 16;
+            
+            displayWidth = Math.min(rawWidth, Math.max(45, Math.round(estimatedWidth)));
+            
+            // Wide elements: align to the left (shifted 28px right to cover text snugly instead of expand arrows)
+            displayLeft = rawLeft + 28;
+          } else {
+            // Normal elements: center them
+            displayLeft = rawLeft + Math.round((rawWidth - displayWidth) / 2);
+          }
           const displayTop = rawTop + Math.round((rawHeight - displayHeight) / 2);
 
           return {
