@@ -1,9 +1,9 @@
-dxcam==0.0.5
+dxcam==0.3.0
 # easyocr==1.7.2 (commented out to avoid downloading 1GB PyTorch dependencies on Python 3.13)
 numpy>=1.26.0
-pillow>=10.4.0
-psutil>=6.1.0
-pywin32>=306
-pywinauto==0.6.8
-requests>=2.32.0
-typing-extensions>=4.12.0
+pillow>=12.2.0
+psutil>=7.2.2
+pywin32>=311
+pywinauto==0.6.9
+requests>=2.34.2
+typing-extensions>=4.15.0

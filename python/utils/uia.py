@@ -60,12 +60,6 @@ def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict
                 break
                 
             try:
-                if not element.is_visible():
-                    continue
-            except Exception:
-                pass
-
-            try:
                 ctype = element.element_info.control_type
                 if ctype not in ALLOWED_CONTROL_TYPES:
                     continue
@@ -75,6 +69,12 @@ def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict
             text = _element_text(element)
             if not text:
                 continue
+
+            try:
+                if not element.is_visible():
+                    continue
+            except Exception:
+                pass
 
             rect = element.rectangle()
             width = max(0, int(rect.width()))
