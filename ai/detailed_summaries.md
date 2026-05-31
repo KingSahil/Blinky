@@ -52,33 +52,37 @@ Orchestrates Tauri commands, system tray lifecycle, and schedules asynchronous s
          ▼             ▼             ▼
     ┌───────────┐ ┌───────────┐ ┌───────────┐
     │  Overlay  │ │CommandBar │ │    App    │
-    │(Overlay.ts│ │(CommandBar│ │ (App.tsx) │
+    │(Overlay.tsx)│(CommandBar│ │ (App.tsx) │
     └───────────┘ └───────────┘ └───────────┘
 ```
 
-### 2.1 `frontend/src/Overlay.tsx` (Target pulse Canvas)
-A transparent, fullscreen React view that maps raw text coordinates onto the active viewport and handles targets dismissal.
+### 2.1 `frontend/src/Overlay.tsx` (Target Pulse Canvas)
+A transparent, fullscreen React view that maps raw text coordinates onto the active viewport and handles target dismissal.
 
-* **Coordinate Scaling Formula**:
-  Computes scale variables mapping from the $1920 \times 1080$ saved image size:
+* **Coordinate Scaling**:
   ```typescript
-  const scaleX = window.innerWidth / screenshotWidth;
+  const screenshotWidth  = result?.screenshot?.width  || window.innerWidth;
+  const screenshotHeight = result?.screenshot?.height || window.innerHeight;
+  const scaleX = window.innerWidth  / screenshotWidth;
   const scaleY = window.innerHeight / screenshotHeight;
   ```
-  Applies scaling transforms to create visible highlight nodes:
+  By the time UIA coordinates reach the Overlay they have already been normalised to screenshot space in `main.py`. The scale factors bring them back to browser pixel space.
+
+* **Box Size Cap** — `MAX_BOX = 50` px:
+  UIA bounding rects for VS Code sidebar buttons are `63×64` px (correct icon area), but some elements report the entire panel. The cap ensures the highlight never exceeds 50×50 px and is centered on the element's geometric center:
   ```typescript
-  left: Math.round(match.x * scaleX),
-  top: Math.round(match.y * scaleY),
-  width: Math.max(8, Math.round(match.width * scaleX)),
-  height: Math.max(8, Math.round(match.height * scaleY)),
+  const displayWidth  = Math.min(rawWidth,  MAX_BOX);
+  const displayHeight = Math.min(rawHeight, MAX_BOX);
+  const displayLeft   = rawLeft + Math.round((rawWidth  - displayWidth)  / 2);
+  const displayTop    = rawTop  + Math.round((rawHeight - displayHeight) / 2);
   ```
 
 * **Interactive Target Dismissal (`containsClick`)**:
   Determines if a low-level OS mouse-click coordinate $(x_{click}, y_{click})$ matches a visible overlay frame.
   * *Calculation*: Checks bounds with a `10px` clickable margin tolerance:
     ```typescript
-    x >= frame.left - 10 && x <= frame.left + frame.width + 10 &&
-    y >= frame.top - 10  && y <= frame.top + frame.height + 10
+    x >= frame.left - 10 && x <= frame.left + frame.width  + 10 &&
+    y >= frame.top  - 10 && y <= frame.top  + frame.height + 10
     ```
   * *Side-effects*: If matched, adds the highlight's key to the `dismissedKeys` state to hide the pulsing ring.
 
@@ -95,55 +99,83 @@ The user interface for prompt input, status displays, settings configuration, an
 ## 3. Python Processing Engine
 
 ```text
-           ┌────────────────────────┐
-           │     python/main.py     │
-           │  (Worker Orchestrator) │
-           └────────────────────────┘
-                       │
-     ┌───────┬─────────┴─────────┬───────┐
-     ▼       ▼                   ▼       ▼
- ┌──────┐ ┌──────┐            ┌──────┐ ┌──────┐
- │screen│ │window│            │ex-   │ │uia.py│
- │.py   │ │.py   │            │tract │ │      │
- └──────┘ └──────┘            └──────┘ └──────┘
-  Screen   Active              WinRT    Active
-  dxcam    Window              OCR      UIA
-     │       │                   │       │
-     └───────┼─────────┬─────────┴───────┘
-               ▼         ▼
-           ┌──────┐   ┌──────┐
-           │prompt│   │client│ ──► [Groq/Ollama]
-           │.py   │   │.py   │
-           └──────┘   └──────┘
-             Prompt     Model
-             Builder    Router
-               │
-               ▼
-           ┌──────┐
-           │match-│ ──► Coordinates Fuzzy Matcher
-           │ing.py│
-           └──────┘
+           ┌────────────────────────────────────────────────┐
+           │                python/main.py                  │
+           │  1. Resolve target PID (before OCR)            │
+           │  2. capture_screen()  →  Screenshot(w,h,sw,sh) │
+           │  3. get_active_window(target_pid)              │
+           │  4. extract_visible_text() [OCR, ~15 s]        │
+           │  5. get_visible_ui_text(target_pid)            │
+           │     → fresh COM element for locked PID         │
+           │  6. Normalise UIA coords: screen→screenshot    │
+           │  7. merge_visible_items(ocr, uia)              │
+           │  8. ask_model(prompt, screenshot)              │
+           │  9. attach_matches(steps, items)               │
+           └────────────────────────────────────────────────┘
 ```
 
-### 3.1 `python/main.py` (Worker orchestrator)
+### 3.1 `python/main.py` (Worker Orchestrator)
 The standard input/output interface for processing questions and screen coordinates.
 
 * **`run(question: str) -> dict`**:
   Executes the primary pipeline:
-  1. Grabs display frames via `capture_screen()`.
-  2. Queries active window process metadata using `get_active_window()`.
-  3. Extracts OCR text elements using WinRT/EasyOCR.
-  4. Inspects UIA element nodes using `get_visible_ui_text()`.
-  5. Dedupes overlapping text items using `merge_visible_items()`.
-  6. Intercepts queries using local intents, or compiles the system prompt and calls the model router.
-  7. Fuzzy matches returned steps back to screen rectangles via `attach_matches()`.
-  8. Returns the final data payload.
+  1. Calls `get_target_window_element()` and extracts its **PID** (`target_pid`) before any slow operations.
+  2. Grabs display frames via `capture_screen()` which returns a `Screenshot` with both post-thumbnail (`width`/`height`) and physical screen (`screen_width`/`screen_height`) dimensions.
+  3. Queries active window metadata using `get_active_window(target_pid=target_pid)`.
+  4. Extracts OCR text elements using WinRT/EasyOCR (`extract_visible_text()`).
+  5. Calls `get_visible_ui_text(target_pid=target_pid)` — UIA re-resolves a **fresh COM element** by PID, avoiding the 15-second staleness window.
+  6. **Normalises UIA coordinates** from physical screen space to screenshot space: `x *= screenshot.width / screenshot.screen_width`.
+  7. Dedupes overlapping items using `merge_visible_items()`.
+  8. Compiles the prompt and routes to the model via `ask_model()`.
+  9. Fuzzy matches returned steps back to screen rectangles via `attach_matches()`.
+  10. Returns the final data payload.
 
 * **`merge_visible_items(ocr_items: list, uia_items: list) -> list`**:
   Combines OCR text blocks and UI Automation tree items.
-  * *Deduplication logic*: Divides coordinates by $8$ pixels to group items into bucket grids. If a text string overlaps inside a bucket grid, **the OCR entry is prioritized**, ensuring higher alignment precision for visual overlays.
+  * *Order*: UIA items are listed first (richer labels for icon-only UI controls).
+  * *Deduplication logic*: Divides coordinates by $8$ pixels to group items into bucket grids. First-seen entry (UIA) wins on duplicate text+bucket.
 
-### 3.2 `python/ocr/extract.py` (OCR Parser)
+### 3.2 `python/capture/screen.py` (Screen Capture)
+Captures the primary display and records dimensions needed for coordinate normalisation.
+
+* **`Screenshot` dataclass**:
+  ```python
+  @dataclass
+  class Screenshot:
+      path: Path
+      width: int        # post-thumbnail width  (e.g. 1728)
+      height: int       # post-thumbnail height (e.g. 1080)
+      screen_width: int   # physical screen width  (e.g. 2560)
+      screen_height: int  # physical screen height (e.g. 1600)
+  ```
+  `screen_width` and `screen_height` are recorded from the captured image **before** `image.thumbnail()` is called.
+
+* **`capture_screen() -> Screenshot`**:
+  Uses `dxcam` for GPU-accelerated capture, falling back to PIL `ImageGrab`. Scales to fit within 1920×1080 (Lanczos) while preserving aspect ratio.
+
+### 3.3 `python/utils/window.py` (Window Resolver)
+Resolves the target application window, excluding Slicky itself and Windows system shells.
+
+* **`get_target_window_element(window=None, target_pid: int | None = None)`**:
+  * If `window` is provided, returns it immediately (bypass scan).
+  * If `target_pid` is provided, scans the Z-order and returns the **first visible window whose `process_id()` matches `target_pid`** — acquiring a fresh COM element.
+  * Otherwise, returns the first non-excluded visible window.
+  * Exclusions: process names containing `clicky`/`tauri`, window titles containing `slicky`, system shells (`searchhost.exe`, etc.), `Taskbar`, `Program Manager`.
+
+* **`get_active_window(window=None, target_pid: int | None = None) -> dict`**:
+  Thin wrapper returning `{ title, process, supported }` for the resolved window.
+
+### 3.4 `python/utils/uia.py` (UI Automation Tree Inspector)
+Inspects structural desktop components that are difficult for OCR to extract (VS Code sidebar icons, menus, file trees).
+
+* **`get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict]`**:
+  * Resolves the target window via `get_target_window_element(target_pid=target_pid)`. When `target_pid` is supplied, a **fresh COM element** is always obtained — critical because pywinauto `UIAWrapper` COM pointers go stale within ~15 seconds while OCR runs.
+  * Traverses `active.descendants()`, filtering to `ALLOWED_CONTROL_TYPES` (Button, TabItem, MenuItem, etc.) for speed.
+  * Skips elements with `width < 4` or `height < 4`, or with off-screen coordinates (`x < -1000` or `y < -1000`).
+  * Returns items with `source: "uia"` and `confidence: 0.98`.
+  * **Does NOT apply any manual coordinate offset**. UIA returns screen-absolute positions by design; coordinate normalisation to screenshot space is handled in `main.py`.
+
+### 3.5 `python/ocr/extract.py` (OCR Parser)
 Extracts visible text and coordinates from captured screenshot images.
 
 * **`extract_visible_text(image_path: Path) -> list[dict]`**:
@@ -153,7 +185,7 @@ Extracts visible text and coordinates from captured screenshot images.
 * **`_easy_ocr(image_path: Path) -> list[dict]`**:
   Initializes an offline `easyocr.Reader(["en"])` instance. Runs text bounding-box detections on the screenshot image and converts PyTorch coordinates into normal formats.
 
-### 3.3 `python/utils/matching.py` (Fuzzy Matcher)
+### 3.6 `python/utils/matching.py` (Fuzzy Matcher)
 Maps LLM target text recommendations back to concrete physical text boxes on screen.
 
 * **`find_best_match(target: str, ocr_items: list[dict]) -> dict | None`**:
@@ -166,13 +198,7 @@ Maps LLM target text recommendations back to concrete physical text boxes on scr
     Where $\text{Bonus} = 0.02$ if the element was parsed via OCR.
   * *Threshold*: If the best score is $< 0.52$, it returns `None`.
 
-### 3.4 `python/utils/uia.py` (UI Automation Tree Inspector)
-Inspects structural desktop components that are difficult for OCR to extract (such as VS Code file explorers).
-
-* **`get_visible_ui_text() -> list[dict]`**:
-  Initializes a pywinauto UIA Desktop instance (`Desktop(backend="uia")`). Fetches the active window handle, scans descendant elements, and extracts coordinate boxes where width/height are $\ge 4\text{ px}$.
-
-### 3.5 `python/ai/prompt.py` (Prompt Builder)
+### 3.7 `python/ai/prompt.py` (Prompt Builder)
 Formats screen context into a compact markdown instruction set for the model.
 
 * **Slicky UI Filtering Heuristics**:
