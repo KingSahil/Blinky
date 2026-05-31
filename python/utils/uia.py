@@ -55,6 +55,16 @@ def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict
         items: list[dict] = []
 
         for element in active.descendants():
+            if len(items) >= 400:
+                LOGGER.info("UIA: Traversal capped at 400 items to prevent massive tree scanning")
+                break
+                
+            try:
+                if not element.is_visible():
+                    continue
+            except Exception:
+                pass
+
             try:
                 ctype = element.element_info.control_type
                 if ctype not in ALLOWED_CONTROL_TYPES:

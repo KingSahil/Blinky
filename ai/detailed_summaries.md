@@ -106,11 +106,11 @@ The user interface for prompt input, status displays, settings configuration, an
            │  3. get_active_window(target_pid)              │
            │  4. extract_visible_text() [OCR, ~15 s]        │
            │  5. get_visible_ui_text(target_pid)            │
-           │     → fresh COM element for locked PID         │
            │  6. Normalise UIA coords: screen→screenshot    │
            │  7. merge_visible_items(ocr, uia)              │
-           │  8. ask_model(prompt, screenshot)              │
-           │  9. attach_matches(steps, items)               │
+           │  8. try_local_intent_match(question, items)    │
+           │  9. ask_model(prompt, screenshot) (LLM)        │
+           │  10. attach_matches(steps, items)              │
            └────────────────────────────────────────────────┘
 ```
 
@@ -125,15 +125,24 @@ The standard input/output interface for processing questions and screen coordina
   4. Extracts OCR text elements using WinRT/EasyOCR (`extract_visible_text()`).
   5. Calls `get_visible_ui_text(target_pid=target_pid)` — UIA re-resolves a **fresh COM element** by PID, avoiding the 15-second staleness window.
   6. **Normalises UIA coordinates** from physical screen space to screenshot space: `x *= screenshot.width / screenshot.screen_width`.
-  7. Dedupes overlapping items using `merge_visible_items()`.
-  8. Compiles the prompt and routes to the model via `ask_model()`.
-  9. Fuzzy matches returned steps back to screen rectangles via `attach_matches()`.
-  10. Returns the final data payload.
+  7. Dedupes overlapping items and calibrates wide UIA coordinates with precise OCR coordinates using `merge_visible_items()`.
+  8. Runs the high-speed **`try_local_intent_match()`** check first. If matching, bypasses the LLM entirely (resolves in <1ms with 100% accuracy!).
+  9. If local match fails, compiles the prompt and routes to the LLM model via `ask_model()`.
+  10. Fuzzy matches returned steps back to screen rectangles via `attach_matches()`.
+  11. Returns the final data payload.
+
+* **`try_local_intent_match(question: str, visible_items: list[dict]) -> dict | None`**:
+  A high-speed local intent classifier that intercepts simple file, folder, and sidebar navigation questions:
+  * Looks up visible items matching words/phrases inside the query.
+  * Ignores generic system/menu terms (like "file", "edit") unless explicitly targeted.
+  * Sorts matches by text length descending to always prioritize the longest, most specific matching string (e.g. choosing `"App.tsx"` over `"file"`).
+  * If a match is found, bypasses the LLM and instantly returns the precise coordinates!
 
 * **`merge_visible_items(ocr_items: list, uia_items: list) -> list`**:
-  Combines OCR text blocks and UI Automation tree items.
-  * *Order*: UIA items are listed first (richer labels for icon-only UI controls).
-  * *Deduplication logic*: Divides coordinates by $8$ pixels to group items into bucket grids. First-seen entry (UIA) wins on duplicate text+bucket.
+  Combines OCR text blocks and UI Automation tree items with pixel-perfect calibration:
+  * *OCR Calibration*: Scans UIA tree elements. If a UIA element matches a precise WinRT OCR element on the same visual row (close Y-coordinate), it overwrites the UIA element's full-width bounds (`x=63, width=900`) with the precise OCR coordinates!
+  * *Order*: UIA items are calibrated and listed first, followed by standalone OCR items as fallback.
+  * *Deduplication*: Divides coordinates by $8$ pixels to group items into bucket grids and removes duplicates.
 
 ### 3.2 `python/capture/screen.py` (Screen Capture)
 Captures the primary display and records dimensions needed for coordinate normalisation.

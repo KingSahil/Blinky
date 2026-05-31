@@ -11,11 +11,7 @@ LOGGER = get_logger("blinky.ocr")
 
 
 def extract_visible_text(image_path: Path) -> list[dict[str, Any]]:
-    """Return OCR text boxes in screen coordinates.
-
-    Windows OCR is attempted first when the optional WinRT package is available.
-    EasyOCR is the practical hackathon fallback.
-    """
+    """Return OCR text boxes in screen coordinates using Windows native WinRT OCR."""
     try:
         items = _windows_ocr(image_path)
         if items:
@@ -24,13 +20,10 @@ def extract_visible_text(image_path: Path) -> list[dict[str, Any]]:
     except Exception as exc:
         LOGGER.warning("Windows OCR unavailable: %s", exc)
 
-    return _easy_ocr(image_path)
+    return []
 
 
 def _windows_ocr(image_path: Path) -> list[dict[str, Any]]:
-    # The WinRT Python packages are not installed on every machine. Keeping this
-    # optional lets the MVP run reliably with EasyOCR while still preferring the
-    # native OCR path when the host has it.
     import asyncio
     import winrt.windows.graphics.imaging as imaging
     import winrt.windows.media.ocr as ocr
@@ -63,47 +56,3 @@ def _windows_ocr(image_path: Path) -> list[dict[str, Any]]:
         return items
 
     return asyncio.run(read())
-
-
-def _easy_ocr(image_path: Path) -> list[dict[str, Any]]:
-    try:
-        import easyocr
-
-        reader = easyocr.Reader(["en"], gpu=True, verbose=False)
-        results = reader.readtext(str(image_path), paragraph=False)
-        items = []
-        for box, text, confidence in results:
-            xs = [point[0] for point in box]
-            ys = [point[1] for point in box]
-            clean = str(text).strip()
-            if not clean:
-                continue
-            items.append(
-                {
-                    "text": clean,
-                    "x": int(min(xs)),
-                    "y": int(min(ys)),
-                    "width": int(max(xs) - min(xs)),
-                    "height": int(max(ys) - min(ys)),
-                    "confidence": round(float(confidence), 3),
-                    "source": "ocr",
-                }
-            )
-        LOGGER.info("EasyOCR returned %s items", len(items))
-        return items
-    except Exception as exc:
-        LOGGER.exception("EasyOCR failed")
-        # Last-resort visible marker so the rest of the demo can still exercise
-        # Ollama and overlay plumbing without crashing.
-        width, height = Image.open(image_path).size
-        return [
-            {
-                "text": "No OCR text detected",
-                "x": width // 3,
-                "y": height // 3,
-                "width": 240,
-                "height": 36,
-                "confidence": 0.0,
-                "source": "ocr",
-            }
-        ]
