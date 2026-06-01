@@ -123,6 +123,7 @@ async fn get_settings(app: AppHandle) -> Result<BlinkySettings, String> {
 #[tauri::command]
 async fn save_settings(app: AppHandle, provider: String, shortcut: String, sarvam_api_key: String, groq_api_key: String) -> Result<(), String> {
     let root = project_root(&app)?;
+    ensure_env_file(&root);
     let env_path = root.join(".env");
     
     // Read the current contents of .env
@@ -225,7 +226,20 @@ fn run_python_worker(app: &AppHandle, question: &str) -> Result<String, String> 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+fn ensure_env_file(root: &PathBuf) {
+    let env_path = root.join(".env");
+    if !env_path.exists() {
+        let example_path = root.join(".envexample");
+        if example_path.exists() {
+            let _ = std::fs::copy(&example_path, &env_path);
+        } else {
+            let _ = std::fs::write(&env_path, b"BLINKY_AI_PROVIDER=groq\nBLINKY_SHORTCUT=Space\n");
+        }
+    }
+}
+
 fn read_env_file(root: &PathBuf) -> Vec<(String, String)> {
+    ensure_env_file(root);
     let env_path = root.join(".env");
     let Ok(contents) = std::fs::read_to_string(env_path) else {
         return Vec::new();
