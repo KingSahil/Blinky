@@ -68,6 +68,7 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [provider, setProvider] = useState('groq');
   const [shortcut, setShortcut] = useState('Enter');
+  const [sarvamApiKey, setSarvamApiKey] = useState('');
 
   // Load settings on mount
   useEffect(() => {
@@ -75,6 +76,7 @@ export function App() {
       .then((settings) => {
         setProvider(settings.provider);
         setShortcut(settings.shortcut);
+        setSarvamApiKey(settings.sarvam_api_key || '');
       })
       .catch((err) => console.error('Failed to load settings:', err));
   }, []);
@@ -94,7 +96,7 @@ export function App() {
   const updateProvider = async (newProvider: string) => {
     setProvider(newProvider);
     try {
-      await saveSettings(newProvider, shortcut);
+      await saveSettings(newProvider, shortcut, sarvamApiKey);
     } catch (err) {
       console.error('Failed to save provider:', err);
     }
@@ -103,7 +105,7 @@ export function App() {
   const updateShortcut = async (newShortcut: string) => {
     setShortcut(newShortcut);
     try {
-      await saveSettings(provider, newShortcut);
+      await saveSettings(provider, newShortcut, sarvamApiKey);
     } catch (err) {
       console.error('Failed to save shortcut:', err);
     }

@@ -3,3 +3,4 @@ CLICKY_GROQ_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
 CLICKY_GROQ_URL=https://api.groq.com/openai/v1/chat/completions
 BLINKY_AI_PROVIDER=groq
 BLINKY_SHORTCUT=Space
+SARVAM_API_KEY=

@@ -91,6 +91,8 @@ fn resize_and_move_command_window(app: AppHandle, x: f64, y: f64, width: f64, he
 struct BlinkySettings {
     provider: String,
     shortcut: String,
+    sarvam_api_key: String,
+    groq_api_key: String,
 }
 
 #[tauri::command]
@@ -100,20 +102,26 @@ async fn get_settings(app: AppHandle) -> Result<BlinkySettings, String> {
     
     let mut provider = "groq".to_string();
     let mut shortcut = "Enter".to_string();
+    let mut sarvam_api_key = "".to_string();
+    let mut groq_api_key = "".to_string();
     
     for (key, val) in env_vars {
         if key == "BLINKY_AI_PROVIDER" {
             provider = val.to_lowercase();
         } else if key == "BLINKY_SHORTCUT" {
             shortcut = val;
+        } else if key == "SARVAM_API_KEY" {
+            sarvam_api_key = val;
+        } else if key == "GROQ_API_KEY" {
+            groq_api_key = val;
         }
     }
     
-    Ok(BlinkySettings { provider, shortcut })
+    Ok(BlinkySettings { provider, shortcut, sarvam_api_key, groq_api_key })
 }
 
 #[tauri::command]
-async fn save_settings(app: AppHandle, provider: String, shortcut: String) -> Result<(), String> {
+async fn save_settings(app: AppHandle, provider: String, shortcut: String, sarvam_api_key: String, groq_api_key: String) -> Result<(), String> {
     let root = project_root(&app)?;
     let env_path = root.join(".env");
     
@@ -124,6 +132,8 @@ async fn save_settings(app: AppHandle, provider: String, shortcut: String) -> Re
     let mut lines: Vec<String> = contents.lines().map(|s| s.to_string()).collect();
     let mut provider_found = false;
     let mut shortcut_found = false;
+    let mut sarvam_api_key_found = false;
+    let mut groq_api_key_found = false;
     
     for line in lines.iter_mut() {
         let trimmed = line.trim();
@@ -133,6 +143,12 @@ async fn save_settings(app: AppHandle, provider: String, shortcut: String) -> Re
         } else if trimmed.starts_with("BLINKY_SHORTCUT=") {
             *line = format!("BLINKY_SHORTCUT={}", shortcut);
             shortcut_found = true;
+        } else if trimmed.starts_with("SARVAM_API_KEY=") {
+            *line = format!("SARVAM_API_KEY={}", sarvam_api_key);
+            sarvam_api_key_found = true;
+        } else if trimmed.starts_with("GROQ_API_KEY=") {
+            *line = format!("GROQ_API_KEY={}", groq_api_key);
+            groq_api_key_found = true;
         }
     }
     
@@ -141,6 +157,12 @@ async fn save_settings(app: AppHandle, provider: String, shortcut: String) -> Re
     }
     if !shortcut_found {
         lines.push(format!("BLINKY_SHORTCUT={}", shortcut));
+    }
+    if !sarvam_api_key_found {
+        lines.push(format!("SARVAM_API_KEY={}", sarvam_api_key));
+    }
+    if !groq_api_key_found {
+        lines.push(format!("GROQ_API_KEY={}", groq_api_key));
     }
     
     let new_contents = lines.join("\n") + "\n";

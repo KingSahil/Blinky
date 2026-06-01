@@ -28,13 +28,15 @@ export async function resizeAndMoveCommandWindow(x: number, y: number, width: nu
 export interface BlinkySettings {
   provider: string;
   shortcut: string;
+  sarvam_api_key: string;
+  groq_api_key: string;
 }
 
 export async function getSettings(): Promise<BlinkySettings> {
   return invoke<BlinkySettings>('get_settings');
 }
 
-export async function saveSettings(provider: string, shortcut: string): Promise<void> {
-  return invoke('save_settings', { provider, shortcut });
+export async function saveSettings(provider: string, shortcut: string, sarvamApiKey: string, groqApiKey: string): Promise<void> {
+  return invoke('save_settings', { provider, shortcut, sarvamApiKey, groqApiKey });
 }
 
