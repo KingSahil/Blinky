@@ -1,4 +1,5 @@
 import { emit, listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useMemo, useState } from 'react';
 import { getHighlightSteps } from './lib/guidance';
 import type { TutorResult } from './lib/types';
@@ -25,6 +26,28 @@ interface HighlightFrame {
 export function Overlay() {
   const [result, setResult] = useState<TutorResult | null>(null);
   const [dismissedKeys, setDismissedKeys] = useState<Set<string>>(() => new Set());
+  const [yOffset, setYOffset] = useState(0);
+
+  useEffect(() => {
+    const isLinux = !navigator.userAgent.includes('Windows') && !navigator.userAgent.includes('Macintosh');
+    if (isLinux) {
+      const fetchOffset = async () => {
+        try {
+          const appWindow = getCurrentWindow();
+          const position = await appWindow.outerPosition();
+          const scaleFactor = await appWindow.scaleFactor();
+          if (scaleFactor > 0) {
+            setYOffset(position.y / scaleFactor);
+          }
+        } catch (err) {
+          console.error('Failed to resolve dynamic y-offset:', err);
+        }
+      };
+      void fetchOffset();
+      const timer = window.setTimeout(fetchOffset, 200);
+      return () => window.clearTimeout(timer);
+    }
+  }, []);
 
   useEffect(() => {
     const unlisten = listen<TutorResult>('blinky://guidance', (event) => {
@@ -63,7 +86,12 @@ export function Overlay() {
           const paddingY = isIcon ? 4 : 8;  
 
           const rawLeft = Math.round(match.x * scaleX) - Math.round(paddingX / 2);
-          const rawTop = Math.round(match.y * scaleY) - Math.round(paddingY / 2);
+          let rawTop = Math.round(match.y * scaleY) - Math.round(paddingY / 2);
+
+          const isLinux = !navigator.userAgent.includes('Windows') && !navigator.userAgent.includes('Macintosh');
+          if (isLinux) {
+            rawTop -= yOffset;
+          }
           const rawWidth = Math.max(8, Math.round(match.width * scaleX)) + paddingX;
           const rawHeight = Math.max(8, Math.round(match.height * scaleY)) + paddingY;
 
@@ -119,7 +147,7 @@ export function Overlay() {
         })
         .filter((frame): frame is HighlightFrame => Boolean(frame)) || []
     );
-  }, [result, scaleX, scaleY]);
+  }, [result, scaleX, scaleY, yOffset]);
 
   useEffect(() => {
     const unlisten = listen<GlobalClick>('blinky://global-click', (event) => {

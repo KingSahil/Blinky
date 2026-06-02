@@ -26,7 +26,8 @@ We recommend reading these guides in the following order:
 ## 🚀 Quick Repository Overview
 
 ```text
-  c:\projects\Jarvis  (Blinky Project Root)
+  /home/fev/GitRepos/clonedGitRepos/Jarvis  (Blinky Project Root - Linux)
+  c:\projects\Jarvis                       (Blinky Project Root - Windows)
    ├── ai/                      ──► AI Documentation Hub (this folder)
    ├── frontend/src/            ──► React TypeScript GUI and Canvas viewports
    ├── src-tauri/src/           ──► Rust Native Core & Mouse Click hooks
@@ -35,10 +36,10 @@ We recommend reading these guides in the following order:
 ```
 
 * **Purpose**: Privacy-first, local AI-powered tutor that captures screen states, extracts visible UI controls, runs coordinate-aware fuzzy matching, and places graphical click-target overlays on screen — one step at a time.
-* **Core Tech Stack**: 
-  * **Tauri (v2) + Rust**: OS-level hooks, shortcuts, window controllers, capture exclusion (`WDA_EXCLUDEFROMCAPTURE`).
-  * **React + TypeScript**: Form inputs, dynamic height rendering, canvas overlay graphics.
-  * **Python 3.11**: Screen captures (`dxcam`), WinRT OCR / EasyOCR, UI elements extraction (`pywinauto`).
+* **Core Tech Stack (Cross-Platform)**: 
+  * **Tauri (v2) + Rust**: OS-level hooks, shortcuts, window controllers, capture exclusion (`WDA_EXCLUDEFROMCAPTURE` on Windows, window coordinate off-sets on Linux to clear system panel).
+  * **React + TypeScript**: Form inputs, dynamic height rendering, canvas overlay graphics (with platform-specific coordinate scaling).
+  * **Python 3.11**: Screen captures (`dxcam` on Windows; D-Bus Wayland Desktop Portal & `gnome-screenshot` on Linux), OCR (WinRT OCR / EasyOCR on Windows; local `tesseract` OCR on Linux), UI elements extraction (`pywinauto` on Windows; native coordinate OCR parsing on Linux).
   * **LLM Intelligence**: Local Ollama (`gemma4:e4b`) or cloud-hosted Groq Vision API (`llama-4-scout`).
 
 ---
@@ -47,6 +48,7 @@ We recommend reading these guides in the following order:
 
 Set up Blinky locally using the following commands:
 
+### Windows Setup
 ```powershell
 # 1. Install standard dependencies
 bun install
@@ -61,4 +63,17 @@ ollama pull gemma4:e4b
 bun run dev
 ```
 
-*For details on configuring `.env` variables and custom shortcut hotkeys, please refer to the [System Architecture Guide](file:///c:/projects/Jarvis/ai/01_architecture.md#6-environment--settings-variables).*
+### Linux (Fedora/Ubuntu) Setup
+```bash
+# 1. Install system prerequisites (Tesseract OCR & development libs)
+sudo dnf install tesseract tesseract-devel  # Fedora
+# or: sudo apt-get install tesseract-ocr libtesseract-dev  # Ubuntu
+
+# 2. Install standard node dependencies
+bun install
+
+# 3. Start the application in development mode
+bun run dev
+```
+
+*For details on configuring `.env` variables and custom shortcut hotkeys, please refer to the [System Architecture Guide](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/ai/01_architecture.md#6-environment--settings-variables).*

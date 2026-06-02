@@ -15,8 +15,16 @@ def get_logger(name: str) -> logging.Logger:
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
 
+    # File Handler
     file_handler = logging.FileHandler(logs_dir / "blinky.log", encoding="utf-8")
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
+    # Console Handler (sys.stderr)
+    import sys
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
     return logger
+

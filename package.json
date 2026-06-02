@@ -6,9 +6,9 @@
   "description": "Blinky is an offline-first AI desktop tutor for Windows.",
   "scripts": {
     "dev": "bun run tauri:dev",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "bun tauri dev",
     "build": "bun run typecheck && vite build --config frontend/vite.config.ts",
-    "tauri:build": "tauri build",
+    "tauri:build": "bun tauri build",
     "preview": "vite preview --config frontend/vite.config.ts",
     "typecheck": "tsc -p frontend/tsconfig.json --noEmit",
     "setup:python": "powershell -ExecutionPolicy Bypass -File scripts/setup-python.ps1",

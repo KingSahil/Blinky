@@ -20,6 +20,10 @@ def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict
     as the overlay window and match the screenshot after the scaleX/scaleY
     transform applied in Overlay.tsx.
     """
+    import os
+    if os.name != "nt":
+        return []
+
     try:
         from utils.window import get_target_window_element
 
