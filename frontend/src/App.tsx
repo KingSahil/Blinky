@@ -68,6 +68,8 @@ export function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [provider, setProvider] = useState('groq');
   const [shortcut, setShortcut] = useState('Enter');
+  const [sarvamApiKey, setSarvamApiKey] = useState('');
+  const [groqApiKey, setGroqApiKey] = useState('');
 
   // Load settings on mount
   useEffect(() => {
@@ -75,6 +77,8 @@ export function App() {
       .then((settings) => {
         setProvider(settings.provider);
         setShortcut(settings.shortcut);
+        setSarvamApiKey(settings.sarvam_api_key || '');
+        setGroqApiKey(settings.groq_api_key || '');
       })
       .catch((err) => console.error('Failed to load settings:', err));
   }, []);
@@ -94,7 +98,7 @@ export function App() {
   const updateProvider = async (newProvider: string) => {
     setProvider(newProvider);
     try {
-      await saveSettings(newProvider, shortcut);
+      await saveSettings(newProvider, shortcut, sarvamApiKey, groqApiKey);
     } catch (err) {
       console.error('Failed to save provider:', err);
     }
@@ -103,9 +107,27 @@ export function App() {
   const updateShortcut = async (newShortcut: string) => {
     setShortcut(newShortcut);
     try {
-      await saveSettings(provider, newShortcut);
+      await saveSettings(provider, newShortcut, sarvamApiKey, groqApiKey);
     } catch (err) {
       console.error('Failed to save shortcut:', err);
+    }
+  };
+
+  const updateSarvamApiKey = async (newKey: string) => {
+    setSarvamApiKey(newKey);
+    try {
+      await saveSettings(provider, shortcut, newKey, groqApiKey);
+    } catch (err) {
+      console.error('Failed to save Sarvam API key:', err);
+    }
+  };
+
+  const updateGroqApiKey = async (newKey: string) => {
+    setGroqApiKey(newKey);
+    try {
+      await saveSettings(provider, shortcut, sarvamApiKey, newKey);
+    } catch (err) {
+      console.error('Failed to save Groq API key:', err);
     }
   };
 
@@ -340,6 +362,28 @@ export function App() {
                   {shortcut === 'Space' && <Check size={14} className="active-dot" />}
                 </button>
               </div>
+            </div>
+
+            <div className="dropdown-section">
+              <h4>Groq API Key</h4>
+              <input
+                type="password"
+                className="settings-input"
+                value={groqApiKey}
+                onChange={(e) => updateGroqApiKey(e.target.value)}
+                placeholder="Paste API Key..."
+              />
+            </div>
+
+            <div className="dropdown-section">
+              <h4>Sarvam AI API Key</h4>
+              <input
+                type="password"
+                className="settings-input"
+                value={sarvamApiKey}
+                onChange={(e) => updateSarvamApiKey(e.target.value)}
+                placeholder="Paste API Key..."
+              />
             </div>
 
             <div className="dropdown-section dropdown-about">

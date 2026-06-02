@@ -1,8 +1,10 @@
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check } from 'lucide-react';
+import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2 } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
+import { getCasualChatResponse } from './lib/casualChat';
 import { runTutor, showOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow } from './lib/tauri';
+import { buildAudioDataUrl, buildSarvamTtsPayload, getSarvamErrorMessage } from './lib/tts';
 
 export function CommandBar() {
   const [question, setQuestion] = useState('');
@@ -68,6 +70,238 @@ export function CommandBar() {
   const [showSettings, setShowSettings] = useState(false);
   const [provider, setProvider] = useState('groq');
   const [shortcut, setShortcut] = useState('Enter');
+  const [sarvamApiKey, setSarvamApiKey] = useState('');
+  const [groqApiKey, setGroqApiKey] = useState('');
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const stopSpeaking = () => {
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    setIsSpeaking(false);
+  };
+
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => {
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+      }
+    };
+  }, []);
+
+  const speakText = async (summaryText: string, stepsList: any[]) => {
+    if (!sarvamApiKey) {
+      setStatus('Please set your Sarvam AI API Key in settings first.');
+      return;
+    }
+    
+    let speechContent = summaryText;
+    if (stepsList && stepsList.length > 0) {
+      speechContent += ". Here are the steps to follow: ";
+      stepsList.forEach((step, idx) => {
+        speechContent += `Step ${step.step || (idx + 1)}. ${step.instruction}. `;
+      });
+    }
+
+    setIsSpeaking(true);
+    try {
+      const response = await fetch('https://api.sarvam.ai/text-to-speech', {
+        method: 'POST',
+        headers: {
+          'api-subscription-key': sarvamApiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(buildSarvamTtsPayload(speechContent)),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(getSarvamErrorMessage(errorData, response.status));
+      }
+
+      const data = await response.json();
+      if (!data.audios || data.audios.length === 0) {
+        throw new Error('No audio returned from Sarvam AI TTS API.');
+      }
+
+      const base64Audio = data.audios[0];
+      const audioUrl = buildAudioDataUrl(base64Audio);
+      const audio = new Audio(audioUrl);
+      
+      currentAudioRef.current = audio;
+      audio.onended = () => {
+        setIsSpeaking(false);
+        currentAudioRef.current = null;
+      };
+      audio.onerror = (e) => {
+        console.error('Audio playback error:', e);
+        setIsSpeaking(false);
+        currentAudioRef.current = null;
+      };
+
+      await audio.play();
+    } catch (err: any) {
+      console.error('TTS error:', err);
+      setStatus(`Voice readback failed: ${err.message}`);
+      setIsSpeaking(false);
+    }
+  };
+
+  const speakResponse = () => {
+    if (isSpeaking) {
+      stopSpeaking();
+    } else if (status && status !== defaultStatus) {
+      void speakText(status, steps);
+    }
+  };
+
+  const startRecording = async () => {
+    if (!sarvamApiKey) {
+      setStatus('Please set your Sarvam AI API Key in settings first.');
+      return;
+    }
+    audioChunksRef.current = [];
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const options = { mimeType: 'audio/webm' };
+      const recorder = new MediaRecorder(stream, options);
+      
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(track => track.stop());
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        await handleAudioTranscription(audioBlob);
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+      setStatus('Listening... Click mic to stop.');
+    } catch (err) {
+      console.error('Error starting audio recording:', err);
+      setStatus('Microphone access failed or was denied.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      stopSpeaking();
+      void startRecording();
+    }
+  };
+
+  const handleAudioTranscription = async (blob: Blob) => {
+    setIsTranscribing(true);
+    setStatus('Transcribing speech...');
+    
+    try {
+      const formData = new FormData();
+      formData.append('file', blob, 'query.webm');
+      formData.append('model', 'saaras:v3');
+      formData.append('language_code', 'en-IN');
+      
+      const response = await fetch('https://api.sarvam.ai/speech-to-text', {
+        method: 'POST',
+        headers: {
+          'api-subscription-key': sarvamApiKey,
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Sarvam STT failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      const text = (data.transcript || '').trim();
+      if (!text) {
+        throw new Error('Could not understand speech. Please try again.');
+      }
+
+      setQuestion(text);
+      setStatus(`Searching for: "${text}"`);
+      
+      void executeTutor(text, true);
+    } catch (err: any) {
+      console.error('Transcription error:', err);
+      setStatus(err.message || 'Failed to transcribe audio.');
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  async function executeTutor(queryText: string, shouldSpeakAfter: boolean) {
+    if (isRunning) return;
+    const casualResponse = getCasualChatResponse(queryText);
+    if (casualResponse) {
+      stopSpeaking();
+      setStatus(casualResponse.summary);
+      setSteps([]);
+      setQuestion('');
+      if (inputRef.current) {
+        inputRef.current.style.height = 'auto';
+      }
+      if (shouldSpeakAfter) {
+        setTimeout(() => {
+          void speakText(casualResponse.summary, []);
+        }, 300);
+      }
+      return;
+    }
+
+    setIsRunning(true);
+    setStatus('Reading the screen...');
+    setSteps([]);
+    stopSpeaking();
+    
+    const currentWindow = getCurrentWindow();
+    try {
+      const result = await runTutor(queryText);
+      await showOverlay();
+      await currentWindow.setFocus();
+      setStatus(result.summary);
+      setSteps(result.steps || []);
+      setQuestion('');
+      if (inputRef.current) {
+        inputRef.current.style.height = 'auto';
+      }
+      
+      if (shouldSpeakAfter && result.summary) {
+        setTimeout(() => {
+          void speakText(result.summary, result.steps || []);
+        }, 300);
+      }
+    } catch (error) {
+      await currentWindow.setFocus();
+      setStatus(error instanceof Error ? error.message : String(error));
+      setSteps([]);
+    } finally {
+      setIsRunning(false);
+    }
+  }
 
   // Load settings on mount
   useEffect(() => {
@@ -75,6 +309,8 @@ export function CommandBar() {
       .then((settings) => {
         setProvider(settings.provider);
         setShortcut(settings.shortcut);
+        setSarvamApiKey(settings.sarvam_api_key || '');
+        setGroqApiKey(settings.groq_api_key || '');
       })
       .catch((err) => console.error('Failed to load settings:', err));
   }, []);
@@ -94,7 +330,7 @@ export function CommandBar() {
   const updateProvider = async (newProvider: string) => {
     setProvider(newProvider);
     try {
-      await saveSettings(newProvider, shortcut);
+      await saveSettings(newProvider, shortcut, sarvamApiKey, groqApiKey);
     } catch (err) {
       console.error('Failed to save provider:', err);
     }
@@ -103,9 +339,27 @@ export function CommandBar() {
   const updateShortcut = async (newShortcut: string) => {
     setShortcut(newShortcut);
     try {
-      await saveSettings(provider, newShortcut);
+      await saveSettings(provider, newShortcut, sarvamApiKey, groqApiKey);
     } catch (err) {
       console.error('Failed to save shortcut:', err);
+    }
+  };
+
+  const updateSarvamApiKey = async (newKey: string) => {
+    setSarvamApiKey(newKey);
+    try {
+      await saveSettings(provider, shortcut, newKey, groqApiKey);
+    } catch (err) {
+      console.error('Failed to save Sarvam API key:', err);
+    }
+  };
+
+  const updateGroqApiKey = async (newKey: string) => {
+    setGroqApiKey(newKey);
+    try {
+      await saveSettings(provider, shortcut, sarvamApiKey, newKey);
+    } catch (err) {
+      console.error('Failed to save Groq API key:', err);
     }
   };
 
@@ -118,7 +372,10 @@ export function CommandBar() {
 
   // Focus input when open-command event is heard
   useEffect(() => {
-    const focusInput = () => window.setTimeout(() => inputRef.current?.focus(), 60);
+    const focusInput = () => {
+      stopSpeaking();
+      window.setTimeout(() => inputRef.current?.focus(), 60);
+    };
     focusInput();
 
     const unlisten = listen('blinky://open-command', focusInput);
@@ -202,28 +459,7 @@ export function CommandBar() {
     event.preventDefault();
     const trimmed = question.trim();
     if (!trimmed || isRunning) return;
-
-    setIsRunning(true);
-    setStatus('Reading the screen...');
-    setSteps([]);
-    const currentWindow = getCurrentWindow();
-    try {
-      const result = await runTutor(trimmed);
-      await showOverlay();
-      await currentWindow.setFocus();
-      setStatus(result.summary);
-      setSteps(result.steps || []);
-      setQuestion('');
-      if (inputRef.current) {
-        inputRef.current.style.height = 'auto'; // Reset textarea height on submit
-      }
-    } catch (error) {
-      await currentWindow.setFocus();
-      setStatus(error instanceof Error ? error.message : String(error));
-      setSteps([]);
-    } finally {
-      setIsRunning(false);
-    }
+    void executeTutor(trimmed, false);
   }
 
   async function startDrag() {
@@ -342,6 +578,28 @@ export function CommandBar() {
               </div>
             </div>
 
+            <div className="dropdown-section">
+              <h4>Groq API Key</h4>
+              <input
+                type="password"
+                className="settings-input"
+                value={groqApiKey}
+                onChange={(e) => updateGroqApiKey(e.target.value)}
+                placeholder="Paste API Key..."
+              />
+            </div>
+
+            <div className="dropdown-section">
+              <h4>Sarvam AI API Key</h4>
+              <input
+                type="password"
+                className="settings-input"
+                value={sarvamApiKey}
+                onChange={(e) => updateSarvamApiKey(e.target.value)}
+                placeholder="Paste API Key..."
+              />
+            </div>
+
             <div className="dropdown-section dropdown-about">
               <span>Theme: <strong>Ember</strong></span>
               <span>About: <strong>v1.0.0</strong></span>
@@ -356,7 +614,8 @@ export function CommandBar() {
               rows={1}
               value={question}
               onChange={handleInputChange}
-              placeholder="Ask anything..."
+              placeholder={isRecording ? "Listening... click mic to stop" : isTranscribing ? "Transcribing voice..." : "Ask anything..."}
+              disabled={isTranscribing}
               autoFocus
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && !event.shiftKey) {
@@ -365,7 +624,25 @@ export function CommandBar() {
                 }
               }}
             />
-            <button className="command-send" type="submit" disabled={isRunning || question.trim().length === 0}>
+            <button
+              type="button"
+              className={`command-mic-btn ${isRecording ? 'recording' : ''} ${isTranscribing ? 'loading' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleRecording();
+              }}
+              disabled={isRunning || isTranscribing}
+              title={isRecording ? "Stop recording" : "Record voice command"}
+            >
+              {isTranscribing ? (
+                <Loader2 className="spin" size={16} />
+              ) : isRecording ? (
+                <span className="mic-record-indicator" />
+              ) : (
+                <Mic size={16} />
+              )}
+            </button>
+            <button className="command-send" type="submit" disabled={isRunning || isTranscribing || question.trim().length === 0}>
               {isRunning ? <Loader2 className="spin" size={18} /> : <ArrowUp size={18} />}
             </button>
           </div>
@@ -374,7 +651,22 @@ export function CommandBar() {
             <div className="command-result-container">
               <div className="command-summary-bubble">
                 <Sparkles size={14} className="summary-sparkle" />
-                <span className="command-status">{status}</span>
+                <div className="command-summary-text-container">
+                  <span className="command-status">{status}</span>
+                  {steps.length > 0 && sarvamApiKey && (
+                    <button
+                      type="button"
+                      className={`command-speak-btn ${isSpeaking ? 'speaking' : ''}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        speakResponse();
+                      }}
+                      title={isSpeaking ? "Stop speaking" : "Speak response"}
+                    >
+                      <Volume2 size={16} />
+                    </button>
+                  )}
+                </div>
               </div>
 
               {steps.length > 0 && (

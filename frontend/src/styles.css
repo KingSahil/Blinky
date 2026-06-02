@@ -1355,3 +1355,119 @@ h3 {
 .resize-handle-right {
   right: -10px;
 }
+
+/* ==========================================================================
+   Voice Command (STT & TTS) Styles
+   ========================================================================== */
+
+.settings-input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-strong);
+  font-size: 12px;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.settings-input:focus {
+  border-color: rgba(255, 120, 105, 0.5);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.command-mic-btn {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+  transition: all 0.2s ease;
+  cursor: pointer;
+  margin-right: 2px;
+}
+
+.command-mic-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-strong);
+  transform: scale(1.05);
+}
+
+.command-mic-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.command-mic-btn.recording {
+  background: rgba(255, 83, 112, 0.25);
+  border-color: rgba(255, 83, 112, 0.6);
+  color: #ffb7c5;
+  animation: micPulse 1.5s infinite;
+}
+
+.mic-record-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ff5370;
+  display: inline-block;
+  animation: beaconPulse 1.2s infinite alternate;
+}
+
+.command-summary-text-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
+}
+
+.command-speak-btn {
+  background: rgba(255, 120, 105, 0.12);
+  border: 1px solid rgba(255, 120, 105, 0.3);
+  color: #ffb7a4;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.command-speak-btn:hover:not(:disabled) {
+  background: rgba(255, 120, 105, 0.25);
+  transform: scale(1.05);
+}
+
+.command-speak-btn.speaking {
+  background: rgba(167, 255, 122, 0.2);
+  border-color: rgba(167, 255, 122, 0.5);
+  color: #bdff94;
+  animation: speakWobble 0.3s infinite alternate;
+}
+
+@keyframes micPulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 83, 112, 0.4); }
+  70% { box-shadow: 0 0 0 8px rgba(255, 83, 112, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 83, 112, 0); }
+}
+
+@keyframes beaconPulse {
+  from { transform: scale(0.9); opacity: 0.8; }
+  to { transform: scale(1.15); opacity: 1; }
+}
+
+@keyframes speakWobble {
+  from { transform: scale(1.0); }
+  to { transform: scale(1.08); }
+}

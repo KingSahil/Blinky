@@ -91,6 +91,8 @@ fn resize_and_move_command_window(app: AppHandle, x: f64, y: f64, width: f64, he
 struct BlinkySettings {
     provider: String,
     shortcut: String,
+    sarvam_api_key: String,
+    groq_api_key: String,
 }
 
 #[tauri::command]
@@ -100,21 +102,28 @@ async fn get_settings(app: AppHandle) -> Result<BlinkySettings, String> {
     
     let mut provider = "groq".to_string();
     let mut shortcut = "Enter".to_string();
+    let mut sarvam_api_key = "".to_string();
+    let mut groq_api_key = "".to_string();
     
     for (key, val) in env_vars {
         if key == "BLINKY_AI_PROVIDER" {
             provider = val.to_lowercase();
         } else if key == "BLINKY_SHORTCUT" {
             shortcut = val;
+        } else if key == "SARVAM_API_KEY" {
+            sarvam_api_key = val;
+        } else if key == "GROQ_API_KEY" {
+            groq_api_key = val;
         }
     }
     
-    Ok(BlinkySettings { provider, shortcut })
+    Ok(BlinkySettings { provider, shortcut, sarvam_api_key, groq_api_key })
 }
 
 #[tauri::command]
-async fn save_settings(app: AppHandle, provider: String, shortcut: String) -> Result<(), String> {
+async fn save_settings(app: AppHandle, provider: String, shortcut: String, sarvam_api_key: String, groq_api_key: String) -> Result<(), String> {
     let root = project_root(&app)?;
+    ensure_env_file(&root);
     let env_path = root.join(".env");
     
     // Read the current contents of .env
@@ -124,6 +133,8 @@ async fn save_settings(app: AppHandle, provider: String, shortcut: String) -> Re
     let mut lines: Vec<String> = contents.lines().map(|s| s.to_string()).collect();
     let mut provider_found = false;
     let mut shortcut_found = false;
+    let mut sarvam_api_key_found = false;
+    let mut groq_api_key_found = false;
     
     for line in lines.iter_mut() {
         let trimmed = line.trim();
@@ -133,6 +144,12 @@ async fn save_settings(app: AppHandle, provider: String, shortcut: String) -> Re
         } else if trimmed.starts_with("BLINKY_SHORTCUT=") {
             *line = format!("BLINKY_SHORTCUT={}", shortcut);
             shortcut_found = true;
+        } else if trimmed.starts_with("SARVAM_API_KEY=") {
+            *line = format!("SARVAM_API_KEY={}", sarvam_api_key);
+            sarvam_api_key_found = true;
+        } else if trimmed.starts_with("GROQ_API_KEY=") {
+            *line = format!("GROQ_API_KEY={}", groq_api_key);
+            groq_api_key_found = true;
         }
     }
     
@@ -141,6 +158,12 @@ async fn save_settings(app: AppHandle, provider: String, shortcut: String) -> Re
     }
     if !shortcut_found {
         lines.push(format!("BLINKY_SHORTCUT={}", shortcut));
+    }
+    if !sarvam_api_key_found {
+        lines.push(format!("SARVAM_API_KEY={}", sarvam_api_key));
+    }
+    if !groq_api_key_found {
+        lines.push(format!("GROQ_API_KEY={}", groq_api_key));
     }
     
     let new_contents = lines.join("\n") + "\n";
@@ -203,7 +226,20 @@ fn run_python_worker(app: &AppHandle, question: &str) -> Result<String, String> 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+fn ensure_env_file(root: &PathBuf) {
+    let env_path = root.join(".env");
+    if !env_path.exists() {
+        let example_path = root.join(".envexample");
+        if example_path.exists() {
+            let _ = std::fs::copy(&example_path, &env_path);
+        } else {
+            let _ = std::fs::write(&env_path, b"BLINKY_AI_PROVIDER=groq\nBLINKY_SHORTCUT=Space\n");
+        }
+    }
+}
+
 fn read_env_file(root: &PathBuf) -> Vec<(String, String)> {
+    ensure_env_file(root);
     let env_path = root.join(".env");
     let Ok(contents) = std::fs::read_to_string(env_path) else {
         return Vec::new();
