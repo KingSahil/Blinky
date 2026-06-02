@@ -1,8 +1,8 @@
 # Blinky — AI Directory & Developer Guides
 
-Welcome to the AI integration and developer documentation directory for **Blinky** (referred to as Blinky). 
+Welcome to the AI integration and developer documentation directory for **Blinky**. 
 
-This directory contains comprehensive guides designed to ramp up human developers quickly and instruct offline AI coding agents on the systems architectures, API interfaces, and coordinate mapping formulas used throughout the codebase.
+This directory contains comprehensive guides designed to ramp up human developers quickly and instruct offline AI coding agents on the system architecture, API interfaces, coordinate mapping formulas, and post-processing pipelines used throughout the codebase.
 
 ---
 
@@ -12,8 +12,8 @@ For a detailed walkthrough of the codebase, select one of the core guides below:
 
 | Guide | Description | Target Audience |
 | :--- | :--- | :--- |
-| 🏗️ **[System Architecture](file:///c:/projects/Jarvis/ai/architecture.md)** | Multi-process models, high-level Mermaid flowcharts, sequence diagrams, IPC protocols, and coordinate scaling mechanics. | Architects, System Integrators, AI Agents |
-| 📝 **[Per-File Specifications](file:///c:/projects/Jarvis/ai/detailed_summaries.md)** | Detailed function signatures, mathematical formulas, coordinate scaling bounds, bucketing, and search scoring algorithms. | Developers, AI Agents |
+| 🏗️ **[System Architecture](file:///c:/projects/Jarvis/ai/architecture.md)** | Multi-process models, high-level flowcharts, sequence diagrams, IPC protocols, coordinate scaling mechanics, and post-processing pipelines. | Architects, System Integrators, AI Agents |
+| 📝 **[Per-File Specifications](file:///c:/projects/Jarvis/ai/detailed_summaries.md)** | Detailed function signatures, mathematical formulas, coordinate scaling bounds, bucketing, search scoring algorithms, and step post-processors. | Developers, AI Agents |
 | 🗂️ **[Files Index](file:///c:/projects/Jarvis/ai/files_index.json)** | Machine-readable JSON listing of core codebase assets and their functional descriptions. | AI Agents, Automations |
 
 ---
@@ -29,12 +29,12 @@ For a detailed walkthrough of the codebase, select one of the core guides below:
    └── tmp/captures/            ──► Captured Telemetry Screen Buffers (temporary)
 ```
 
-* **Purpose**: Privacy-first, local AI-powered tutor that captures screen states, extracts visible UI controls, coordinates elements fuzzy-matching, and places graphical click targets overlays on screen.
+* **Purpose**: Privacy-first, local AI-powered tutor that captures screen states, extracts visible UI controls, runs coordinate-aware fuzzy matching, and places graphical click-target overlays on screen — one step at a time.
 * **Core Tech Stack**: 
-  * **Tauri (v2) + Rust**: OS-level hooks, shortcuts, window controllers.
+  * **Tauri (v2) + Rust**: OS-level hooks, shortcuts, window controllers, capture exclusion (`WDA_EXCLUDEFROMCAPTURE`).
   * **React + TypeScript**: Form inputs, dynamic height rendering, canvas overlay graphics.
   * **Python 3.11**: Screen captures (`dxcam`), WinRT OCR / EasyOCR, UI elements extraction (`pywinauto`).
-  * **LLM Intelligence**: Local Ollama (Ollama CLI) or cloud-hosted Groq Vision API.
+  * **LLM Intelligence**: Local Ollama (`gemma4:e4b`) or cloud-hosted Groq Vision API (`llama-4-scout`).
 
 ---
 
@@ -60,11 +60,13 @@ bun run dev
 
 ## Current AI Guidance Behavior
 
-Blinky now separates normal chat from screen guidance before it captures the screen:
+Blinky operates in a **single-step reactive mode**:
 
-* Casual greetings, identity questions, and general questions use a text-only chat prompt and return `steps: []`.
-* Screen-bound tasks run OCR/UIA capture, ask the model for an Action Guide, and hide the summary bubble when actionable steps exist.
-* The Action Guide keeps completed step history visible and appends the next current step only after a fresh worker result. Completed or repeated steps are filtered out before overlay rendering.
-* Highlight clicks report completed click-only instructions and targets back into the next `run_tutor` request. Text-entry/search/input highlights are treated as focus actions only, so Blinky does not advance until the required typed/search result is visible in a fresh screen state.
-* Blinky never advances to the next displayed step from the old plan. After a highlighted click, it hides the overlay and waits for the fresh screen read before showing the next step or a completion confirmation. The final click is verified from the current visible UI instead of being assumed complete.
+* **Preflight Classification**: Before any screen capture, a text-only classifier decides whether the query needs screen analysis. It also detects continuations (follow-ups to a previous active goal) vs. new tasks using `is_continuation`.
+* **Single-Step Generation**: The AI prompt enforces exactly **1 step** per response. Token output is capped at 350 to minimise local Ollama inference time. The backend also programmatically slices the steps list to `[:1]` as a safety net.
+* **No Background Polling**: Blinky is fully reactive — it only captures the screen and queries the model when the user submits a question or clicks a highlighted target. There is no background polling loop.
+* **Flicker-Free Capture**: The Rust backend uses `WDA_EXCLUDEFROMCAPTURE` display affinity to hide Blinky windows from screenshots while keeping them fully visible and interactive on the user's desktop.
+* **Search Bar Fallback**: If the AI returns a search/type instruction with empty `target_text`, the backend auto-detects and attaches the first visible search/filter input control so the green pulsing highlight always appears on the search bar.
+* **Navigation Step Skipping**: If the AI's first step is a redundant navigation action (e.g. "click Extensions tab") but the target search bar is already visible on screen, the step is automatically skipped.
+* **Input Field Highlighting**: When a matched element is an input control (Edit, TextBox, ComboBox), the overlay renders a full-width highlight instead of character-count-based width capping.
 * Voice readback speaks the current Action Guide step only for workflows that started from voice input. Typed workflows stay silent on highlight-click continuations.
