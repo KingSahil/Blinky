@@ -44,7 +44,7 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
             json={
                 "model": model,
                 "temperature": 0.1,
-                "max_tokens": 700,
+                "max_tokens": 350,
                 "response_format": {"type": "json_object"},
                 "messages": [
                     {
@@ -71,6 +71,46 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
     body = response.json()
     content = _extract_content(body)
     return _validate_response(_parse_json(content))
+
+
+def ask_groq_text(prompt: str) -> dict[str, Any]:
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is required when BLINKY_AI_PROVIDER=groq.")
+
+    model = _active_groq_model()
+    groq_url = os.getenv("BLINKY_GROQ_URL", DEFAULT_GROQ_URL).strip() or DEFAULT_GROQ_URL
+
+    try:
+        timeout_val = int(os.getenv("BLINKY_GROQ_TIMEOUT", "90").strip())
+    except ValueError:
+        timeout_val = 90
+
+    try:
+        response = requests.post(
+            groq_url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "temperature": 0.1,
+                "max_tokens": 300,
+                "response_format": {"type": "json_object"},
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=timeout_val,
+        )
+    except requests.exceptions.Timeout:
+        raise RuntimeError(f"Groq API request timed out after {timeout_val} seconds.")
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(f"Groq API connection error: {exc}")
+
+    if not response.ok:
+        raise RuntimeError(_format_groq_error(response))
+    body = response.json()
+    return _parse_json(_extract_content(body))
 
 
 def _active_groq_model() -> str:
@@ -148,14 +188,4 @@ def _validate_response(payload: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
-    if not normalized_steps:
-        normalized_steps.append(
-            {
-                "step": 1,
-                "instruction": "I cannot see the needed control yet. Open the relevant panel or menu and ask again.",
-                "target_text": "",
-            }
-        )
-
     return {"summary": summary, "steps": normalized_steps, "warnings": []}
-

@@ -1,8 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { TutorResult } from './types';
+import type { TutorProgress, TutorResult } from './types';
 
-export async function runTutor(question: string): Promise<TutorResult> {
-  return invoke<TutorResult>('run_tutor', { request: { question } });
+export async function runTutor(question: string, previousQuestion?: string, progress?: TutorProgress): Promise<TutorResult> {
+  return invoke<TutorResult>('run_tutor', { request: { question, previous_question: previousQuestion, progress } });
 }
 
 export async function showOverlay(): Promise<void> {

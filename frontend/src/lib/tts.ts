@@ -44,7 +44,10 @@ export function buildSpeechContent(
     .filter(Boolean)
     .join(' ');
 
-  return stepText ? `${summary.replace(/[.!?]+$/, '')}. Steps: ${stepText}` : summary;
+  if (!stepText) return summary;
+  if (!summary) return stepText;
+
+  return `${summary.replace(/[.!?]+$/, '')}. Steps: ${stepText}`;
 }
 
 export function getSarvamErrorMessage(payload: unknown, status: number): string {

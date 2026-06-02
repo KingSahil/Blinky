@@ -1,10 +1,30 @@
-import { listen } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2 } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { getCasualChatResponse } from './lib/casualChat';
-import { runTutor, showOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow } from './lib/tauri';
+import {
+  getCurrentGuideSteps,
+  getDisplaySteps,
+  getHighlightSteps,
+  getWorkflowContinuationReadback,
+  mergeGuideHistory,
+  shouldCompleteStepOnHighlightClick,
+  shouldShowSummaryBubble,
+} from './lib/guidance';
+import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow } from './lib/tauri';
 import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvamErrorMessage } from './lib/tts';
+import type { TutorProgress } from './lib/types';
+
+interface TargetClickedPayload {
+  step?: number;
+  target_text?: string;
+  instruction?: string;
+}
+
+interface TutorRunOptions {
+  resetProgress?: boolean;
+  preserveStepsDuringRun?: boolean;
+}
 
 export function CommandBar() {
   const [question, setQuestion] = useState('');
@@ -67,6 +87,7 @@ export function CommandBar() {
   };
   const [status, setStatus] = useState(defaultStatus);
   const [steps, setSteps] = useState<any[]>([]);
+  const [showGuideCompletionSummary, setShowGuideCompletionSummary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [provider, setProvider] = useState('groq');
   const [shortcut, setShortcut] = useState('Enter');
@@ -79,6 +100,11 @@ export function CommandBar() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const lastQueryRef = useRef<string>('');
+  const completedTargetsRef = useRef<string[]>([]);
+  const completedInstructionsRef = useRef<string[]>([]);
+  const currentGuideStepsRef = useRef<any[]>([]);
+  const workflowStartedWithReadbackRef = useRef(false);
 
   const stopSpeaking = () => {
     if (currentAudioRef.current) {
@@ -153,7 +179,7 @@ export function CommandBar() {
     if (isSpeaking) {
       stopSpeaking();
     } else if (status && status !== defaultStatus) {
-      void speakText(status, steps, { includeSteps: true });
+      void speakText(status, steps, { includeSteps: !showGuideCompletionSummary });
     }
   };
 
@@ -247,42 +273,81 @@ export function CommandBar() {
     }
   };
 
-  async function executeTutor(queryText: string, shouldSpeakAfter: boolean) {
+  function currentProgress(): TutorProgress {
+    return {
+      completed_targets: completedTargetsRef.current,
+      completed_instructions: completedInstructionsRef.current,
+    };
+  }
+
+  async function executeTutor(
+    queryText: string,
+    shouldSpeakAfter: boolean,
+    options: TutorRunOptions = {},
+  ) {
     if (isRunning) return;
-    const casualResponse = getCasualChatResponse(queryText);
-    if (casualResponse) {
-      stopSpeaking();
-      setStatus(casualResponse.summary);
+
+    if (options.resetProgress) {
+      completedTargetsRef.current = [];
+      completedInstructionsRef.current = [];
+      currentGuideStepsRef.current = [];
+      workflowStartedWithReadbackRef.current = shouldSpeakAfter;
       setSteps([]);
-      setQuestion('');
-      if (inputRef.current) {
-        inputRef.current.style.height = 'auto';
-      }
-      if (shouldSpeakAfter) {
-        void speakText(casualResponse.summary, []);
-      }
-      return;
+      setShowGuideCompletionSummary(false);
+      lastQueryRef.current = '';
     }
 
+    const previousQuestion = lastQueryRef.current || undefined;
+
     setIsRunning(true);
-    setStatus('Reading the screen...');
-    setSteps([]);
+    setStatus('Thinking...');
+    if (!options.preserveStepsDuringRun) {
+      setSteps([]);
+    }
     stopSpeaking();
     
     const currentWindow = getCurrentWindow();
     try {
-      const result = await runTutor(queryText);
-      await showOverlay();
+      const result = await runTutor(queryText, previousQuestion, currentProgress());
+      const isContinuation = !!result.is_continuation;
+
+      if (!isContinuation) {
+        completedTargetsRef.current = [];
+        completedInstructionsRef.current = [];
+        currentGuideStepsRef.current = [];
+        workflowStartedWithReadbackRef.current = shouldSpeakAfter;
+        setSteps([]);
+        setShowGuideCompletionSummary(false);
+        lastQueryRef.current = queryText;
+      }
+
+      const displaySteps = getDisplaySteps(result.steps || []);
+      const currentGuideSteps = getCurrentGuideSteps(displaySteps, currentProgress());
+      currentGuideStepsRef.current = currentGuideSteps;
+      const hasCompletedProgress =
+        completedTargetsRef.current.length > 0 || completedInstructionsRef.current.length > 0;
+      const highlightSteps = getHighlightSteps(currentGuideSteps);
+      await emit('blinky://guidance', { ...result, steps: currentGuideSteps });
+      if (highlightSteps.length > 0) {
+        await showOverlay();
+      } else {
+        await hideOverlay();
+      }
       await currentWindow.setFocus();
       setStatus(result.summary);
-      setSteps(result.steps || []);
+      setShowGuideCompletionSummary(hasCompletedProgress && currentGuideSteps.length === 0 && Boolean(result.summary));
+      setSteps((previousSteps) => mergeGuideHistory(previousSteps, currentGuideSteps, currentProgress()));
       setQuestion('');
       if (inputRef.current) {
         inputRef.current.style.height = 'auto';
       }
       
-      if (shouldSpeakAfter && result.summary) {
-        void speakText(result.summary, []);
+      if (shouldSpeakAfter) {
+        if (currentGuideSteps.length > 0) {
+          void speakText('', [currentGuideSteps[0]], { includeSteps: true });
+        } else if (result.summary) {
+          void speakText(result.summary, []);
+        }
       }
     } catch (error) {
       await currentWindow.setFocus();
@@ -359,6 +424,13 @@ export function CommandBar() {
   const formRef = useRef<HTMLFormElement | null>(null);
 
   const showStatus = isRunning || status !== defaultStatus;
+  const showSummaryBubble = shouldShowSummaryBubble({
+    isRunning,
+    status,
+    defaultStatus,
+    steps,
+    forceShow: showGuideCompletionSummary,
+  });
 
   // Focus input when open-command event is heard
   useEffect(() => {
@@ -373,6 +445,83 @@ export function CommandBar() {
       unlisten.then((dispose) => dispose());
     };
   }, []);
+
+  useEffect(() => {
+    const unlisten = listen<TargetClickedPayload>('blinky://target-clicked', (event) => {
+      const query = lastQueryRef.current.trim();
+      if (!query || isRunning) return;
+      const targetText = event.payload.target_text?.trim();
+      const instruction = event.payload.instruction?.trim();
+      const clickedStep =
+        currentGuideStepsRef.current.find(
+          (step) => step.instruction?.trim() === instruction && step.target_text?.trim() === targetText,
+        ) || {
+          instruction: instruction || '',
+          target_text: targetText || '',
+          match: null,
+        };
+      if (!shouldCompleteStepOnHighlightClick(clickedStep)) {
+        void hideOverlay();
+        return;
+      }
+      if (targetText && !completedTargetsRef.current.includes(targetText)) {
+        completedTargetsRef.current = [...completedTargetsRef.current, targetText];
+      }
+      if (instruction && !completedInstructionsRef.current.includes(instruction)) {
+        completedInstructionsRef.current = [...completedInstructionsRef.current, instruction];
+      }
+      void hideOverlay();
+      window.setTimeout(() => {
+        void executeTutor(query, getWorkflowContinuationReadback(workflowStartedWithReadbackRef.current), {
+          preserveStepsDuringRun: true,
+        });
+      }, 450);
+    });
+    return () => {
+      unlisten.then((dispose) => dispose());
+    };
+  }, [isRunning]);
+
+  // Listen for global Enter keypress to auto-advance if the active step is a text-entry step
+  useEffect(() => {
+    const unlisten = listen('blinky://global-enter', () => {
+      // If the Blinky app webview itself has focus, don't auto-complete target app steps
+      if (document.hasFocus()) return;
+
+      const query = lastQueryRef.current.trim();
+      if (!query || isRunning) return;
+
+      const currentSteps = currentGuideStepsRef.current;
+      if (currentSteps.length === 0) return;
+
+      const activeStep = currentSteps[0];
+      // Check if it is a text entry step (where shouldCompleteStepOnHighlightClick returns false)
+      if (!shouldCompleteStepOnHighlightClick(activeStep)) {
+        const targetText = activeStep.target_text?.trim();
+        const instruction = activeStep.instruction?.trim();
+
+        if (targetText && !completedTargetsRef.current.includes(targetText)) {
+          completedTargetsRef.current = [...completedTargetsRef.current, targetText];
+        }
+        if (instruction && !completedInstructionsRef.current.includes(instruction)) {
+          completedInstructionsRef.current = [...completedInstructionsRef.current, instruction];
+        }
+
+        void hideOverlay();
+        window.setTimeout(() => {
+          void executeTutor(query, getWorkflowContinuationReadback(workflowStartedWithReadbackRef.current), {
+            preserveStepsDuringRun: true,
+          });
+        }, 450);
+      }
+    });
+
+    return () => {
+      unlisten.then((dispose) => dispose());
+    };
+  }, [isRunning]);
+
+
 
   // Handle clicking outside settings dropdown and window focus change/blur
   useEffect(() => {
@@ -639,33 +788,38 @@ export function CommandBar() {
 
           {showStatus && (
             <div className="command-result-container">
-              <div className="command-summary-bubble">
-                <Sparkles size={14} className="summary-sparkle" />
-                <div className="command-summary-text-container">
-                  <span className="command-status">{status}</span>
-                  {steps.length > 0 && sarvamApiKey && (
-                    <button
-                      type="button"
-                      className={`command-speak-btn ${isSpeaking ? 'speaking' : ''}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        speakResponse();
-                      }}
-                      title={isSpeaking ? "Stop speaking" : "Speak response"}
-                    >
-                      <Volume2 size={16} />
-                    </button>
-                  )}
+              {showSummaryBubble && (
+                <div className="command-summary-bubble">
+                  <Sparkles size={14} className="summary-sparkle" />
+                  <div className="command-summary-text-container">
+                    <span className="command-status">{status}</span>
+                    {steps.length > 0 && sarvamApiKey && (
+                      <button
+                        type="button"
+                        className={`command-speak-btn ${isSpeaking ? 'speaking' : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          speakResponse();
+                        }}
+                        title={isSpeaking ? "Stop speaking" : "Speak response"}
+                      >
+                        <Volume2 size={16} />
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {steps.length > 0 && (
                 <div className="command-steps-panel">
                   <h3>Action Guide</h3>
                   <ul className="steps">
                     {steps.map((step, idx) => (
-                      <li key={step.step || idx}>
-                        <span>{step.step || (idx + 1)}</span>
+                      <li
+                        className={idx === steps.length - 1 ? 'guide-step-current' : 'guide-step-completed'}
+                        key={`${step.step || idx}-${step.instruction}-${step.target_text}`}
+                      >
+                        <span>{idx + 1}</span>
                         <div>
                           <p>{step.instruction}</p>
                         </div>

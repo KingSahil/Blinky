@@ -7,7 +7,7 @@ def attach_matches(steps: list[dict], ocr_items: list[dict]) -> list[dict]:
     for step in steps:
         target = str(step.get("target_text", "")).strip()
         instruction = str(step.get("instruction", "")).strip()
-        match = find_best_match(target, ocr_items, instruction) if (target or instruction) else None
+        match = find_best_match(target, ocr_items, instruction) if target else None
         matched_steps.append({**step, "match": match})
     return matched_steps
 
@@ -33,7 +33,13 @@ def find_best_match(target: str, ocr_items: list[dict], instruction: str = "") -
             if res:
                 return res
 
-    return _find_best_match_core(target, ocr_items, instruction)
+    best = None
+    for candidate in _target_candidates(target):
+        match = _find_best_match_core(candidate, ocr_items, instruction)
+        if match:
+            best = match
+            break
+    return best
 
 
 def _find_best_match_core(target: str, ocr_items: list[dict], instruction: str = "") -> dict | None:
@@ -44,6 +50,7 @@ def _find_best_match_core(target: str, ocr_items: list[dict], instruction: str =
     best_item = None
     best_score = 0.0
     instruction_lower = instruction.lower()
+    wants_text_input = _wants_text_input(instruction_lower)
 
     # Special titlebar close button high-priority matching fallback:
     if target_norm in {"close button", "close", "close window"}:
@@ -117,6 +124,8 @@ def _find_best_match_core(target: str, ocr_items: list[dict], instruction: str =
 
         confidence = float(item.get("confidence") or 0)
         source = str(item.get("source", "")).lower()
+        control_type = str(item.get("control_type", "")).lower()
+        automation_id = str(item.get("automation_id", "")).lower()
         
         # 1. OCR Source Bonus
         source_bonus = 0.02 if source == "ocr" else 0.0
@@ -130,6 +139,7 @@ def _find_best_match_core(target: str, ocr_items: list[dict], instruction: str =
         context_bonus = 0.0
         x = float(item.get("x") or 0)
         y = float(item.get("y") or 0)
+        is_input_control = _is_input_control(text_norm, control_type, automation_id)
         
         if "sidebar" in instruction_lower or "left" in instruction_lower:
             if x <= 120:  # sidebar region
@@ -143,11 +153,32 @@ def _find_best_match_core(target: str, ocr_items: list[dict], instruction: str =
         if "right" in instruction_lower:
             if x >= 500:  # right region
                 context_bonus += 0.10
+        if wants_text_input and is_input_control:
+            context_bonus += 0.18
 
         # 4. Blinky Source Penalty: de-prioritize Blinky's own UI elements
         source_penalty = -0.40 if source == "blinky" else 0.0
+        interactive_bonus = 0.0
+        wants_control = any(
+            hint in instruction_lower
+            for hint in {"icon", "button", "tab", "menu", "sidebar", "activity bar", "control"}
+        )
+        if wants_control and source == "uia" and control_type in {"button", "image", "tabitem", "menuitem"}:
+            interactive_bonus += 0.24
+        if wants_control and source == "ocr":
+            interactive_bonus -= 0.08
+        if ("sidebar" in instruction_lower or "activity bar" in instruction_lower or "left" in instruction_lower) and x <= 72:
+            interactive_bonus += 0.12
+        if wants_text_input:
+            if is_input_control:
+                interactive_bonus += 0.30
+            elif control_type in {"text", "image", "button", "tabitem", "menuitem"}:
+                interactive_bonus -= 0.18
 
-        weighted = score * 0.94 + confidence * 0.06 + source_bonus + size_bonus + context_bonus + source_penalty
+        # 5. Exact Match Bonus: give strong preference to exact case-insensitive matches
+        exact_match_bonus = 0.30 if text_norm == target_norm else 0.0
+
+        weighted = score * 0.94 + confidence * 0.06 + source_bonus + size_bonus + context_bonus + source_penalty + interactive_bonus + exact_match_bonus
         if weighted > best_score:
             best_score = weighted
             best_item = item
@@ -158,7 +189,54 @@ def _find_best_match_core(target: str, ocr_items: list[dict], instruction: str =
     return best_item
 
 
-
 def _normalize(value: str) -> str:
     return " ".join(value.lower().strip().split())
+
+
+def _wants_text_input(instruction_lower: str) -> bool:
+    return any(
+        hint in instruction_lower
+        for hint in {
+            "type",
+            "enter",
+            "search",
+            "filter",
+            "find",
+            "input",
+            "text field",
+            "search bar",
+            "marketplace search",
+        }
+    )
+
+
+def _is_input_control(text_norm: str, control_type: str, automation_id: str) -> bool:
+    if control_type in {"edit", "textbox", "combobox"}:
+        return True
+    searchable_text = f"{text_norm} {automation_id}"
+    return any(hint in searchable_text for hint in {"search", "filter", "find"})
+
+
+def _target_candidates(target: str) -> list[str]:
+    normalized = _normalize(target)
+    candidates = [normalized] if normalized else []
+    generic_ui_words = {
+        "icon",
+        "button",
+        "tab",
+        "menu",
+        "item",
+        "control",
+        "left",
+        "right",
+        "sidebar",
+        "side",
+        "bar",
+        "activity",
+        "panel",
+    }
+    stripped = " ".join(word for word in normalized.split() if word not in generic_ui_words)
+    if stripped and stripped not in candidates:
+        candidates.append(stripped)
+    return candidates
 

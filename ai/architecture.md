@@ -79,6 +79,7 @@ The sequence diagram below traces the end-to-end flow of a single tutor request,
                         ▼
   ┌──────────────────────────────────────────────────┐
   │ 2. Command Bar: Sends run_tutor IPC call         │
+  │    with optional workflow progress               │
   └──────────────────────────────────────────────────┘
                         │
                         ▼
@@ -88,61 +89,68 @@ The sequence diagram below traces the end-to-end flow of a single tutor request,
                         │
                         ▼
   ┌──────────────────────────────────────────────────┐
-  │ 4. Python Worker: Resolves target window PID     │
-  │    BEFORE OCR (locks target for full pipeline)   │
+  │ 4. Python Worker: Classifies chat vs screen task │
   └──────────────────────────────────────────────────┘
                         │
                         ▼
   ┌──────────────────────────────────────────────────┐
-  │ 5. Python Worker: Captures screen via dxcam      │
+  │ 5. Python Worker: For screen tasks, resolves     │
+  │    target window PID before OCR                  │
+  └──────────────────────────────────────────────────┘
+                        │
+                        ▼
+  ┌──────────────────────────────────────────────────┐
+  │ 6. Python Worker: Captures screen via dxcam      │
   │    Records physical screen resolution for UIA    │
   │    coordinate normalisation                      │
   └──────────────────────────────────────────────────┘
                         │
                         ▼
   ┌──────────────────────────────────────────────────┐
-  │ 6. Python Worker: Runs WinRT/EasyOCR (≈15 s)    │
+  │ 7. Python Worker: Runs WinRT/EasyOCR             │
   └──────────────────────────────────────────────────┘
                         │
                         ▼
   ┌──────────────────────────────────────────────────┐
-  │ 7. Python Worker: Re-resolves target window by   │
-  │    PID → fresh COM element → UIA tree scan       │
+  │ 8. Python Worker: Re-resolves target window by   │
+  │    PID -> fresh COM element -> UIA tree scan     │
   └──────────────────────────────────────────────────┘
                         │
                         ▼
   ┌──────────────────────────────────────────────────┐
-  │ 8. Python Worker: Scales UIA coords from screen  │
-  │    space → screenshot space, merges with OCR     │
+  │ 9. Python Worker: Scales UIA coords from screen  │
+  │    space -> screenshot space, merges with OCR    │
   └──────────────────────────────────────────────────┘
                         │
                         ▼
   ┌──────────────────────────────────────────────────┐
-  │ 9. Python Worker: Queries Ollama / Groq          │
+  │ 10. Python Worker: Queries Ollama / Groq         │
+  │     with visible UI and completed step context   │
   └──────────────────────────────────────────────────┘
                         │
                         ▼
   ┌──────────────────────────────────────────────────┐
-  │ 10. Python Worker: Fuzzy-matches returned targets │
+  │ 11. Python Worker: Fuzzy-matches returned targets│
   │     to text bounding coordinates                 │
   └──────────────────────────────────────────────────┘
                         │
                         ▼
   ┌──────────────────────────────────────────────────┐
-  │ 11. Tauri Host: Receives result & emits          │
+  │ 12. Tauri Host: Receives result & emits          │
   │     guidance payload overlay event               │
   └──────────────────────────────────────────────────┘
                         │
                         ▼
   ┌──────────────────────────────────────────────────┐
-  │ 12. Overlay: Scales bounds & renders ring        │
-  │     pulsers on screen targets (capped 50×50 px)  │
+  │ 13. Overlay: Scales bounds & renders only the    │
+  │     next matched Action Guide highlight          │
   └──────────────────────────────────────────────────┘
                         │
                         ▼
   ┌──────────────────────────────────────────────────┐
-  │ 13. Tauri Host: Mouse hook catches user          │
-  │     clicks & dismisses matched overlay           │
+  │ 14. Tauri Host: Mouse hook catches highlighted   │
+  │     clicks, records progress, and reruns only    │
+  │     when more guide steps remain                 │
   └──────────────────────────────────────────────────┘
 ```
 
@@ -159,11 +167,11 @@ The sequence diagram below traces the end-to-end flow of a single tutor request,
   * `/command` $\rightarrow$ `CommandBar.tsx` (command popup).
   * `/overlay` $\rightarrow$ `Overlay.tsx` (full-screen transparent highlight map).
   * `/` $\rightarrow$ `App.tsx` (tutor window container).
-* **Command Bar Controller (`CommandBar.tsx`)**: Manages textarea size dynamically via `ResizeObserver`, calls `resizeCommandWindow` Tauri command to prevent layout clipping, and drives the settings pane.
-* **Overlay Canvas (`Overlay.tsx`)**: Scales coordinates from screenshot space to overlay CSS pixels. Caps displayed highlight boxes to 50×50 px (centered on the element center) so oversized UIA bounding rects don't produce giant rectangles on screen.
+* **Command Bar Controller (`CommandBar.tsx`)**: Manages textarea size dynamically via `ResizeObserver`, calls `resizeCommandWindow` Tauri command to prevent layout clipping, and drives the settings pane. It also tracks workflow progress from highlighted clicks, keeps completed Action Guide history visible, treats text-entry/search highlight clicks as focus-only actions, appends one freshly-read current step at a time, hides task summaries while actionable steps remain, shows verified completion summaries, and speaks the current guide step only when the workflow started with voice readback.
+* **Overlay Canvas (`Overlay.tsx`)**: Scales coordinates from screenshot space to overlay CSS pixels. It renders only the filtered current Action Guide step, emits completed step metadata on highlighted clicks, and caps displayed highlight boxes so oversized UIA bounding rects do not produce giant rectangles on screen.
 
 ### 3.3 Python Engine (`python/`)
-* **`main.py`**: Orchestrates the full pipeline. Resolves the target window PID before OCR starts; passes the PID to UIA so a fresh COM element is always used (avoiding COM staleness). Normalises UIA coordinates from physical screen space to screenshot space before merging with OCR items.
+* **`main.py`**: Orchestrates the full pipeline. It first runs a text-only preflight classifier so casual chat does not capture the screen. For screen-bound tasks it resolves the target window PID before OCR starts, passes the PID to UIA so a fresh COM element is always used, normalises UIA coordinates from physical screen space to screenshot space before merging with OCR items, and passes completed workflow progress into the prompt.
 * **`capture/screen.py`**: Captures the primary display via `dxcam` (falling back to PIL `ImageGrab`). Records both the pre-scaling physical screen resolution (`screen_width`, `screen_height`) and the post-thumbnail screenshot dimensions (`width`, `height`). These are used downstream to compute the UIA→screenshot scale factors.
 * **`ocr/extract.py`**: OCR hub. Tries Windows WinRT OCR first (instant, lightweight C++ API), falling back to PyTorch-powered local `EasyOCR` if native WinRT bindings are missing.
 * **`utils/matching.py`**: Fuzzy matching utility. Scores targets using difflib string similarities alongside coordinate weight metrics.
@@ -179,9 +187,15 @@ The Tauri host communicates with the Python worker by piping a JSON payload into
 
 ```json
 {
-  "question": "How do I expand the frontend directory?"
+  "question": "How do I expand the frontend directory?",
+  "progress": {
+    "completed_targets": ["Explorer"],
+    "completed_instructions": ["Open the Explorer panel."]
+  }
 }
 ```
+
+`progress` is optional. The frontend supplies it only while continuing an Action Guide after a highlighted click.
 
 ### 4.2 Stdout JSON Result Schema
 The Python worker must output a single, valid JSON object to standard output on completion:
@@ -276,6 +290,28 @@ If an unhandled exception occurs inside the worker, it prints a standard error p
   ```
 * **Action**: Used by the overlay to verify if the user clicked on a highlight.
 
+#### `blinky://target-clicked`
+* **Source**: `/overlay` webview
+* **Destination**: `/command` webview
+* **Payload**:
+  ```json
+  {
+    "key": "1-Extensions-18-170",
+    "step": 1,
+    "target_text": "Extensions",
+    "instruction": "Open the Extensions panel."
+  }
+  ```
+* **Action**: Records completed workflow progress and hides the old overlay for click-only steps. For text-entry/search/input steps, the highlighted click only focuses the target and does not mark the step complete or rerun the model; the next step should appear only after a later fresh screen state proves the required typed/search action has happened. Click-only completions rerun `run_tutor` with the progress payload after a short UI-settle delay, then wait for the fresh screen read before displaying/highlighting the next step or showing a verified completion summary. The controller never treats the last clicked step in an old plan as proof that the workflow is complete.
+
+### 4.4 Chat, Guidance, and Voice Readback Contract
+
+* Casual chat requests use `build_preflight_prompt()` followed by `build_chat_prompt()` and return a direct summary with `steps: []`.
+* Screen-bound workflow requests use `build_prompt()` with visible OCR/UIA items and optional `progress`.
+* Actionable workflows keep completed guide rows visible, append one freshly-read current step, and suppress the summary bubble while actionable steps remain, so hidden summary text is not treated as the user-facing task instruction.
+* `target_text` must contain an exact visible control only when that control should be highlighted now. Later invisible steps can remain in the model payload with `target_text: ""`, but the overlay receives only the current pending step.
+* Voice readback for workflows speaks the current guide step only when the workflow began from voice input. Typed workflows remain silent during highlight-click continuations. Informational, casual, or verified completion answers speak the summary only when readback was requested.
+
 ---
 
 ## 5. Architectural Trade-offs & Calculations
@@ -316,13 +352,14 @@ $$x_{\text{screen}} = x_{\text{uia}} \times s_x \times \text{scale}_x = x_{\text
 On a standard display (window fills screen): $\text{window.innerWidth} = \text{screen\_width}$, so the element appears at its exact pixel position.
 
 #### Highlight Box Size Cap
-UIA bounding rects sometimes encompass the entire sidebar panel rather than just the icon. The Overlay caps the rendered box to **50×50 px** (centered on the element's center point) so oversized rects always produce an icon-sized indicator:
+UIA bounding rects sometimes encompass a whole row or panel rather than the visual control. The overlay uses dynamic caps so small icon targets stay icon-sized and wider row targets remain readable without covering the full panel:
 
 ```typescript
-const displayWidth  = Math.min(rawWidth,  50);
-const displayHeight = Math.min(rawHeight, 50);
-const displayLeft   = rawLeft + Math.round((rawWidth  - displayWidth)  / 2);
-const displayTop    = rawTop  + Math.round((rawHeight - displayHeight) / 2);
+const MAX_BOX_WIDTH = isIcon ? 100 : 140;
+const MAX_BOX_HEIGHT = isIcon ? 40 : 44;
+const MIN_BOX_SIZE = 36;
+const displayWidth = Math.min(Math.max(MIN_BOX_SIZE, rawWidth), MAX_BOX_WIDTH);
+const displayHeight = Math.min(Math.max(MIN_BOX_SIZE, rawHeight), MAX_BOX_HEIGHT);
 ```
 
 ### 5.2 Window Locking & COM Staleness

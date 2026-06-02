@@ -1,5 +1,6 @@
-import { listen } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { useEffect, useMemo, useState } from 'react';
+import { getHighlightSteps } from './lib/guidance';
 import type { TutorResult } from './lib/types';
 
 interface GlobalClick {
@@ -16,6 +17,9 @@ interface HighlightFrame {
   top: number;
   width: number;
   height: number;
+  step: number;
+  targetText: string;
+  instruction: string;
 }
 
 export function Overlay() {
@@ -39,7 +43,7 @@ export function Overlay() {
   const scaleY = window.innerHeight / screenshotHeight;
   const frames = useMemo<HighlightFrame[]>(() => {
     return (
-      result?.steps
+      getHighlightSteps(result?.steps || [])
         .map((step) => {
           const match = step.match;
           if (!match) return null;
@@ -74,10 +78,19 @@ export function Overlay() {
           const MIN_BOX_SIZE = 36;
           const displayHeight = Math.min(Math.max(MIN_BOX_SIZE, rawHeight), MAX_BOX_HEIGHT);
 
+          const isInput =
+            match.control_type === 'Edit' ||
+            match.control_type === 'TextBox' ||
+            match.control_type === 'ComboBox';
+
           let displayWidth = Math.min(Math.max(MIN_BOX_SIZE, rawWidth), MAX_BOX_WIDTH);
           let displayLeft = rawLeft;
 
-          if (!isIcon && rawWidth > 140) {
+          if (isInput) {
+            // Keep the exact input field width and bounds
+            displayWidth = rawWidth;
+            displayLeft = rawLeft;
+          } else if (!isIcon && rawWidth > 140) {
             // Wide elements (likely list/sidebar rows):
             // Fit the width comfortably by estimating character length
             const textLength = match.text ? String(match.text).length : 8;
@@ -99,6 +112,9 @@ export function Overlay() {
             top: displayTop,
             width: displayWidth,
             height: displayHeight,
+            step: step.step,
+            targetText: step.target_text,
+            instruction: step.instruction,
           };
         })
         .filter((frame): frame is HighlightFrame => Boolean(frame)) || []
@@ -114,6 +130,12 @@ export function Overlay() {
         const next = new Set(current);
         next.add(clickedFrame.key);
         return next;
+      });
+      void emit('blinky://target-clicked', {
+        key: clickedFrame.key,
+        step: clickedFrame.step,
+        target_text: clickedFrame.targetText,
+        instruction: clickedFrame.instruction,
       });
     });
 
