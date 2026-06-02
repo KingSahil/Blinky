@@ -88,6 +88,6 @@ if (isInput) {
 ---
 
 ## Related Guides & Files
-- [System Architecture](file:///c:/projects/Jarvis/ai/architecture.md)
+- [01 System Architecture](file:///c:/projects/Jarvis/ai/01_architecture.md)
 - [Overlay Frontend Component](file:///c:/projects/Jarvis/frontend/src/Overlay.tsx)
 - [Screen Capture Engine](file:///c:/projects/Jarvis/python/capture/screen.py)
