@@ -35,6 +35,12 @@ export interface TutorResult {
   elapsed_ms: number;
   provider?: string;
   warnings: string[];
+  is_continuation?: boolean;
+}
+
+export interface TutorProgress {
+  completed_targets: string[];
+  completed_instructions: string[];
 }
 
 export interface ChatMessage {

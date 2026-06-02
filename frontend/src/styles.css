@@ -686,6 +686,19 @@ h3 {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.steps li.guide-step-current {
+  animation: guideStepIn 0.34s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.steps li.guide-step-completed {
+  opacity: 0.72;
+}
+
+.steps li.guide-step-completed>span {
+  background: rgba(167, 255, 122, 0.08);
+  color: rgba(189, 255, 148, 0.72);
+}
+
 .steps li>span {
   width: 26px;
   height: 26px;
@@ -1470,4 +1483,18 @@ h3 {
 @keyframes speakWobble {
   from { transform: scale(1.0); }
   to { transform: scale(1.08); }
+}
+
+@keyframes guideStepIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+    filter: blur(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
 }

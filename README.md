@@ -171,6 +171,30 @@ Blinky will:
 
 # ✨ Features
 
+## 🌟 Recent Enhancements
+
+### 🛡️ Dynamic Capture Exclusion (Flicker-Free Mode)
+Blinky now uses the native Windows API (`SetWindowDisplayAffinity` / `WDA_EXCLUDEFROMCAPTURE`) to exclude its own command and overlay windows from screen captures programmatically. 
+- **The Blinky UI remains fully visible and active to you.**
+- **The screenshots captured for the AI model are completely clean**, hiding the Blinky UI from its own vision without needing to minimize or hide the app.
+- **Manual user screenshots (e.g., `Ctrl + Win + S` / `Win + Shift + S`) still capture Blinky correctly** because capture exclusion is dynamically restored immediately after the AI's screenshot is captured (under 100ms).
+
+### 🎯 Full-Width Search & Input Highlighting
+Highlight boxes for search bars and text inputs are no longer constrained or shrunk to specific OCR words. 
+- Blinky automatically detects when OCR text lies within a native text-input control (using UIA boundaries).
+- It scales and extends the highlight overlay to cover the **entire width of the input field**, providing a clean, clear visual guide.
+
+### 📋 Robust Action Guides & Fallbacks
+Action-oriented tasks (such as searching, downloading, or configuring settings) will **always generate a step-by-step Action Guide**, even when the target view, panel, or extension marketplace is currently closed.
+- Instead of defaulting to a plain text summary, Blinky guides you to open the appropriate panel or sidebar view first, followed by the search and interaction steps.
+- Non-visible targets are listed as text guidance with `target_text: ""` to keep guidance clear without drawing empty highlights.
+
+### ⚡ Local Inference Performance Optimizations
+Local Ollama (Gemma) execution speed has been optimized to **5-7 seconds** (down from 15+ seconds) through:
+- **Duplicate Capture Elimination:** Removed redundant screenshot and OCR execution loops in the Python worker.
+- **Prompt Compression:** Compressed OCR layout tokens by converting items to a compact coordinate string representation, reducing prompt tokens by ~1800.
+- **Timeout Tuning:** Extended connection timeouts to 120 seconds to prevent local model load-time failures.
+
 ## 🖥️ Real-Time Screen Capture
 Captures the active screen instantly when the user asks a question.
 

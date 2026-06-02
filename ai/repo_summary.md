@@ -44,16 +44,27 @@ Set up Blinky locally using the following commands:
 
 ```powershell
 # 1. Install standard dependencies
-npm install
+bun install
 
 # 2. Configure Python virtual environments and pull EasyOCR
-npm run setup:python
+bun run setup:python
 
 # 3. Pull default local AI models
 ollama pull gemma4:e4b
 
 # 4. Start the application in development mode
-npm run dev
+bun run dev
 ```
 
 *For details on configuring `.env` variables and custom shortcut hotkeys, please refer to the [System Architecture Guide](file:///c:/projects/Jarvis/ai/architecture.md#6-environment--settings-variables).*
+
+## Current AI Guidance Behavior
+
+Blinky now separates normal chat from screen guidance before it captures the screen:
+
+* Casual greetings, identity questions, and general questions use a text-only chat prompt and return `steps: []`.
+* Screen-bound tasks run OCR/UIA capture, ask the model for an Action Guide, and hide the summary bubble when actionable steps exist.
+* The Action Guide keeps completed step history visible and appends the next current step only after a fresh worker result. Completed or repeated steps are filtered out before overlay rendering.
+* Highlight clicks report completed click-only instructions and targets back into the next `run_tutor` request. Text-entry/search/input highlights are treated as focus actions only, so Blinky does not advance until the required typed/search result is visible in a fresh screen state.
+* Blinky never advances to the next displayed step from the old plan. After a highlighted click, it hides the overlay and waits for the fresh screen read before showing the next step or a completion confirmation. The final click is verified from the current visible UI instead of being assumed complete.
+* Voice readback speaks the current Action Guide step only for workflows that started from voice input. Typed workflows stay silent on highlight-click continuations.

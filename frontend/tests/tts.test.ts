@@ -63,4 +63,14 @@ describe('buildSpeechContent', () => {
       ),
     ).toBe('Open Extensions from the sidebar. Steps: Step 1. Click Extensions.');
   });
+
+  test('speaks action guide steps cleanly when summary is hidden', () => {
+    expect(
+      buildSpeechContent(
+        '',
+        [{ step: 3, instruction: 'Click the Install button for the extension.' }],
+        { includeSteps: true },
+      ),
+    ).toBe('Step 3. Click the Install button for the extension.');
+  });
 });

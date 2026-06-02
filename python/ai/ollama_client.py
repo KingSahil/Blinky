@@ -32,10 +32,10 @@ def ask_ollama(prompt: str) -> dict[str, Any]:
                     "format": "json",
                     "options": {
                         "temperature": 0.1,
-                        "num_predict": 700,
+                        "num_predict": 350,
                     },
                 },
-                timeout=35,
+                timeout=120,
             )
             response.raise_for_status()
             body = response.json()
@@ -48,6 +48,29 @@ def ask_ollama(prompt: str) -> dict[str, Any]:
     raise RuntimeError(
         f"Ollama did not return valid guidance. Is Ollama running with {model}? {last_error}"
     )
+
+
+def ask_ollama_text(prompt: str) -> dict[str, Any]:
+    ollama_url = os.getenv("BLINKY_OLLAMA_URL", DEFAULT_OLLAMA_URL).strip() or DEFAULT_OLLAMA_URL
+    model = os.getenv("BLINKY_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL).strip() or DEFAULT_OLLAMA_MODEL
+
+    response = requests.post(
+        ollama_url,
+        json={
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+            "options": {
+                "temperature": 0.1,
+                "num_predict": 300,
+            },
+        },
+        timeout=120,
+    )
+    response.raise_for_status()
+    body = response.json()
+    return _parse_json(body.get("response", ""))
 
 
 def _parse_json(text: str) -> dict[str, Any]:
@@ -80,14 +103,5 @@ def _validate_response(payload: dict[str, Any]) -> dict[str, Any]:
                     "target_text": target_text,
                 }
             )
-
-    if not normalized_steps:
-        normalized_steps.append(
-            {
-                "step": 1,
-                "instruction": "I cannot see the needed control yet. Open the relevant panel or menu and ask again.",
-                "target_text": "",
-            }
-        )
 
     return {"summary": summary, "steps": normalized_steps, "warnings": []}

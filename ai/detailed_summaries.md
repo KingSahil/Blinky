@@ -11,7 +11,7 @@ Orchestrates Tauri commands, system tray lifecycle, and schedules asynchronous s
 
 * **Commands Exposed to Frontend**:
   * `async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<Value, String>`
-    * *Inputs*: `TutorRequest { question: String }`
+    * *Inputs*: `TutorRequest { question: String, progress?: Value }`
     * *Outputs*: Resolves with the `TutorResult` JSON output from the Python worker.
     * *Side-effects*: Invokes `run_python_worker()`, emits `blinky://guidance` with result payload to `/overlay`, and shows the overlay window.
   * `fn show_overlay(app: AppHandle) -> Result<(), String>`
@@ -28,8 +28,8 @@ Orchestrates Tauri commands, system tray lifecycle, and schedules asynchronous s
     * Writes updated provider and shortcut entries back to `.env`.
 
 * **Internal Helpers**:
-  * `fn run_python_worker(app: &AppHandle, question: &str) -> Result<String, String>`
-    * Spawns `python.exe` targeting `python/main.py`. Pipes prompt input as JSON into standard input, reads standard output synchronously, and checks standard error.
+  * `fn run_python_worker(app: &AppHandle, question: &str, progress: Option<&Value>) -> Result<String, String>`
+    * Spawns `python.exe` targeting `python/main.py`. Pipes question and optional workflow progress as JSON into standard input, reads standard output synchronously, and checks standard error.
   * `fn start_global_click_listener(app: AppHandle)`
     * Spawns a background OS thread running a `loop` that uses the Windows `GetAsyncKeyState` API to capture mouse clicks. Emits `blinky://global-click` with cursor metrics.
 
@@ -68,13 +68,14 @@ A transparent, fullscreen React view that maps raw text coordinates onto the act
   ```
   By the time UIA coordinates reach the Overlay they have already been normalised to screenshot space in `main.py`. The scale factors bring them back to browser pixel space.
 
-* **Box Size Cap** — `MAX_BOX = 50` px:
-  UIA bounding rects for VS Code sidebar buttons are `63×64` px (correct icon area), but some elements report the entire panel. The cap ensures the highlight never exceeds 50×50 px and is centered on the element's geometric center:
+* **Highlight Selection and Click Progress**:
+  `Overlay.tsx` calls `getHighlightSteps()` so only the next matched Action Guide step receives a pulsing highlight. When the user clicks inside that frame, the overlay emits `blinky://target-clicked` with the generic step number, instruction, and target text. The command bar uses that payload as workflow progress for the next model call.
+
+* **Box Size Cap**:
+  UIA bounding rects for sidebar buttons can be wider than the visual icon. The overlay caps highlight dimensions and centers or left-aligns the rendered frame depending on whether the matched target looks like an icon or a row:
   ```typescript
-  const displayWidth  = Math.min(rawWidth,  MAX_BOX);
-  const displayHeight = Math.min(rawHeight, MAX_BOX);
-  const displayLeft   = rawLeft + Math.round((rawWidth  - displayWidth)  / 2);
-  const displayTop    = rawTop  + Math.round((rawHeight - displayHeight) / 2);
+  const displayWidth = Math.min(Math.max(MIN_BOX_SIZE, rawWidth), MAX_BOX_WIDTH);
+  const displayHeight = Math.min(Math.max(MIN_BOX_SIZE, rawHeight), MAX_BOX_HEIGHT);
   ```
 
 * **Interactive Target Dismissal (`containsClick`)**:
@@ -84,7 +85,7 @@ A transparent, fullscreen React view that maps raw text coordinates onto the act
     x >= frame.left - 10 && x <= frame.left + frame.width  + 10 &&
     y >= frame.top  - 10 && y <= frame.top  + frame.height + 10
     ```
-  * *Side-effects*: If matched, adds the highlight's key to the `dismissedKeys` state to hide the pulsing ring.
+  * *Side-effects*: If matched, adds the highlight's key to the `dismissedKeys` state and emits completed step metadata to the command bar.
 
 ### 2.2 `frontend/src/CommandBar.tsx` (Chat & Control UI)
 The user interface for prompt input, status displays, settings configuration, and window layouts.
@@ -93,6 +94,10 @@ The user interface for prompt input, status displays, settings configuration, an
   Spawns a `ResizeObserver` on mount that watches the main container's DOM height. When the input grows or settings open, it calls the `resizeCommandWindow` command to dynamically adjust Tauri's window height.
 * **Settings & Shortcut Synchronizer**:
   Uses React hooks to bind the `provider` state (Groq vs Ollama) and `shortcut` key (Enter vs Space). Saves these variables directly to `.env` using Tauri's backend file system bindings.
+* **Workflow Progress Controller**:
+  Stores the last query plus completed targets/instructions from highlighted clicks. A new typed or transcribed query resets progress and records whether automatic readback should continue. Highlight clicks complete click-only steps, but text-entry/search/input highlight clicks are treated as focus actions only; they do not mark the step complete or trigger a premature next step. Completed click steps hide the old overlay, schedule a short delayed rerun with progress, and wait for the fresh screen read before showing the next step or completion confirmation. The controller does not display the next step from stale data and does not assume the workflow is complete from the old plan.
+* **Task Display and TTS**:
+  Uses `getDisplaySteps()` to clean model output, `getCurrentGuideSteps()` to choose the one current pending step, `mergeGuideHistory()` to keep completed Action Guide rows visible while appending the next freshly-read step, `getHighlightSteps()` to highlight only the current matched target, `shouldCompleteStepOnHighlightClick()` to avoid completing typed/search steps on focus, `getWorkflowContinuationReadback()` to keep typed workflows silent, and `shouldShowSummaryBubble()` to hide task summaries unless a verified completion summary should be shown. Automatic voice readback speaks the current guide step for voice-started workflows and the summary for informational or completion replies.
 
 ---
 
@@ -108,35 +113,34 @@ The user interface for prompt input, status displays, settings configuration, an
            │  5. get_visible_ui_text(target_pid)            │
            │  6. Normalise UIA coords: screen→screenshot    │
            │  7. merge_visible_items(ocr, uia)              │
-           │  8. try_local_intent_match(question, items)    │
+           │  8. classify chat vs screen guidance           │
            │  9. ask_model(prompt, screenshot) (LLM)        │
-           │  10. attach_matches(steps, items)              │
+           │ 10. attach_matches(steps, items)               │
            └────────────────────────────────────────────────┘
 ```
 
 ### 3.1 `python/main.py` (Worker Orchestrator)
 The standard input/output interface for processing questions and screen coordinates.
 
-* **`run(question: str) -> dict`**:
+* **`run(question: str, progress: dict | None = None) -> dict`**:
   Executes the primary pipeline:
-  1. Calls `get_target_window_element()` and extracts its **PID** (`target_pid`) before any slow operations.
-  2. Grabs display frames via `capture_screen()` which returns a `Screenshot` with both post-thumbnail (`width`/`height`) and physical screen (`screen_width`/`screen_height`) dimensions.
-  3. Queries active window metadata using `get_active_window(target_pid=target_pid)`.
-  4. Extracts OCR text elements using WinRT/EasyOCR (`extract_visible_text()`).
-  5. Calls `get_visible_ui_text(target_pid=target_pid)` — UIA re-resolves a **fresh COM element** by PID, avoiding the 15-second staleness window.
-  6. **Normalises UIA coordinates** from physical screen space to screenshot space: `x *= screenshot.width / screenshot.screen_width`.
-  7. Dedupes overlapping items and calibrates wide UIA coordinates with precise OCR coordinates using `merge_visible_items()`.
-  8. Runs the high-speed **`try_local_intent_match()`** check first. If matching, bypasses the LLM entirely (resolves in <1ms with 100% accuracy!).
-  9. If local match fails, compiles the prompt and routes to the LLM model via `ask_model()`.
+  1. Runs a text-only preflight classifier. If `needs_screen=false`, calls `answer_without_screen()` and returns a normal chat summary with no capture.
+  2. Calls `get_target_window_element()` and extracts its **PID** (`target_pid`) before any slow screen operations.
+  3. Grabs display frames via `capture_screen()` which returns a `Screenshot` with both post-thumbnail (`width`/`height`) and physical screen (`screen_width`/`screen_height`) dimensions.
+  4. Queries active window metadata using `get_active_window(target_pid=target_pid)`.
+  5. Extracts OCR text elements using WinRT/EasyOCR (`extract_visible_text()`).
+  6. Calls `get_visible_ui_text(target_pid=target_pid)` — UIA re-resolves a **fresh COM element** by PID, avoiding the staleness window.
+  7. **Normalises UIA coordinates** from physical screen space to screenshot space: `x *= screenshot.width / screenshot.screen_width`.
+  8. Dedupes overlapping items and calibrates wide UIA coordinates with precise OCR coordinates using `merge_visible_items()`.
+  9. Compiles the screen prompt with active app, visible items, and optional completed workflow progress, then routes to `ask_model()`.
   10. Fuzzy matches returned steps back to screen rectangles via `attach_matches()`.
   11. Returns the final data payload.
 
-* **`try_local_intent_match(question: str, visible_items: list[dict]) -> dict | None`**:
-  A high-speed local intent classifier that intercepts simple file, folder, and sidebar navigation questions:
-  * Looks up visible items matching words/phrases inside the query.
-  * Ignores generic system/menu terms (like "file", "edit") unless explicitly targeted.
-  * Sorts matches by text length descending to always prioritize the longest, most specific matching string (e.g. choosing `"App.tsx"` over `"file"`).
-  * If a match is found, bypasses the LLM and instantly returns the precise coordinates!
+* **`classify_request(question: str, warnings: list[str]) -> dict | None`**:
+  Calls the text-only model with `build_preflight_prompt()` to decide whether the request needs screen capture. If the classifier fails, Blinky falls back to screen mode and records a warning.
+
+* **`answer_without_screen(question: str) -> dict`**:
+  Calls the text-only model with `build_chat_prompt()` for greetings, identity questions, general conversation, and non-screen informational requests. This path must not capture the screen.
 
 * **`merge_visible_items(ocr_items: list, uia_items: list) -> list`**:
   Combines OCR text blocks and UI Automation tree items with pixel-perfect calibration:
@@ -197,7 +201,7 @@ Extracts visible text and coordinates from captured screenshot images.
 ### 3.6 `python/utils/matching.py` (Fuzzy Matcher)
 Maps LLM target text recommendations back to concrete physical text boxes on screen.
 
-* **`find_best_match(target: str, ocr_items: list[dict]) -> dict | None`**:
+* **`find_best_match(target: str, ocr_items: list[dict], instruction: str = "") -> dict | None`**:
   Normalizes search strings and scores elements using fuzzy string ratios:
   * Exact matches get `1.0`.
   * Substring overlaps get `0.86`.
@@ -206,11 +210,21 @@ Maps LLM target text recommendations back to concrete physical text boxes on scr
     $$\text{Score} = (\text{Fuzzy Ratio} \times 0.94) + (\text{OCR Confidence} \times 0.06) + \text{Bonus}$$
     Where $\text{Bonus} = 0.02$ if the element was parsed via OCR.
   * *Threshold*: If the best score is $< 0.52$, it returns `None`.
+  * *Control preference*: When the instruction asks for an icon, sidebar item, tab, menu, or button, UIA controls receive a bonus and incidental OCR text receives a penalty. Generic words such as "icon" or "button" are stripped from target candidates so `"Extensions icon"` can match a visible `"Extensions"` control.
 
 ### 3.7 `python/ai/prompt.py` (Prompt Builder)
 Formats screen context into a compact markdown instruction set for the model.
+
+* **Preflight and Chat Prompts**:
+  `build_preflight_prompt()` classifies whether a request needs screen capture. `build_chat_prompt()` produces direct casual/informational replies and explicitly prevents classifier reasoning such as "the student is..." from leaking into the UI.
 
 * **Blinky UI Filtering Heuristics**:
   To prevent the AI model from instructing users to click inside the Blinky app itself, `build_prompt()` filters out any OCR coordinates containing words from the `blinky_ignored_terms` set (e.g. "Blinky app", "groq", "ollama", "ask anything"). It also filters out OCR elements that match the user's input question.
 * **Text Length Optimization**:
   To avoid exceeding LLM context limits, the prompt builder limits the OCR elements list to the first $180$ elements.
+* **Workflow Progress Context**:
+  `build_prompt(question, active_app, ocr_items, progress=None)` includes `completed_targets` and `completed_instructions`. The model is told not to repeat or highlight completed targets, to start at the next not-yet-completed step based on the current visible UI, and to confirm completion from the current visible UI before ending a workflow.
+* **Search Before Unrelated Actions**:
+  If the requested item is not visible but a relevant search/filter/find/marketplace input is visible, the prompt tells the model to target that input next. It must not choose an unrelated visible action button for a different item.
+* **Action Guide Contract**:
+  Workflow model payloads may include multiple steps, including future plain instructions with `target_text: ""`, but only currently visible controls that should be highlighted now should use exact `target_text`. The frontend filters completed steps for the overlay, retains completed guide history in the command bar, and appends one current pending step at a time only after a fresh worker result. Informational requests and verified completion replies should return a detailed summary and `steps: []`.

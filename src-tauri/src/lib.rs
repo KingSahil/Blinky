@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -14,6 +14,8 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[derive(Debug, Deserialize)]
 struct TutorRequest {
     question: String,
+    previous_question: Option<String>,
+    progress: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Serialize)]
@@ -27,15 +29,52 @@ struct GlobalClick {
 
 #[tauri::command]
 async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::Value, String> {
-    let output = run_python_worker(&app, &request.question).map_err(|error| error)?;
+    let overlay = app.get_webview_window("overlay");
+    let command = app.get_webview_window("command");
+
+    let overlay_was_visible = overlay.as_ref().map(|w| w.is_visible().unwrap_or(false)).unwrap_or(false);
+
+    // Exclude windows from captures programmatically so they are not captured by the system,
+    // while remaining fully visible and active for the user.
+    if let Some(ref w) = overlay {
+        set_window_capture_exclusion(w, true);
+    }
+    if let Some(ref w) = command {
+        set_window_capture_exclusion(w, true);
+    }
+
+    // Give DWM a tiny moment to apply display affinity before screenshot
+    thread::sleep(Duration::from_millis(40));
+
+    let output_res = run_python_worker(
+        &app,
+        &request.question,
+        request.previous_question.as_deref(),
+        request.progress.as_ref(),
+        command.clone(),
+        overlay.clone(),
+    );
+
+    // Fallback: restore capture visibility in case of errors or if not restored by worker
+    if let Some(ref w) = command {
+        set_window_capture_exclusion(w, false);
+    }
+    if let Some(ref w) = overlay {
+        set_window_capture_exclusion(w, false);
+    }
+
+    let output = output_res.map_err(|error| error)?;
 
     let parsed: serde_json::Value = serde_json::from_str(&output)
         .map_err(|err| format!("Python worker returned invalid JSON: {err}. Raw: {output}"))?;
 
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        configure_overlay_passthrough(&overlay);
-        let _ = overlay.emit("blinky://guidance", parsed.clone());
-        let _ = overlay.show();
+    // Now restore/show overlay with highlights if applicable
+    if let Some(ref w) = overlay {
+        if overlay_was_visible || parsed.get("steps").and_then(|s| s.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
+            configure_overlay_passthrough(w);
+            let _ = w.emit("blinky://guidance", parsed.clone());
+            let _ = w.show();
+        }
     }
 
     Ok(parsed)
@@ -185,7 +224,14 @@ fn get_active_shortcut_from_env(app: &AppHandle) -> String {
     "Enter".to_string()
 }
 
-fn run_python_worker(app: &AppHandle, question: &str) -> Result<String, String> {
+fn run_python_worker(
+    app: &AppHandle,
+    question: &str,
+    previous_question: Option<&str>,
+    progress: Option<&serde_json::Value>,
+    command_window: Option<WebviewWindow>,
+    overlay_window: Option<WebviewWindow>,
+) -> Result<String, String> {
     let root = project_root(app)?;
     let script = root.join("python").join("main.py");
     let python = python_executable(&root);
@@ -202,28 +248,58 @@ fn run_python_worker(app: &AppHandle, question: &str) -> Result<String, String> 
         .spawn()
         .map_err(|err| format!("Failed to start Python worker: {err}"))?;
 
-    let payload = serde_json::json!({ "question": question });
-    if let Some(stdin) = child.stdin.as_mut() {
+    let payload = serde_json::json!({
+        "question": question,
+        "previous_question": previous_question,
+        "progress": progress.unwrap_or(&serde_json::Value::Null),
+    });
+
+    if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(payload.to_string().as_bytes())
             .map_err(|err| format!("Failed to write to Python worker: {err}"))?;
     }
 
-    let output = child
-        .wait_with_output()
-        .map_err(|err| format!("Python worker failed: {err}"))?;
+    let child_stdout = child.stdout.take().ok_or("Failed to open Python worker stdout")?;
+    let mut reader = BufReader::new(child_stdout);
+    let mut stdout_accumulated = String::new();
+    let mut line = String::new();
+    let mut restored = false;
 
-    if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        if let Some(error) = parse_worker_error(&stdout) {
-            return Err(error);
+    while reader.read_line(&mut line).unwrap_or(0) > 0 {
+        let trimmed = line.trim();
+        if trimmed == "__BLINKY_CAPTURED__" {
+            if !restored {
+                // Restore capture visibility immediately after screenshot is captured
+                if let Some(ref w) = command_window {
+                    set_window_capture_exclusion(w, false);
+                }
+                if let Some(ref w) = overlay_window {
+                    set_window_capture_exclusion(w, false);
+                }
+                restored = true;
+            }
+        } else {
+            stdout_accumulated.push_str(&line);
         }
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Python worker exited with {}: {stderr}", output.status));
+        line.clear();
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let stderr_reader = child.stderr.take().map(BufReader::new);
+    let status = child.wait().map_err(|err| format!("Failed to wait for python worker: {err}"))?;
+
+    if !status.success() {
+        let mut stderr_str = String::new();
+        if let Some(mut r) = stderr_reader {
+            let _ = std::io::Read::read_to_string(&mut r, &mut stderr_str);
+        }
+        if let Some(error) = parse_worker_error(&stdout_accumulated) {
+            return Err(error);
+        }
+        return Err(format!("Python worker exited with {status}: {stderr_str}"));
+    }
+
+    Ok(stdout_accumulated)
 }
 
 fn ensure_env_file(root: &PathBuf) {
@@ -303,6 +379,7 @@ fn project_root(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|err| format!("Cannot locate app resource directory: {err}"))
 }
 
+
 fn python_executable(root: &PathBuf) -> PathBuf {
     let venv_python = root.join(".venv").join("Scripts").join("python.exe");
     if venv_python.exists() {
@@ -332,6 +409,22 @@ fn configure_overlay_passthrough(window: &WebviewWindow) {
                     GWL_EXSTYLE,
                     style | WS_EX_TRANSPARENT as i32 | WS_EX_LAYERED as i32 | WS_EX_TOOLWINDOW as i32,
                 );
+            }
+        }
+    }
+}
+
+fn set_window_capture_exclusion(window: &WebviewWindow, exclude: bool) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity;
+
+        if let Ok(hwnd) = window.hwnd() {
+            unsafe {
+                let hwnd = hwnd.0 as HWND;
+                let affinity = if exclude { 0x00000011 } else { 0x00000000 };
+                let _ = SetWindowDisplayAffinity(hwnd, affinity);
             }
         }
     }
@@ -445,6 +538,7 @@ fn start_global_click_listener(app: AppHandle) {
     thread::spawn(move || {
         let mut was_left_down = false;
         let mut was_right_down = false;
+        let mut was_enter_down = false;
 
         loop {
             if let Some(click) = read_mouse_click(&mut was_left_down, &mut was_right_down) {
@@ -454,6 +548,10 @@ fn start_global_click_listener(app: AppHandle) {
                         let _ = overlay.emit("blinky://global-click", click);
                     }
                 }
+            }
+
+            if let Some(()) = read_enter_key(&mut was_enter_down) {
+                let _ = app.emit("blinky://global-enter", ());
             }
 
             thread::sleep(Duration::from_millis(16));
@@ -505,6 +603,26 @@ fn read_mouse_click(was_left_down: &mut bool, was_right_down: &mut bool) -> Opti
 
 #[cfg(not(target_os = "windows"))]
 fn read_mouse_click(_was_left_down: &mut bool, _was_right_down: &mut bool) -> Option<GlobalClick> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn read_enter_key(was_enter_down: &mut bool) -> Option<()> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_RETURN};
+
+    let is_enter_down = unsafe { (GetAsyncKeyState(VK_RETURN as i32) & 0x8000u16 as i16) != 0 };
+    let pressed = is_enter_down && !*was_enter_down;
+    *was_enter_down = is_enter_down;
+
+    if pressed {
+        Some(())
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_enter_key(_was_enter_down: &mut bool) -> Option<()> {
     None
 }
 
