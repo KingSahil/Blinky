@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -150,6 +151,12 @@ def run(question: str, previous_question: str | None = None, progress: dict | No
     active_app = get_active_window(target_pid=target_pid)
     ocr_items = extract_visible_text(screenshot.path)
     uia_items = get_visible_ui_text(target_pid=target_pid)
+
+    if os.name != "nt":
+        # On Linux (GNOME/Wayland), the system status bar is at the very top (y < 35 in optimized screenshot pixels).
+        # We filter out these elements to prevent accidental matching of system tray clocks, status indicators, or active app labels.
+        ocr_items = [item for item in ocr_items if item.get("y", 0) >= 35]
+        uia_items = [item for item in uia_items if item.get("y", 0) >= 35]
 
     # UIA returns coordinates in screen-absolute space (physical pixel dimensions).
     # The screenshot is scaled down to fit within 1920×1080 (thumbnail).

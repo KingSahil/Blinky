@@ -18,6 +18,7 @@ struct TutorRequest {
     progress: Option<serde_json::Value>,
 }
 
+#[cfg(target_os = "windows")]
 #[derive(Clone, Serialize)]
 struct GlobalClick {
     x: i32,
@@ -71,9 +72,9 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
     // Now restore/show overlay with highlights if applicable
     if let Some(ref w) = overlay {
         if overlay_was_visible || parsed.get("steps").and_then(|s| s.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
-            configure_overlay_passthrough(w);
             let _ = w.emit("blinky://guidance", parsed.clone());
             let _ = w.show();
+            configure_overlay_passthrough(w);
         }
     }
 
@@ -83,8 +84,8 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
 #[tauri::command]
 fn show_overlay(app: AppHandle) -> Result<(), String> {
     if let Some(overlay) = app.get_webview_window("overlay") {
-        configure_overlay_passthrough(&overlay);
         overlay.show().map_err(|err| err.to_string())?;
+        configure_overlay_passthrough(&overlay);
     }
     Ok(())
 }
@@ -244,7 +245,7 @@ fn run_python_worker(
         .envs(env_file_vars)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::inherit())
         .spawn()
         .map_err(|err| format!("Failed to start Python worker: {err}"))?;
 
@@ -381,16 +382,54 @@ fn project_root(app: &AppHandle) -> Result<PathBuf, String> {
 
 
 fn python_executable(root: &PathBuf) -> PathBuf {
-    let venv_python = root.join(".venv").join("Scripts").join("python.exe");
-    if venv_python.exists() {
-        venv_python
+    let bin_path = root.join(".venv").join("bin").join("python");
+    let scripts_path = root.join(".venv").join("Scripts").join("python.exe");
+    if bin_path.exists() {
+        bin_path
+    } else if scripts_path.exists() {
+        scripts_path
     } else {
-        PathBuf::from("python")
+        #[cfg(target_os = "windows")]
+        {
+            PathBuf::from("python")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PathBuf::from("python3")
+        }
     }
 }
 
 fn configure_overlay_passthrough(window: &WebviewWindow) {
     let _ = window.set_ignore_cursor_events(true);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(Some(monitor)) = window.current_monitor() {
+            let scale_factor = monitor.scale_factor();
+            
+            // Query the desktop environment to only apply panel offsets on GNOME
+            let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
+                .map(|val| val.to_uppercase().contains("GNOME"))
+                .unwrap_or(false);
+                
+            let bar_height = if is_gnome {
+                (32.0 * scale_factor) as i32
+            } else {
+                0
+            };
+            
+            let size = monitor.size();
+            let physical_width = size.width;
+            let physical_height = size.height.saturating_sub(bar_height as u32);
+
+            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                width: physical_width,
+                height: physical_height,
+            }));
+            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: 0, y: bar_height }));
+        }
+    }
 
     #[cfg(target_os = "windows")]
     {
@@ -414,7 +453,7 @@ fn configure_overlay_passthrough(window: &WebviewWindow) {
     }
 }
 
-fn set_window_capture_exclusion(window: &WebviewWindow, exclude: bool) {
+fn set_window_capture_exclusion(_window: &WebviewWindow, _exclude: bool) {
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::Foundation::HWND;
@@ -458,6 +497,7 @@ pub fn run() {
         .setup(|app| {
             setup_tray(app)?;
 
+            #[cfg(target_os = "windows")]
             if let Some(overlay) = app.get_webview_window("overlay") {
                 configure_overlay_passthrough(&overlay);
             }
@@ -521,7 +561,12 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         tray = tray.icon(icon);
     }
 
-    tray.build(app)?;
+    match tray.build(app) {
+        Ok(_) => {}
+        Err(err) => {
+            eprintln!("Warning: Failed to setup system tray (might be unsupported/restricted in this DE): {err}");
+        }
+    }
     Ok(())
 }
 
@@ -534,6 +579,7 @@ fn show_command_window(app: &AppHandle) {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn start_global_click_listener(app: AppHandle) {
     thread::spawn(move || {
         let mut was_left_down = false;
@@ -559,6 +605,12 @@ fn start_global_click_listener(app: AppHandle) {
     });
 }
 
+#[cfg(not(target_os = "windows"))]
+fn start_global_click_listener(_app: AppHandle) {
+    // No-op on Linux/macOS to avoid CPU spinning or panic
+}
+
+#[cfg(target_os = "windows")]
 impl GlobalClick {
     fn with_overlay_metrics(mut self, overlay: &WebviewWindow) -> Self {
         if let Ok(position) = overlay.outer_position() {
@@ -601,11 +653,6 @@ fn read_mouse_click(was_left_down: &mut bool, was_right_down: &mut bool) -> Opti
     })
 }
 
-#[cfg(not(target_os = "windows"))]
-fn read_mouse_click(_was_left_down: &mut bool, _was_right_down: &mut bool) -> Option<GlobalClick> {
-    None
-}
-
 #[cfg(target_os = "windows")]
 fn read_enter_key(was_enter_down: &mut bool) -> Option<()> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_RETURN};
@@ -619,11 +666,6 @@ fn read_enter_key(was_enter_down: &mut bool) -> Option<()> {
     } else {
         None
     }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn read_enter_key(_was_enter_down: &mut bool) -> Option<()> {
-    None
 }
 
 #[cfg(test)]

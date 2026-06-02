@@ -1,9 +1,10 @@
-dxcam==0.3.0
+dxcam==0.3.0; sys_platform == 'win32'
 # easyocr==1.7.2 (commented out to avoid downloading 1GB PyTorch dependencies on Python 3.13)
 numpy>=1.26.0
 pillow>=12.2.0
 psutil>=7.2.2
-pywin32>=311
-pywinauto==0.6.9
+pywin32>=311; sys_platform == 'win32'
+pywinauto==0.6.9; sys_platform == 'win32'
 requests>=2.34.2
 typing-extensions>=4.15.0
+pytesseract>=0.3.10; sys_platform != 'win32'

@@ -32,7 +32,7 @@
         "label": "overlay",
         "title": "Blinky Overlay",
         "url": "/overlay",
-        "fullscreen": true,
+        "fullscreen": false,
         "alwaysOnTop": true,
         "decorations": false,
         "transparent": true,

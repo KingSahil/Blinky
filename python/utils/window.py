@@ -1,32 +1,50 @@
 from __future__ import annotations
 
+import os
 import psutil
-
+import subprocess
 from utils.logging import get_logger
 
 LOGGER = get_logger("blinky.window")
 
 SUPPORTED_PROCESSES = {
     "code.exe",
+    "code",
     "chrome.exe",
+    "chrome",
+    "google-chrome",
+    "google-chrome.exe",
     "mspaint.exe",
+    "mspaint",
     "explorer.exe",
+    "explorer",
     "antigravity ide.exe",
     "antigravity-ide.exe",
+    "antigravity ide",
+    "antigravity-ide",
 }
 
+
+def is_process_supported(process_name: str) -> bool:
+    name_lower = process_name.lower()
+    if name_lower in SUPPORTED_PROCESSES:
+        return True
+    # check extensionless name
+    base_name = name_lower.rsplit('.', 1)[0]
+    if base_name in SUPPORTED_PROCESSES:
+        return True
+    return False
 
 
 def get_target_window_element(window=None, target_pid: int | None = None):
     """Retrieve the first visible top-level window in Z-order that is NOT Blinky itself
     or a Windows system shell.
 
-    *window* — pass a pre-resolved pywinauto element to skip Z-order scanning entirely.
-    *target_pid* — pass a process ID to restrict the Z-order scan to that process.
-               This is preferred over *window* for long-lived calls because a
-               pywinauto COM element can go stale after ~15 s while the PID stays
-               valid as long as the process is alive.
+    On non-Windows platforms, this returns None since UI Automation is Windows-only.
     """
+    if os.name != "nt":
+        return None
+
     if window is not None:
         return window
 
@@ -87,22 +105,63 @@ def get_target_window_element(window=None, target_pid: int | None = None):
         return None
 
 
-
 def get_active_window(window=None, target_pid: int | None = None) -> dict:
-    try:
-        w = get_target_window_element(window=window, target_pid=target_pid)
-        if not w:
-            raise RuntimeError("No active target window resolved.")
+    if os.name == "nt":
+        try:
+            w = get_target_window_element(window=window, target_pid=target_pid)
+            if not w:
+                raise RuntimeError("No active target window resolved.")
 
-        process_id = w.process_id()
-        process_name = psutil.Process(process_id).name()
-        title = w.window_text()
+            process_id = w.process_id()
+            process_name = psutil.Process(process_id).name()
+            title = w.window_text()
+            return {
+                "title": title,
+                "process": process_name,
+                "supported": is_process_supported(process_name),
+            }
+        except Exception as exc:
+            LOGGER.warning("Could not inspect active window on Windows: %s", exc)
+            return {"title": "Unknown window", "process": "unknown", "supported": False}
+    else:
+        # Linux Active Window resolution
+        # 1. Try xdotool
+        try:
+            active_window_id = subprocess.check_output(["xdotool", "getactivewindow"]).decode().strip()
+            pid = subprocess.check_output(["xdotool", "getwindowpid", active_window_id]).decode().strip()
+            pid_num = int(pid)
+            title = subprocess.check_output(["xdotool", "getwindowname", active_window_id]).decode("utf-8", errors="ignore").strip()
+            process_name = psutil.Process(pid_num).name()
+            return {
+                "title": title,
+                "process": process_name,
+                "supported": is_process_supported(process_name),
+            }
+        except Exception:
+            pass
+
+        # 2. Try xprop
+        try:
+            active_win_out = subprocess.check_output(["xprop", "-root", "_NET_ACTIVE_WINDOW"]).decode().strip()
+            win_id = active_win_out.split()[-1]
+            if win_id.startswith("0x"):
+                pid_out = subprocess.check_output(["xprop", "-id", win_id, "_NET_WM_PID", "_NET_WM_PID"]).decode().strip()
+                pid_num = int(pid_out.split("=")[-1].strip())
+                name_out = subprocess.check_output(["xprop", "-id", win_id, "WM_NAME"]).decode("utf-8", errors="ignore").strip()
+                title = name_out.split("=")[-1].strip().strip('"')
+                process_name = psutil.Process(pid_num).name()
+                return {
+                    "title": title,
+                    "process": process_name,
+                    "supported": is_process_supported(process_name),
+                }
+        except Exception:
+            pass
+
+        # Wayland / Unsupported desktop environment fallback
+        session = os.environ.get("XDG_SESSION_TYPE", "wayland").lower()
         return {
-            "title": title,
-            "process": process_name,
-            "supported": process_name.lower() in SUPPORTED_PROCESSES,
+            "title": "Linux Desktop",
+            "process": session,
+            "supported": False,
         }
-    except Exception as exc:
-        LOGGER.warning("Could not inspect active window: %s", exc)
-        return {"title": "Unknown window", "process": "unknown", "supported": False}
-

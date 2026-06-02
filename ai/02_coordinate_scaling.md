@@ -60,6 +60,32 @@ $$\text{frame.height} = \text{round}(\text{height}_{\text{ss}} \times \text{scal
 
 ---
 
+## 3.5 Linux Viewport Coordinate Shifting (GNOME Shell vs KDE/Plasma)
+
+Under Linux (GNOME/Wayland), standard frameless full-screen windows hide the system top panel. To prevent this, **Blinky dynamically detects the desktop environment at runtime**:
+* **GNOME**: Spawns the native overlay window exactly below the GNOME status bar (physically positioned at $y = 32 \times \text{scale\_factor}$).
+* **KDE / Plasma / Others**: Spawns the overlay window at $y = 0$ with full screen dimensions (as system panels are usually placed at the bottom or sides and do not trigger full-screen hiding).
+
+To maintain absolute coordinate precision across all platforms, resolutions, and desktop setups, **the vertical offset is resolved dynamically at runtime** inside `Overlay.tsx`.
+
+### Dynamic Offset Calculation
+The frontend queries the Tauri window shell's native screen coordinates:
+
+$$\text{y\_offset} = \frac{\text{appWindow.outerPosition().y}}{\text{appWindow.scaleFactor()}}$$
+
+Consequently, the OCR vertical coordinates are shifted relative to the overlay's dynamic window position before scaling and rendering:
+
+$$y_{\text{shifted}} = y_{\text{ss}} - \text{y\_offset}$$
+
+$$\text{frame.top} = \text{round}(y_{\text{shifted}} \times \text{scale}_y)$$
+
+* **On GNOME**: `y_offset` dynamically evaluates to `32` (or the corresponding scaled panel height), aligning overlay frames perfectly with underlying elements.
+* **On KDE / Plasma / Windows**: The window is positioned at `y: 0`, so `y_offset` evaluates to `0`, resulting in a zero-offset rendering.
+
+This dynamic shift guarantees that graphical highlights overlay target items with pixel-perfect accuracy on all display types (1080p, 2K, 4K) and all desktop environments.
+
+---
+
 ## 4. Highlight Box Sizing & Capping
 
 To prevent large highlight boxes from cluttering the screen or looking unpolished, [Overlay.tsx](file:///c:/projects/Jarvis/frontend/src/Overlay.tsx) applies custom sizing restrictions based on the control type:

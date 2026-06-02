@@ -1,6 +1,6 @@
 # Blinky — System Architecture & Technical Specifications
 
-Blinky is a local, privacy-first AI-powered desktop tutor for Windows. It captures the screen, extracts text through OCR and Windows UI Automation, resolves guidance via LLMs (Ollama / Groq), and projects a visual click overlay directly on the user's screen — **one step at a time**.
+Blinky is a local, privacy-first AI-powered desktop tutor for Windows and Linux (Wayland/GNOME). It captures the screen, extracts text through OCR and UI element querying, resolves guidance via LLMs (Ollama / Groq), and projects a visual click overlay directly on the user's screen — **one step at a time**.
 
 This specification serves as the primary system-design reference for both human engineers and AI coding agents.
 
@@ -169,36 +169,41 @@ The sequence diagram below traces the end-to-end flow of a single tutor request,
 ## 3. Core Component Reference
 
 ### 3.1 Native Host Shell (`src-tauri/`)
-* **[lib.rs](file:///c:/projects/Jarvis/src-tauri/src/lib.rs)**: Main entryway. Registers Tauri commands, builds system tray context, and sets up window controls. It registers global shortcut hooks (`Ctrl + Shift + Enter` or `Ctrl + Shift + Space`) and spawns a background OS thread for mouse click monitoring.
-* **Flicker-Free Capture Exclusion**: Before spawning the Python worker, Rust sets `WDA_EXCLUDEFROMCAPTURE` (display affinity `0x00000011`) on both the command bar and overlay windows. This hides them from DXGI/DWM captures while keeping them fully visible and interactive. When the Python worker prints `__BLINKY_CAPTURED__`, Rust immediately restores `WDA_NONE` (`0x00000000`).
-* **[tauri.conf.json](file:///c:/projects/Jarvis/src-tauri/tauri.conf.json)**: Window configuration. Configures the frameless command bar, transparency keys, and sets the overlay window to native full-screen.
+* **[lib.rs](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/src-tauri/src/lib.rs)**: Main entryway. Registers Tauri commands, builds system tray context, and sets up window controls. It registers global shortcut hooks (`Ctrl + Shift + Enter` or `Ctrl + Shift + Space`) and spawns a background OS thread for mouse click monitoring.
+* **Flicker-Free Capture Exclusion (Windows)**: Before spawning the Python worker on Windows, Rust sets `WDA_EXCLUDEFROMCAPTURE` (display affinity `0x00000011`) on both the command bar and overlay windows. This hides them from DXGI/DWM captures while keeping them fully visible and interactive. When the Python worker prints `__BLINKY_CAPTURED__`, Rust immediately restores `WDA_NONE` (`0x00000000`).
+* **Clearance of GNOME Top Panel (Linux)**: Under Linux (GNOME/Wayland), covering the coordinate range `y < 32px` automatically forces GNOME to hide the top panel system tray. To prevent this, Rust configures the overlay window using custom size/positioning (`configure_overlay_passthrough`) to start exactly `32px` below the screen top on Linux.
+* **[tauri.conf.json](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/src-tauri/tauri.conf.json)**: Window configuration. Configures the frameless command bar, transparency keys, and sets the overlay window to native full-screen. On Linux, `"fullscreen"` is explicitly set to `false` for the overlay window to ensure the system panel is never covered.
 
 ### 3.2 Frontend GUI (`frontend/src/`)
-* **[main.tsx](file:///c:/projects/Jarvis/frontend/src/main.tsx)**: Vite Multi-route Entry. Inspects `window.location.pathname` to branch rendering into three routes dynamically:
+* **[main.tsx](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/frontend/src/main.tsx)**: Vite Multi-route Entry. Inspects `window.location.pathname` to branch rendering into three routes dynamically:
   * `/command` → `CommandBar.tsx` (command popup).
   * `/overlay` → `Overlay.tsx` (full-screen transparent highlight map).
   * `/` → `App.tsx` (tutor window container).
-* **[CommandBar.tsx](file:///c:/projects/Jarvis/frontend/src/CommandBar.tsx)**: Manages textarea size dynamically via `ResizeObserver`, calls `resizeCommandWindow` Tauri command to prevent layout clipping, and drives the settings pane. **No background polling** — the tutor only runs when the user submits a query or clicks a highlighted target.
-* **[Overlay.tsx](file:///c:/projects/Jarvis/frontend/src/Overlay.tsx)**: Scales coordinates from screenshot space to overlay CSS pixels. Renders only the single current Action Guide step. For input controls (Edit, TextBox, ComboBox), bypasses width capping and renders a full-width highlight frame around the entire input field. Emits completed step metadata on highlighted clicks. See the [Coordinate Scaling Guide](file:///c:/projects/Jarvis/ai/02_coordinate_scaling.md) for full details.
+* **[CommandBar.tsx](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/frontend/src/CommandBar.tsx)**: Manages textarea size dynamically via `ResizeObserver`, calls `resizeCommandWindow` Tauri command to prevent layout clipping, and drives the settings pane. **No background polling** — the tutor only runs when the user submits a query or clicks a highlighted target.
+* **[Overlay.tsx](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/frontend/src/Overlay.tsx)**: Scales coordinates from screenshot space to overlay CSS pixels. Renders only the single current Action Guide step. For input controls (Edit, TextBox, ComboBox), bypasses width capping and renders a full-width highlight frame around the entire input field. Emits completed step metadata on highlighted clicks.
+  * *Linux Offset*: To match the overlay's physical start at `y = 32px` on GNOME Shell, Y-coordinates are dynamically offset by `-32px` on Linux (`!navigator.userAgent.includes('Windows')`) before scaling.
+  * *Rendering WebKitGTK Glow*: On Linux WebView instances, complex CSS `box-shadow` styles render opaque (filling boxes with black/green). High-visibility transparent borders with `@keyframes borderPulse` are used instead. See the [Coordinate Scaling Guide](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/ai/02_coordinate_scaling.md) for full details.
 
 ### 3.3 Python Engine (`python/`)
-* **[main.py](file:///c:/projects/Jarvis/python/main.py)**: Orchestrates the full pipeline. Key features:
+* **[main.py](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/python/main.py)**: Orchestrates the full pipeline. Key features:
   * Preflight classifier with continuation detection (`is_continuation`).
-  * PID-based window locking before OCR.
+  * PID-based window locking before OCR (Windows only; uses process tree matching).
   * Capture marker (`__BLINKY_CAPTURED__`) for flicker-free window restoration.
-  * UIA coordinate normalisation from physical screen space to screenshot space.
-  * Blinky UI filtering — filters OCR items matching Blinky's own UI elements.
+  * coordinate normalisation from physical screen space to screenshot space.
+  * Status-bar noise filtering: filters items with `y < 35` on Linux to strip GNOME Shell panel entries while keeping the app's top bar (e.g. VS Code menu at `y = 44`).
   * Post-processing pipeline.
-* **[prompt.py](file:///c:/projects/Jarvis/python/ai/prompt.py)**: Formats screen context into compact string representation. Key rules:
+* **[prompt.py](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/python/ai/prompt.py)**: Formats screen context into compact string representation. Key rules:
   * Single-step enforcement: Exactly 1 step per response.
   * Search-bar awareness: If a search/filter input is already visible, skip the panel-opening step entirely.
   * Visible search target_text: Must use the exact search placeholder text (e.g. `"Search Extensions in Marketplace"`) as `target_text`.
-* **[client.py](file:///c:/projects/Jarvis/python/ai/client.py)**: Routes requests to `ollama_client.py` or `groq_client.py` based on `BLINKY_AI_PROVIDER`. See the [AI Inference Guide](file:///c:/projects/Jarvis/ai/04_ai_inference.md) for detailed descriptions.
-* **[screen.py](file:///c:/projects/Jarvis/python/capture/screen.py)**: Captures via `dxcam` (falling back to PIL `ImageGrab`). Records both physical screen resolution and post-thumbnail dimensions.
-* **[extract.py](file:///c:/projects/Jarvis/python/ocr/extract.py)**: OCR hub. Tries Windows WinRT OCR first, falling back to PyTorch-powered local `EasyOCR`.
-* **[matching.py](file:///c:/projects/Jarvis/python/utils/matching.py)**: Fuzzy matching with exact match bonus, interactive control bonuses, sidebar context bonuses, and input control preference for search/type instructions. See the [Target Matching Heuristics Guide](file:///c:/projects/Jarvis/ai/03_matching_heuristics.md) for matching details.
-* **[uia.py](file:///c:/projects/Jarvis/python/utils/uia.py)**: Queries UIA tree via `pywinauto`. Accepts `target_pid` for fresh COM element resolution. Returns screen-absolute coordinates.
-* **[window.py](file:///c:/projects/Jarvis/python/utils/window.py)**: Z-order window scanner with `target_pid` support and Blinky exclusion.
+* **[client.py](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/python/ai/client.py)**: Routes requests to `ollama_client.py` or `groq_client.py` based on `BLINKY_AI_PROVIDER`. See the [AI Inference Guide](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/ai/04_ai_inference.md) for detailed descriptions.
+* **[screen.py](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/python/capture/screen.py)**: Captures screen cross-platform:
+  * *Windows*: Uses direct high-performance GPU capture via `dxcam`, falling back to GDI-based `ImageGrab`.
+  * *Linux (Wayland)*: Uses the standard Desktop Portal capture strategy. To capture silently in under 1 second without triggering the interactive region-selector modal, the subprocess environment is sanitized (stripping variables like `XDG_ACTIVATION_TOKEN` or `DESKTOP_STARTUP_ID`). It falls back to `gnome-screenshot` if DBus is unavailable.
+* **[extract.py](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/python/ocr/extract.py)**: OCR hub. Tries Windows WinRT OCR first, falling back to local `pytesseract` OCR on Linux or EasyOCR on Windows. For Linux Tesseract, screenshots are kept at `max_dim = 2048` to preserve high-resolution text extraction.
+* **[matching.py](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/python/utils/matching.py)**: Fuzzy matching with exact match bonus, interactive control bonuses, sidebar context bonuses, and input control preference for search/type instructions. See the [Target Matching Heuristics Guide](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/ai/03_matching_heuristics.md) for matching details.
+* **[uia.py](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/python/utils/uia.py)**: Queries UIA tree via `pywinauto` (Windows only). Accepts `target_pid` for fresh COM element resolution. Returns screen-absolute coordinates.
+* **[window.py](file:///home/fev/GitRepos/clonedGitRepos/Jarvis/python/utils/window.py)**: Z-order window scanner with `target_pid` support and Blinky exclusion (Windows only).
 
 ---
 
