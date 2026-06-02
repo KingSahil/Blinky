@@ -2,7 +2,9 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2 } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
+import { getCasualChatResponse } from './lib/casualChat';
 import { runTutor, showOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow } from './lib/tauri';
+import { buildAudioDataUrl, buildSarvamTtsPayload, getSarvamErrorMessage } from './lib/tts';
 
 export function CommandBar() {
   const [question, setQuestion] = useState('');
@@ -117,17 +119,12 @@ export function CommandBar() {
           'api-subscription-key': sarvamApiKey,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          text: speechContent,
-          target_language_code: 'en-IN',
-          speaker: 'shubh',
-          pace: 1.05,
-        }),
+        body: JSON.stringify(buildSarvamTtsPayload(speechContent)),
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Sarvam TTS failed with status ${response.status}`);
+        const errorData = await response.json().catch(() => null);
+        throw new Error(getSarvamErrorMessage(errorData, response.status));
       }
 
       const data = await response.json();
@@ -136,7 +133,7 @@ export function CommandBar() {
       }
 
       const base64Audio = data.audios[0];
-      const audioUrl = `data:audio/mp3;base64,${base64Audio}`;
+      const audioUrl = buildAudioDataUrl(base64Audio);
       const audio = new Audio(audioUrl);
       
       currentAudioRef.current = audio;
@@ -258,6 +255,23 @@ export function CommandBar() {
 
   async function executeTutor(queryText: string, shouldSpeakAfter: boolean) {
     if (isRunning) return;
+    const casualResponse = getCasualChatResponse(queryText);
+    if (casualResponse) {
+      stopSpeaking();
+      setStatus(casualResponse.summary);
+      setSteps([]);
+      setQuestion('');
+      if (inputRef.current) {
+        inputRef.current.style.height = 'auto';
+      }
+      if (shouldSpeakAfter) {
+        setTimeout(() => {
+          void speakText(casualResponse.summary, []);
+        }, 300);
+      }
+      return;
+    }
+
     setIsRunning(true);
     setStatus('Reading the screen...');
     setSteps([]);

@@ -10,6 +10,7 @@
 
 <img src="https://img.shields.io/badge/Tauri-2.x-orange?style=for-the-badge">
 <img src="https://img.shields.io/badge/React-TypeScript-61dafb?style=for-the-badge">
+<img src="https://img.shields.io/badge/Bun-1.3.14-f9f1e1?style=for-the-badge">
 <img src="https://img.shields.io/badge/Python-3.11-yellow?style=for-the-badge">
 
 </p>
@@ -47,7 +48,7 @@ An AI-powered Windows desktop tutor that teaches users software directly on thei
 
 Install the following software:
 
-- Node.js 20+
+- Bun 1.3+
 - Rust Stable
 - Python 3.11+
 - Ollama
@@ -65,9 +66,9 @@ ollama pull gemma4:e4b
 ## 3️⃣ Install Dependencies
 
 ```powershell
-npm install
-npm run setup:python
-npm run check:ollama
+bun install
+bun run setup:python
+bun run check:ollama
 ```
 
 ---
@@ -75,7 +76,7 @@ npm run check:ollama
 ## 4️⃣ Start Blinky
 
 ```powershell
-npm run dev
+bun run dev
 ```
 
 
@@ -272,6 +273,7 @@ Blinky transforms software learning into an **interactive real-time experience**
 |---|---|
 | Desktop Framework | Tauri 2 |
 | Frontend | React + TypeScript |
+| JavaScript Runtime / Package Manager | Bun |
 | Backend Runtime | Python 3.11+ |
 | AI Runtime | Ollama |
 | AI Model | `gemma4:e4b` |
@@ -320,7 +322,7 @@ scripts/
 
 ### Required Software
 
-- Node.js 20+
+- Bun 1.3+
 - Rust Stable
 - Python 3.11+
 - Ollama
@@ -338,9 +340,9 @@ ollama pull gemma4:e4b
 ## 3️⃣ Install Dependencies
 
 ```powershell
-npm install
-npm run setup:python
-npm run check:ollama
+bun install
+bun run setup:python
+bun run check:ollama
 ```
 
 ---
@@ -348,7 +350,7 @@ npm run check:ollama
 ## 4️⃣ Start Development Server
 
 ```powershell
-npm run dev
+bun run dev
 ```
 
 ---
