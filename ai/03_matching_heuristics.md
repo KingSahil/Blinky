@@ -69,6 +69,6 @@ Programmatically restricts the return payload to a single step, minimizing laten
 ---
 
 ## Related Guides & Files
-- [System Architecture](file:///c:/projects/Jarvis/ai/architecture.md)
+- [01 System Architecture](file:///c:/projects/Jarvis/ai/01_architecture.md)
 - [Fuzzy Matcher Module](file:///c:/projects/Jarvis/python/utils/matching.py)
 - [Python Orchestrator](file:///c:/projects/Jarvis/python/main.py)

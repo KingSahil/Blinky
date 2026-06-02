@@ -179,7 +179,7 @@ The sequence diagram below traces the end-to-end flow of a single tutor request,
   * `/overlay` → `Overlay.tsx` (full-screen transparent highlight map).
   * `/` → `App.tsx` (tutor window container).
 * **[CommandBar.tsx](file:///c:/projects/Jarvis/frontend/src/CommandBar.tsx)**: Manages textarea size dynamically via `ResizeObserver`, calls `resizeCommandWindow` Tauri command to prevent layout clipping, and drives the settings pane. **No background polling** — the tutor only runs when the user submits a query or clicks a highlighted target.
-* **[Overlay.tsx](file:///c:/projects/Jarvis/frontend/src/Overlay.tsx)**: Scales coordinates from screenshot space to overlay CSS pixels. Renders only the single current Action Guide step. For input controls (Edit, TextBox, ComboBox), bypasses width capping and renders a full-width highlight frame around the entire input field. Emits completed step metadata on highlighted clicks. See the [Coordinate Scaling Guide](file:///c:/projects/Jarvis/ai/coordinate_scaling.md) for full details.
+* **[Overlay.tsx](file:///c:/projects/Jarvis/frontend/src/Overlay.tsx)**: Scales coordinates from screenshot space to overlay CSS pixels. Renders only the single current Action Guide step. For input controls (Edit, TextBox, ComboBox), bypasses width capping and renders a full-width highlight frame around the entire input field. Emits completed step metadata on highlighted clicks. See the [Coordinate Scaling Guide](file:///c:/projects/Jarvis/ai/02_coordinate_scaling.md) for full details.
 
 ### 3.3 Python Engine (`python/`)
 * **[main.py](file:///c:/projects/Jarvis/python/main.py)**: Orchestrates the full pipeline. Key features:
@@ -193,10 +193,10 @@ The sequence diagram below traces the end-to-end flow of a single tutor request,
   * Single-step enforcement: Exactly 1 step per response.
   * Search-bar awareness: If a search/filter input is already visible, skip the panel-opening step entirely.
   * Visible search target_text: Must use the exact search placeholder text (e.g. `"Search Extensions in Marketplace"`) as `target_text`.
-* **[client.py](file:///c:/projects/Jarvis/python/ai/client.py)**: Routes requests to `ollama_client.py` or `groq_client.py` based on `BLINKY_AI_PROVIDER`. See the [AI Inference Guide](file:///c:/projects/Jarvis/ai/ai_inference.md) for detailed descriptions.
+* **[client.py](file:///c:/projects/Jarvis/python/ai/client.py)**: Routes requests to `ollama_client.py` or `groq_client.py` based on `BLINKY_AI_PROVIDER`. See the [AI Inference Guide](file:///c:/projects/Jarvis/ai/04_ai_inference.md) for detailed descriptions.
 * **[screen.py](file:///c:/projects/Jarvis/python/capture/screen.py)**: Captures via `dxcam` (falling back to PIL `ImageGrab`). Records both physical screen resolution and post-thumbnail dimensions.
 * **[extract.py](file:///c:/projects/Jarvis/python/ocr/extract.py)**: OCR hub. Tries Windows WinRT OCR first, falling back to PyTorch-powered local `EasyOCR`.
-* **[matching.py](file:///c:/projects/Jarvis/python/utils/matching.py)**: Fuzzy matching with exact match bonus, interactive control bonuses, sidebar context bonuses, and input control preference for search/type instructions. See the [Target Matching Heuristics Guide](file:///c:/projects/Jarvis/ai/matching_heuristics.md) for matching details.
+* **[matching.py](file:///c:/projects/Jarvis/python/utils/matching.py)**: Fuzzy matching with exact match bonus, interactive control bonuses, sidebar context bonuses, and input control preference for search/type instructions. See the [Target Matching Heuristics Guide](file:///c:/projects/Jarvis/ai/03_matching_heuristics.md) for matching details.
 * **[uia.py](file:///c:/projects/Jarvis/python/utils/uia.py)**: Queries UIA tree via `pywinauto`. Accepts `target_pid` for fresh COM element resolution. Returns screen-absolute coordinates.
 * **[window.py](file:///c:/projects/Jarvis/python/utils/window.py)**: Z-order window scanner with `target_pid` support and Blinky exclusion.
 
@@ -323,10 +323,10 @@ If an unhandled exception occurs, the worker prints an error payload and exits w
 ## 5. Architectural Implementation Details
 
 Detailed specifications for coordinate calculations, target resolution, and AI prompting can be found in the dedicated guides below:
-* **[Coordinate Scaling & Normalization Guide](file:///c:/projects/Jarvis/ai/coordinate_scaling.md)**: Physical screen downsampling, UIA bounds normalization, CSS display scaling, and highlight capping rules.
-* **[Target Matching Heuristics Guide](file:///c:/projects/Jarvis/ai/matching_heuristics.md)**: Weighted fuzzy matching score calculations, interactive bonuses, grid deduplication matrix, and post-processing steps pipeline.
-* **[AI Inference Guide](file:///c:/projects/Jarvis/ai/ai_inference.md)**: Preflight classifier, conversation logic, compact prompting, and Ollama/Groq provider details.
-* **[Sarvam AI Voice Integration Guide](file:///c:/projects/Jarvis/ai/sarvam.md)**: Text-to-speech payload schemas, speech-to-text multipart transcript processing, voice-first constraint logic, settings hooks, and voice readback state.
+* **[Coordinate Scaling & Normalization Guide](file:///c:/projects/Jarvis/ai/02_coordinate_scaling.md)**: Physical screen downsampling, UIA bounds normalization, CSS display scaling, and highlight capping rules.
+* **[Target Matching Heuristics Guide](file:///c:/projects/Jarvis/ai/03_matching_heuristics.md)**: Weighted fuzzy matching score calculations, interactive bonuses, grid deduplication matrix, and post-processing steps pipeline.
+* **[AI Inference Guide](file:///c:/projects/Jarvis/ai/04_ai_inference.md)**: Preflight classifier, conversation logic, compact prompting, and Ollama/Groq provider details.
+* **[Sarvam AI Voice Integration Guide](file:///c:/projects/Jarvis/ai/05_sarvam.md)**: Text-to-speech payload schemas, speech-to-text multipart transcript processing, voice-first constraint logic, settings hooks, and voice readback state.
 
 ### 5.1 Window Locking & COM Staleness
 OCR operations can take several seconds. If `get_target_window_element()` is called after OCR, it may return a different app. Additionally, caching a pywinauto `UIAWrapper` COM object across the OCR wait causes it to become stale.

@@ -83,7 +83,7 @@ Routes vision/text request payloads to cloud API endpoints.
 ---
 
 ## Related Guides & Files
-- [System Architecture](file:///c:/projects/Jarvis/ai/architecture.md)
+- [01 System Architecture](file:///c:/projects/Jarvis/ai/01_architecture.md)
 - [Prompt Compiler](file:///c:/projects/Jarvis/python/ai/prompt.py)
 - [Model Router](file:///c:/projects/Jarvis/python/ai/client.py)
 - [Ollama Integration](file:///c:/projects/Jarvis/python/ai/ollama_client.py)

@@ -63,7 +63,7 @@ Orchestrates Tauri commands, system tray lifecycle, flicker-free capture exclusi
 ### 2.1 `frontend/src/Overlay.tsx` (Target Pulse Canvas)
 A transparent, fullscreen React view that maps raw text coordinates onto the active viewport and handles target dismissal.
 * **Scaling and Capping**: Translates coordinate rects from downsampled screenshot coordinates back to active CSS layout pixels. For input elements, the standard sizing restrictions are bypassed.
-* See the [Coordinate Scaling & Resolution Normalization Guide](file:///c:/projects/Jarvis/ai/coordinate_scaling.md) for formulas and implementation logic.
+* See the [Coordinate Scaling & Resolution Normalization Guide](file:///c:/projects/Jarvis/ai/02_coordinate_scaling.md) for formulas and implementation logic.
 
 ### 2.2 `frontend/src/App.tsx` (Tutor Container)
 The user interface for prompt input, status displays, settings configuration, and window resize handling.
@@ -73,7 +73,7 @@ The user interface for prompt input, status displays, settings configuration, an
 
 ### 2.3 `frontend/src/lib/tts.ts` (Sarvam voice serialization)
 Helper methods for assembling payloads and audio URL mapping.
-* See the [Sarvam AI Voice Integration Guide](file:///c:/projects/Jarvis/ai/sarvam.md) for full payload structures, properties, and error message parsing.
+* See the [Sarvam AI Voice Integration Guide](file:///c:/projects/Jarvis/ai/05_sarvam.md) for full payload structures, properties, and error message parsing.
 
 ---
 
@@ -86,10 +86,10 @@ The standard input/output interface for processing questions and screen coordina
 * **`_fill_empty_search_targets(steps: list[dict], visible_items: list[dict]) -> list[dict]`**: Fallback that scans visible items for the first search/filter box if target_text is empty.
 * **`classify_request(question, previous_question, warnings) -> dict | None`**: Calls text-only model to check if screen capture is needed.
 * **`answer_without_screen(question: str) -> dict`**: General conversation responder.
-* **`merge_visible_items(ocr_items: list, uia_items: list) -> list`**: Deduplicates and aligns elements. See the [Target Matching Heuristics Guide](file:///c:/projects/Jarvis/ai/matching_heuristics.md) for merge details.
+* **`merge_visible_items(ocr_items: list, uia_items: list) -> list`**: Deduplicates and aligns elements. See the [Target Matching Heuristics Guide](file:///c:/projects/Jarvis/ai/03_matching_heuristics.md) for merge details.
 
 ### 3.2 `python/capture/screen.py` (Screen Capture)
-* **`Screenshot` dataclass**: Captures pixel metrics for scaling calculations. See [Coordinate Scaling Guide](file:///c:/projects/Jarvis/ai/coordinate_scaling.md) for metrics description.
+* **`Screenshot` dataclass**: Captures pixel metrics for scaling calculations. See [Coordinate Scaling Guide](file:///c:/projects/Jarvis/ai/02_coordinate_scaling.md) for metrics description.
 * **`capture_screen() -> Screenshot`**: Captures via `dxcam` (falling back to PIL `ImageGrab`) and downsamples to fit $1920 \times 1080$.
 
 ### 3.3 `python/utils/window.py` (Window Resolver)
@@ -103,12 +103,12 @@ The standard input/output interface for processing questions and screen coordina
 * **`extract_visible_text(image_path: Path) -> list[dict]`**: Runs Windows WinRT OCR engine with EasyOCR fallback.
 
 ### 3.6 `python/utils/matching.py` (Fuzzy Matcher)
-* **`find_best_match(target: str, ocr_items: list[dict], instruction: str = "") -> dict | None`**: Fuzzy-matches step `target_text` to visible screen controls. Uses weighted scoring matrix. See [Target Matching Heuristics Guide](file:///c:/projects/Jarvis/ai/matching_heuristics.md) for formulas and bonuses.
+* **`find_best_match(target: str, ocr_items: list[dict], instruction: str = "") -> dict | None`**: Fuzzy-matches step `target_text` to visible screen controls. Uses weighted scoring matrix. See [Target Matching Heuristics Guide](file:///c:/projects/Jarvis/ai/03_matching_heuristics.md) for formulas and bonuses.
 
 ### 3.7 `python/ai/prompt.py` (Prompt Builder)
 * **`build_preflight_prompt(question, previous_question=None) -> str`**: Compiles preflight classifier prompt.
 * **`build_chat_prompt(question) -> str`**: Compiles conversational chat prompt.
-* **`build_prompt(question, active_app, ocr_items, progress=None, latest_update=None) -> str`**: Compiles main visual-context prompt. See [AI Inference Guide](file:///c:/projects/Jarvis/ai/ai_inference.md) for formatting rules.
+* **`build_prompt(question, active_app, ocr_items, progress=None, latest_update=None) -> str`**: Compiles main visual-context prompt. See [AI Inference Guide](file:///c:/projects/Jarvis/ai/04_ai_inference.md) for formatting rules.
 
 ### 3.8 `python/ai/client.py` (Model Router)
 * **`ask_model(prompt, screenshot_path) -> dict`**: Routes requests to selected LLM vision provider.
