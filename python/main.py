@@ -12,9 +12,9 @@ from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
 from capture.screen import capture_screen
 from ocr.extract import extract_visible_text
 from utils.logging import get_logger
-from utils.matching import attach_matches, find_best_match
+from utils.matching import attach_matches, find_best_match_with_score
 from utils.uia import get_visible_ui_text
-from utils.window import get_active_window
+from utils.window import get_active_window, get_ignored_overlay_rects
 
 LOGGER = get_logger("blinky.main")
 
@@ -85,36 +85,31 @@ def _fill_empty_search_targets(steps: list[dict], visible_items: list[dict]) -> 
     return steps
 
 
-def run(question: str, previous_question: str | None = None, progress: dict | None = None) -> dict:
+def run(
+    question: str,
+    previous_question: str | None = None,
+    progress: dict | None = None,
+    conversation_history: list[dict] | None = None,
+) -> dict:
     started = time.perf_counter()
     warnings: list[str] = []
 
-    # 1. Lock the target window by PID and capture the screenshot immediately at the start of execution.
-    # Caching the pywinauto element itself would cause a stale COM descriptor
-    # after ~15 s; caching the PID is stable and forces a fresh element
-    # lookup when UIA runs.
-    from utils.window import get_target_window_element
-    _initial = get_target_window_element()
-    target_pid: int | None = None
-    try:
-        target_pid = _initial.process_id() if _initial else None
-    except Exception:
-        pass
+    locator_target = extract_locator_target(question)
+    force_screen = should_force_screen_context(question, previous_question)
 
-    screenshot = capture_screen()
-    # Print the capture marker to stdout and flush immediately so Rust can restore windows
-    print("__BLINKY_CAPTURED__", flush=True)
+    preflight = None
+    if force_screen:
+        LOGGER.info("Skipping preflight for screen-context question")
+    else:
+        preflight_started = time.perf_counter()
+        preflight = classify_request(question, previous_question, warnings, conversation_history)
+        log_stage_timing("preflight", preflight_started)
 
-    locator_result = resolve_locator_fast_path(question, screenshot, target_pid, warnings, started)
-    if locator_result is not None:
-        return locator_result
-
-    # 2. Run the preflight classifier
-    preflight = classify_request(question, previous_question, warnings)
-    
     is_continuation = False
     if preflight:
         is_continuation = bool(preflight.get("is_continuation", False))
+    elif previous_question and is_followup_continuation_question(question):
+        is_continuation = True
         
     effective_question = question
     latest_update = None
@@ -124,7 +119,7 @@ def run(question: str, previous_question: str | None = None, progress: dict | No
     else:
         progress = None
 
-    needs_screen = True
+    needs_screen = force_screen
     if preflight:
         needs_screen = bool(preflight.get("needs_screen", True))
         
@@ -132,7 +127,9 @@ def run(question: str, previous_question: str | None = None, progress: dict | No
         needs_screen = True
 
     if not needs_screen:
-        chat_result = answer_without_screen(question)
+        chat_started = time.perf_counter()
+        chat_result = answer_without_screen(question, conversation_history)
+        log_stage_timing("chat", chat_started)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         return {
             "summary": chat_result["summary"],
@@ -145,10 +142,43 @@ def run(question: str, previous_question: str | None = None, progress: dict | No
             "is_continuation": is_continuation,
         }
 
+    # 1. Lock the target window by PID and capture the screenshot only after
+    # we know the request needs screen context.
+    # Caching the pywinauto element itself would cause a stale COM descriptor
+    # after ~15 s; caching the PID is stable and forces a fresh element
+    # lookup when UIA runs.
+    from utils.window import get_target_window_element
+    _initial = get_target_window_element()
+    target_pid: int | None = None
+    try:
+        target_pid = _initial.process_id() if _initial else None
+    except Exception:
+        pass
+
+    capture_started = time.perf_counter()
+    screenshot = capture_screen()
+    log_stage_timing("capture", capture_started)
+    # Print the capture marker to stdout and flush immediately so Rust can restore windows
+    print("__BLINKY_CAPTURED__", flush=True)
+
+    locator_result = resolve_locator_fast_path(question, screenshot, target_pid, warnings, started)
+    if locator_result is not None:
+        return locator_result
+
+    if locator_target:
+        LOGGER.info("Locator deferred to screen AI for '%s'", locator_target)
+
     # 3. Read active app, OCR text, and UIA controls
+    active_started = time.perf_counter()
     active_app = get_active_window(target_pid=target_pid)
+    log_stage_timing("active_window", active_started)
+    ocr_started = time.perf_counter()
     ocr_items = extract_visible_text(screenshot.path)
+    ocr_items = filter_ignored_overlay_items(ocr_items, screenshot)
+    log_stage_timing("ocr", ocr_started)
+    uia_started = time.perf_counter()
     uia_items = get_visible_ui_text(target_pid=target_pid)
+    log_stage_timing("uia", uia_started)
 
     if os.name != "nt":
         # On Linux (GNOME/Wayland), the system status bar is at the very top (y < 35 in optimized screenshot pixels).
@@ -173,14 +203,19 @@ def run(question: str, previous_question: str | None = None, progress: dict | No
     if not visible_items:
         warnings.append("No OCR text was detected. Try zooming in or opening a supported app.")
 
+    prompt_started = time.perf_counter()
     prompt = build_prompt(
         question=effective_question,
         active_app=active_app,
         ocr_items=visible_items,
         progress=progress,
         latest_update=latest_update,
+        conversation_history=conversation_history,
     )
+    log_stage_timing("prompt_build", prompt_started)
+    model_started = time.perf_counter()
     ai_result = ask_model(prompt=prompt, screenshot_path=screenshot.path)
+    log_stage_timing("model", model_started)
     LOGGER.info("AI Result: %s", json.dumps(ai_result, ensure_ascii=True))
     steps = attach_matches(ai_result.get("steps", []), visible_items)
     steps = skip_completed_navigation_steps(steps)
@@ -213,9 +248,14 @@ def run(question: str, previous_question: str | None = None, progress: dict | No
 # All query resolution is handled automatically by the AI model.
 
 
-def classify_request(question: str, previous_question: str | None, warnings: list[str]) -> dict | None:
+def classify_request(
+    question: str,
+    previous_question: str | None,
+    warnings: list[str],
+    conversation_history: list[dict] | None = None,
+) -> dict | None:
     try:
-        payload = ask_text_model(build_preflight_prompt(question, previous_question))
+        payload = ask_text_model(build_preflight_prompt(question, previous_question, conversation_history))
     except Exception as exc:
         LOGGER.warning("Preflight classification failed; falling back to screen mode: %s", exc)
         warnings.append(f"Preflight classification failed: {exc}")
@@ -226,8 +266,8 @@ def classify_request(question: str, previous_question: str | None, warnings: lis
     return {"needs_screen": needs_screen, "is_continuation": is_continuation}
 
 
-def answer_without_screen(question: str) -> dict:
-    payload = ask_text_model(build_chat_prompt(question))
+def answer_without_screen(question: str, conversation_history: list[dict] | None = None) -> dict:
+    payload = ask_text_model(build_chat_prompt(question, conversation_history))
     summary = str(payload.get("summary", "")).strip()
     if not summary:
         raise RuntimeError("The chat model returned an empty reply.")
@@ -239,21 +279,147 @@ def resolve_locator_fast_path(question: str, screenshot, target_pid: int | None,
     if not target:
         return None
 
+    active_started = time.perf_counter()
     active_app = get_active_window(target_pid=target_pid)
-    uia_items = get_visible_ui_text(target_pid=target_pid)
-    if not uia_items:
-        return None
+    log_stage_timing("locator.active_window", active_started)
+    uia_started = time.perf_counter()
+    wants_control = is_control_locator_question(question)
+    uia_items = get_visible_ui_text(target_pid=target_pid, include_unlabeled=True)
+    log_stage_timing("locator.uia", uia_started)
 
     if screenshot.screen_width != screenshot.width or screenshot.screen_height != screenshot.height:
         uia_items = scale_uia_items_to_screenshot(uia_items, screenshot)
 
     uia_items.sort(key=lambda item: (int(item.get("y", 0) / 10), item.get("x", 0)))
-    match_items = uia_items if "blinky" in question.lower() else [item for item in uia_items if item.get("source") != "blinky"]
+    match_items = locator_match_items(question, uia_items)
     instruction = f"Locate the {target} control."
-    match = find_best_match(target, match_items, instruction)
-    if not match:
+    if match_items:
+        match_result = find_best_match_with_score(target, match_items, instruction)
+        if match_result:
+            if should_accept_locator_match(question, match_result):
+                return build_locator_result(target, match_result["item"], uia_items, active_app, screenshot, warnings, started, match_result)
+            LOGGER.info(
+                "Locator deferred to AI for '%s' reason=low_control_confidence score=%.3f text_similarity=%.3f candidate_count=%d",
+                target,
+                match_result["score"],
+                match_result["text_similarity"],
+                match_result["candidate_count"],
+            )
+            return None
+
+    ocr_started = time.perf_counter()
+    ocr_items = extract_visible_text(screenshot.path)
+    ocr_items = filter_ignored_overlay_items(ocr_items, screenshot)
+    log_stage_timing("locator.ocr", ocr_started)
+    if os.name != "nt":
+        ocr_items = [item for item in ocr_items if item.get("y", 0) >= 35]
+        uia_items = [item for item in uia_items if item.get("y", 0) >= 35]
+
+    visible_items = merge_visible_items(ocr_items, uia_items)
+    visible_items.sort(key=lambda item: (int(item.get("y", 0) / 10), item.get("x", 0)))
+    match_result = find_best_match_with_score(target, locator_match_items(question, visible_items), instruction)
+    if match_result:
+        if should_accept_locator_match(question, match_result):
+            return build_locator_result(target, match_result["item"], visible_items, active_app, screenshot, warnings, started, match_result)
+        LOGGER.info(
+            "Locator deferred to AI for '%s' reason=low_control_confidence score=%.3f text_similarity=%.3f candidate_count=%d",
+            target,
+            match_result["score"],
+            match_result["text_similarity"],
+            match_result["candidate_count"],
+        )
         return None
 
+    if wants_control or icon_like_control_candidates(locator_match_items(question, uia_items)):
+        LOGGER.info("Locator deferred to AI for '%s' reason=icon_or_control_needs_ai", target)
+        return None
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    LOGGER.info("Locator local path did not find '%s' after checking %d visible items", target, len(visible_items))
+    return {
+        "summary": f"I could not find {target} on the current screen.",
+        "steps": [],
+        "active_app": active_app,
+        "ocr": {"count": len(visible_items), "items": visible_items[:80]},
+        "screenshot": {
+            "path": str(screenshot.path),
+            "width": screenshot.width,
+            "height": screenshot.height,
+        },
+        "elapsed_ms": elapsed_ms,
+        "provider": "local",
+        "warnings": warnings,
+        "is_continuation": False,
+    }
+
+
+def locator_match_items(question: str, items: list[dict]) -> list[dict]:
+    return items if "blinky" in question.lower() else [item for item in items if item.get("source") != "blinky"]
+
+
+def is_control_locator_question(question: str) -> bool:
+    normalized = question.lower()
+    return any(
+        hint in normalized
+        for hint in {
+            "button",
+            "icon",
+            "control",
+            "tab",
+            "menu",
+            "sidebar",
+            "side bar",
+            "activity bar",
+            "search bar",
+            "input",
+            "text field",
+            "field",
+        }
+    )
+
+
+def should_accept_locator_match(question: str, match_result: dict) -> bool:
+    if not is_control_locator_question(question):
+        return bool(match_result["is_exact_text"] or match_result["text_similarity"] >= 0.86 or match_result["score"] >= 0.82)
+
+    control_type = str(match_result.get("control_type", "")).lower()
+    source = str(match_result.get("source", "")).lower()
+    is_interactive = source == "uia" and control_type in {"button", "image", "tabitem", "menuitem", "edit", "textbox", "combobox"}
+    if not is_interactive:
+        return False
+    if int(match_result.get("ambiguous_candidate_count") or match_result.get("candidate_count") or 0) > 1:
+        return False
+    if bool(match_result.get("is_exact_text")):
+        return float(match_result.get("score") or 0) >= 0.9
+    return float(match_result.get("score") or 0) >= 0.95 and float(match_result.get("text_similarity") or 0) >= 0.86
+
+
+def icon_like_control_candidates(items: list[dict]) -> list[dict]:
+    candidates = []
+    for item in items:
+        if item.get("source") == "blinky":
+            continue
+        control_type = str(item.get("control_type", "")).lower()
+        if control_type not in {"button", "image", "hyperlink"}:
+            continue
+        width = float(item.get("width") or 0)
+        height = float(item.get("height") or 0)
+        if width < 12 or height < 12 or width > 120 or height > 120:
+            continue
+        candidates.append(item)
+    return candidates
+
+
+def build_locator_result(
+    target: str,
+    match: dict,
+    visible_items: list[dict],
+    active_app: dict,
+    screenshot,
+    warnings: list[str],
+    started: float,
+    match_result: dict | None = None,
+) -> dict:
     step = {
         "step": 1,
         "instruction": f"Here is the {target}.",
@@ -261,12 +427,22 @@ def resolve_locator_fast_path(question: str, screenshot, target_pid: int | None,
         "match": match,
     }
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    LOGGER.info("Locator fast path matched '%s' to '%s'", target, match.get("text"))
+    if match_result:
+        LOGGER.info(
+            "Locator accepted local match '%s' to '%s' score=%.3f text_similarity=%.3f candidate_count=%d",
+            target,
+            match.get("text"),
+            match_result["score"],
+            match_result["text_similarity"],
+            match_result["candidate_count"],
+        )
+    else:
+        LOGGER.info("Locator fast path matched '%s' to '%s'", target, match.get("text"))
     return {
         "summary": f"I found the {target} in the active app.",
         "steps": [step],
         "active_app": active_app,
-        "ocr": {"count": len(uia_items), "items": uia_items[:80]},
+        "ocr": {"count": len(visible_items), "items": visible_items[:80]},
         "screenshot": {
             "path": str(screenshot.path),
             "width": screenshot.width,
@@ -301,6 +477,116 @@ def extract_locator_target(question: str) -> str | None:
     return None
 
 
+def should_force_screen_context(question: str, previous_question: str | None = None) -> bool:
+    normalized = " ".join(question.lower().strip().split())
+    if not normalized:
+        return False
+
+    if is_general_chat_question(normalized):
+        return False
+    if extract_locator_target(normalized):
+        return True
+    if previous_question and is_followup_continuation_question(normalized):
+        return True
+
+    screen_action_words = {
+        "click",
+        "open",
+        "select",
+        "choose",
+        "install",
+        "download",
+        "enable",
+        "disable",
+        "configure",
+        "setup",
+        "set up",
+        "run",
+        "launch",
+        "navigate",
+        "find",
+        "search",
+        "locate",
+        "highlight",
+        "show",
+        "where",
+        "button",
+        "icon",
+        "menu",
+        "tab",
+        "sidebar",
+        "side bar",
+        "control",
+        "settings",
+        "extension",
+        "folder",
+        "file",
+        "screen",
+        "window",
+        "app",
+    }
+    return any(word in normalized for word in screen_action_words)
+
+
+def is_followup_continuation_question(question: str) -> bool:
+    normalized = normalize_question_text(question)
+    return normalized in {
+        "next",
+        "what next",
+        "what now",
+        "now what",
+        "continue",
+        "go on",
+        "done",
+        "finished",
+        "show next step",
+        "what to do",
+        "what do i do",
+        "how do i proceed",
+        "how to proceed",
+    }
+
+
+def is_general_chat_question(question: str) -> bool:
+    normalized = normalize_question_text(question)
+    greetings = {
+        "hi",
+        "hello",
+        "hey",
+        "yo",
+        "how are you",
+        "how r u",
+        "how are u",
+        "how are you doing",
+        "what can you do",
+        "what do you do",
+        "who are you",
+        "who r u",
+        "thanks",
+        "thank you",
+    }
+    return normalized in greetings
+
+
+def normalize_question_text(question: str) -> str:
+    return " ".join(re.sub(r"[?!.]+$", "", question.lower().strip()).split())
+
+
+def normalize_conversation_history(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    history: list[dict] = []
+    for item in value[-10:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip().lower()
+        content = " ".join(str(item.get("content", "")).split())
+        if role not in {"student", "blinky"} or not content:
+            continue
+        history.append({"role": role, "content": content[:1000]})
+    return history
+
+
 def clean_locator_target(value: str) -> str | None:
     cleaned = value.strip(" .,!?:;\"'`()[]")
     cleaned = re.sub(r"\s+(?:in|on|from)\s+the\s+.*$", "", cleaned, flags=re.IGNORECASE)
@@ -331,6 +617,45 @@ def scale_uia_items_to_screenshot(uia_items: list[dict], screenshot) -> list[dic
         }
         for item in uia_items
     ]
+
+
+def log_stage_timing(stage: str, started: float) -> None:
+    LOGGER.info("Timing: %s took %dms", stage, int((time.perf_counter() - started) * 1000))
+
+
+def filter_ignored_overlay_items(items: list[dict], screenshot) -> list[dict]:
+    rects = get_ignored_overlay_rects()
+    if not rects:
+        return items
+
+    sx = screenshot.width / screenshot.screen_width
+    sy = screenshot.height / screenshot.screen_height
+    scaled_rects = [
+        {
+            "x": rect["x"] * sx,
+            "y": rect["y"] * sy,
+            "width": rect["width"] * sx,
+            "height": rect["height"] * sy,
+        }
+        for rect in rects
+    ]
+    filtered = [item for item in items if not _item_center_in_any_rect(item, scaled_rects)]
+    removed = len(items) - len(filtered)
+    if removed:
+        LOGGER.info("Filtered %d OCR items inside ignored overlay windows", removed)
+    return filtered
+
+
+def _item_center_in_any_rect(item: dict, rects: list[dict]) -> bool:
+    cx = float(item.get("x") or 0) + float(item.get("width") or 0) / 2
+    cy = float(item.get("y") or 0) + float(item.get("height") or 0) / 2
+    return any(
+        cx >= rect["x"] and
+        cy >= rect["y"] and
+        cx <= rect["x"] + rect["width"] and
+        cy <= rect["y"] + rect["height"]
+        for rect in rects
+    )
 
 
 
@@ -417,10 +742,11 @@ def main() -> None:
         progress = payload.get("progress")
         if not isinstance(progress, dict):
             progress = {}
+        conversation_history = normalize_conversation_history(payload.get("conversation_history"))
         if not question:
             raise ValueError("Question is required.")
 
-        result = run(question, previous_question, progress)
+        result = run(question, previous_question, progress, conversation_history)
         print(json.dumps(result, ensure_ascii=True))
     except Exception as exc:
         LOGGER.exception("Worker failed")

@@ -7,9 +7,10 @@ from unittest.mock import patch
 from ai.groq_client import _validate_response as validate_groq_response
 from ai.ollama_client import _validate_response as validate_ollama_response
 from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
-from main import extract_locator_target, run
+from main import extract_locator_target, resolve_locator_fast_path, run, should_force_screen_context
 from utils.matching import attach_matches
-from utils.matching import find_best_match
+from utils.matching import find_best_match, find_best_match_with_score
+from utils.uia import _element_text, _readable_metadata_text, _uia_item
 
 
 class GuidanceFlowTests(unittest.TestCase):
@@ -55,6 +56,15 @@ class GuidanceFlowTests(unittest.TestCase):
         self.assertIn("greet", prompt_lower)
         self.assertIn("do not explain", prompt_lower)
 
+    def test_chat_prompt_includes_recent_conversation_history(self) -> None:
+        prompt = build_chat_prompt(
+            "what did I ask before?",
+            [{"role": "student", "content": "I asked about Java loops."}],
+        )
+
+        self.assertIn("Recent conversation", prompt)
+        self.assertIn("Java loops", prompt)
+
     def test_general_chat_uses_chat_answer_not_classifier_reasoning(self) -> None:
         responses = iter(
             [
@@ -74,6 +84,15 @@ class GuidanceFlowTests(unittest.TestCase):
 
         self.assertEqual(result["summary"], "Hey! I'm doing well and ready to help.")
         self.assertEqual(result["steps"], [])
+
+    def test_screen_context_heuristic_keeps_general_chat_off_screen(self) -> None:
+        self.assertFalse(should_force_screen_context("how are you?"))
+        self.assertFalse(should_force_screen_context("what can you do?"))
+
+    def test_screen_context_heuristic_forces_screen_for_app_guidance(self) -> None:
+        self.assertTrue(should_force_screen_context("where is settings?"))
+        self.assertTrue(should_force_screen_context("how to install code runner extension"))
+        self.assertTrue(should_force_screen_context("what next?", "install code runner extension"))
 
     def test_screen_prompt_uses_active_app_workflow_without_app_switching(self) -> None:
         prompt = build_prompt(
@@ -123,6 +142,84 @@ class GuidanceFlowTests(unittest.TestCase):
         self.assertIn("completed_targets", prompt)
         self.assertIn("do not repeat or highlight completed targets", prompt_lower)
         self.assertIn("start with the next not-yet-completed step", prompt_lower)
+
+    def test_screen_prompt_gives_unlabeled_icon_controls_matchable_labels(self) -> None:
+        prompt = build_prompt(
+            question="where is the voice input button?",
+            active_app={"title": "Chat", "process": "chat.exe", "supported": True},
+            ocr_items=[
+                {
+                    "text": "",
+                    "x": 1200,
+                    "y": 980,
+                    "width": 44,
+                    "height": 44,
+                    "source": "uia",
+                    "control_type": "Button",
+                }
+            ],
+        )
+
+        self.assertIn('"Visible Button 1" (1200,980,44,44,Button)', prompt)
+        self.assertIn("For unlabeled icon-only controls", prompt)
+
+    def test_screen_prompt_keeps_interactive_controls_after_many_text_items(self) -> None:
+        text_items = [
+            {
+                "text": f"Lesson text {index}",
+                "x": 100,
+                "y": index * 20,
+                "width": 200,
+                "height": 18,
+                "source": "ocr",
+                "control_type": "Text",
+            }
+            for index in range(60)
+        ]
+        prompt = build_prompt(
+            question="where is the voice input button?",
+            active_app={"title": "Chat", "process": "chat.exe", "supported": True},
+            ocr_items=[
+                *text_items,
+                {
+                    "text": "",
+                    "x": 1200,
+                    "y": 980,
+                    "width": 44,
+                    "height": 44,
+                    "source": "uia",
+                    "control_type": "Button",
+                },
+            ],
+        )
+
+        self.assertIn('"Visible Button 1" (1200,980,44,44,Button)', prompt)
+
+    def test_attach_matches_can_target_synthetic_unlabeled_control_label(self) -> None:
+        steps = [
+            {
+                "step": 1,
+                "instruction": "Click the visible voice input button.",
+                "target_text": "Visible Button 1",
+            }
+        ]
+        items = [
+            {
+                "text": "",
+                "ai_label": "Visible Button 1",
+                "x": 1200,
+                "y": 980,
+                "width": 44,
+                "height": 44,
+                "source": "uia",
+                "control_type": "Button",
+            }
+        ]
+
+        matched_step = attach_matches(steps, items)[0]
+
+        self.assertIsNotNone(matched_step["match"])
+        self.assertEqual(matched_step["match"]["ai_label"], "Visible Button 1")
 
     def test_screen_prompt_prefers_visible_search_when_requested_item_is_missing(self) -> None:
         prompt = build_prompt(
@@ -203,6 +300,59 @@ class GuidanceFlowTests(unittest.TestCase):
 
         self.assertIsNotNone(match)
         self.assertEqual(match["text"], "Extensions")
+
+    def test_matching_can_use_generic_accessibility_id_text(self) -> None:
+        items = [
+            {
+                "text": "new chat button",
+                "x": 18,
+                "y": 90,
+                "width": 32,
+                "height": 32,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Button",
+                "automation_id": "new-chat-button",
+            }
+        ]
+
+        match = find_best_match("new chat", items, "Locate the new chat control.")
+
+        self.assertIsNotNone(match)
+        self.assertEqual(match["automation_id"], "new-chat-button")
+
+    def test_uia_metadata_ids_are_readable_for_matching(self) -> None:
+        self.assertEqual(_readable_metadata_text("new-chat-button"), "new chat button")
+        self.assertEqual(_readable_metadata_text("newChatButton"), "new Chat Button")
+
+    def test_uia_does_not_use_metadata_for_unlabeled_containers(self) -> None:
+        class ElementInfo:
+            name = ""
+            help_text = ""
+            automation_id = "chatgpt-logo"
+
+        class Element:
+            element_info = ElementInfo()
+
+            def window_text(self) -> str:
+                return ""
+
+        self.assertEqual(_element_text(Element(), "Pane"), "")
+
+    def test_uia_items_do_not_claim_fake_confidence(self) -> None:
+        item = _uia_item(
+            text="Share",
+            x=10,
+            y=20,
+            width=30,
+            height=40,
+            source="uia",
+            control_type="Button",
+            automation_id="share-button",
+        )
+
+        self.assertNotIn("confidence", item)
+        self.assertEqual(item["source"], "uia")
 
     def test_matching_prefers_instruction_target_when_ai_target_text_disagrees(self) -> None:
         items = [
@@ -437,13 +587,322 @@ class GuidanceFlowTests(unittest.TestCase):
             patch("main.get_active_window", return_value={"title": "VS Code", "process": "code.exe"}),
             patch("main.get_visible_ui_text", return_value=items),
             patch("main.extract_visible_text", return_value=[]),
-            patch("main.ask_text_model", return_value={"needs_screen": True, "is_continuation": False}),
-            patch("main.ask_model", return_value={"summary": "No settings button is visible.", "steps": []}),
+            patch("main.ask_text_model", side_effect=AssertionError("preflight AI should be skipped")),
+            patch("main.ask_model", return_value={"summary": "No app settings are visible.", "steps": []}),
         ):
             result = run("where is settings?")
 
         self.assertNotEqual(result["provider"], "local")
         self.assertEqual(result["steps"], [])
+
+    def test_locator_question_uses_ocr_without_ai_when_uia_misses(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1728,
+            height=1080,
+            screen_width=2560,
+            screen_height=1600,
+        )
+        ocr_items = [
+            {
+                "text": "Search or start new chat",
+                "x": 80,
+                "y": 120,
+                "width": 240,
+                "height": 28,
+                "confidence": 0.95,
+                "source": "ocr",
+            }
+        ]
+
+        with (
+            patch("main.capture_screen", return_value=screenshot),
+            patch("utils.window.get_target_window_element", return_value=None),
+            patch("main.get_active_window", return_value={"title": "WhatsApp", "process": "WhatsApp.exe"}),
+            patch("main.get_visible_ui_text", return_value=[]),
+            patch("main.extract_visible_text", return_value=ocr_items),
+            patch("main.ask_text_model", side_effect=AssertionError("preflight AI should be skipped")),
+            patch("main.ask_model", side_effect=AssertionError("guidance AI should be skipped")),
+        ):
+            result = run("where is search?")
+
+        self.assertEqual(result["provider"], "local")
+        self.assertEqual(result["steps"][0]["match"]["text"], "Search or start new chat")
+
+    def test_matcher_returns_confidence_diagnostics(self) -> None:
+        items = [
+            {
+                "text": "Underline",
+                "x": 120,
+                "y": 80,
+                "width": 30,
+                "height": 30,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Button",
+            }
+        ]
+
+        result = find_best_match_with_score("underline", items, "Locate the underline control.")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["item"]["text"], "Underline")
+        self.assertGreaterEqual(result["score"], 1.0)
+        self.assertEqual(result["text_similarity"], 1.0)
+        self.assertTrue(result["is_exact_text"])
+        self.assertEqual(result["source"], "uia")
+        self.assertEqual(result["control_type"], "button")
+        self.assertEqual(result["candidate_count"], 1)
+
+    def test_locator_keeps_exact_visible_text_local(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1728,
+            height=1080,
+            screen_width=2560,
+            screen_height=1600,
+        )
+        items = [
+            {
+                "text": "lol",
+                "x": 500,
+                "y": 500,
+                "width": 30,
+                "height": 20,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Text",
+            }
+        ]
+
+        with (
+            patch("main.get_active_window", return_value={"title": "OneNote", "process": "onenote.exe"}),
+            patch("main.get_visible_ui_text", return_value=items),
+            patch("main.extract_visible_text", side_effect=AssertionError("OCR should be skipped")),
+        ):
+            result = resolve_locator_fast_path("where is lol?", screenshot, None, [], 0.0)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["provider"], "local")
+        self.assertEqual(result["steps"][0]["match"]["text"], "lol")
+
+    def test_locator_defers_weak_control_match_to_ai(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1728,
+            height=1080,
+            screen_width=2560,
+            screen_height=1600,
+        )
+        items = [
+            {
+                "text": "Customize Layout...",
+                "x": 1482,
+                "y": 6,
+                "width": 38,
+                "height": 30,
+                "confidence": 0.7,
+                "source": "uia",
+                "control_type": "Button",
+            }
+        ]
+
+        with (
+            patch("main.get_active_window", return_value={"title": "VS Code", "process": "code.exe"}),
+            patch("main.get_visible_ui_text", return_value=items),
+            patch("main.extract_visible_text", return_value=[]),
+        ):
+            result = resolve_locator_fast_path("where is settings button?", screenshot, None, [], 0.0)
+
+        self.assertIsNone(result)
+
+    def test_locator_defers_ambiguous_control_match_to_ai(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1728,
+            height=1080,
+            screen_width=2560,
+            screen_height=1600,
+        )
+        items = [
+            {
+                "text": "Search",
+                "x": 10,
+                "y": 100,
+                "width": 40,
+                "height": 40,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Button",
+            },
+            {
+                "text": "Search",
+                "x": 500,
+                "y": 500,
+                "width": 180,
+                "height": 30,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Edit",
+            },
+        ]
+
+        with (
+            patch("main.get_active_window", return_value={"title": "App", "process": "app.exe"}),
+            patch("main.get_visible_ui_text", return_value=items),
+            patch("main.extract_visible_text", return_value=[]),
+        ):
+            result = resolve_locator_fast_path("where is search button?", screenshot, None, [], 0.0)
+
+        self.assertIsNone(result)
+
+    def test_locator_accepts_duplicate_exact_control_matches(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1728,
+            height=1080,
+            screen_width=2560,
+            screen_height=1600,
+        )
+        items = [
+            {
+                "text": "New chat",
+                "x": 20,
+                "y": 90,
+                "width": 44,
+                "height": 44,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Button",
+            },
+            {
+                "text": "New chat",
+                "x": 22,
+                "y": 92,
+                "width": 40,
+                "height": 40,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Button",
+            },
+        ]
+
+        with (
+            patch("main.get_active_window", return_value={"title": "ChatGPT", "process": "chatgpt.exe"}),
+            patch("main.get_visible_ui_text", return_value=items),
+            patch("main.extract_visible_text", side_effect=AssertionError("OCR should be skipped")),
+        ):
+            result = resolve_locator_fast_path("where is the new chat button?", screenshot, None, [], 0.0)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["provider"], "local")
+        self.assertEqual(result["steps"][0]["match"]["text"], "New chat")
+
+    def test_locator_ai_fallback_skips_preflight(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1728,
+            height=1080,
+            screen_width=2560,
+            screen_height=1600,
+        )
+        weak_items = [
+            {
+                "text": "Customize Layout...",
+                "x": 1482,
+                "y": 6,
+                "width": 38,
+                "height": 30,
+                "confidence": 0.7,
+                "source": "uia",
+                "control_type": "Button",
+            }
+        ]
+        ai_response = {
+            "summary": "AI found it.",
+            "steps": [{"step": 1, "instruction": "Click the Settings button.", "target_text": "Settings"}],
+        }
+
+        with (
+            patch("main.capture_screen", return_value=screenshot),
+            patch("utils.window.get_target_window_element", return_value=None),
+            patch("main.get_active_window", return_value={"title": "App", "process": "app.exe"}),
+            patch("main.get_visible_ui_text", return_value=weak_items),
+            patch("main.extract_visible_text", return_value=[]),
+            patch("main.ask_text_model", side_effect=AssertionError("preflight AI should be skipped")),
+            patch("main.ask_model", return_value=ai_response),
+        ):
+            result = run("where is settings button?")
+
+        self.assertEqual(result["summary"], "AI found it.")
+        self.assertFalse(any("Preflight classification failed" in warning for warning in result["warnings"]))
+
+    def test_locator_does_not_accept_single_letter_partial_for_long_search_bar_query(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1728,
+            height=1080,
+            screen_width=2560,
+            screen_height=1600,
+        )
+        items = [
+            {
+                "text": "S",
+                "x": 20,
+                "y": 100,
+                "width": 20,
+                "height": 20,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Text",
+            }
+        ]
+
+        with (
+            patch("main.get_active_window", return_value={"title": "ChatGPT", "process": "chatgpt.exe"}),
+            patch("main.get_visible_ui_text", return_value=items),
+            patch("main.extract_visible_text", return_value=[]),
+        ):
+            result = resolve_locator_fast_path(
+                "where is search bar for chatgpt to search and give it input?",
+                screenshot,
+                None,
+                [],
+                0.0,
+            )
+
+        self.assertIsNone(result)
+
+    def test_locator_defers_icon_only_control_without_moving_mouse(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1728,
+            height=1080,
+            screen_width=2560,
+            screen_height=1600,
+        )
+        icon_items = [
+            {
+                "text": "",
+                "x": 1200,
+                "y": 980,
+                "width": 44,
+                "height": 44,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Button",
+            }
+        ]
+
+        with (
+            patch("main.get_active_window", return_value={"title": "ChatGPT", "process": "chatgpt.exe"}),
+            patch("main.get_visible_ui_text", return_value=icon_items),
+            patch("main.extract_visible_text", return_value=[]),
+            patch("main.ask_model", side_effect=AssertionError("direct fast path helper should not call AI")),
+        ):
+            result = resolve_locator_fast_path("where is dictate?", screenshot, None, [], 0.0)
+
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

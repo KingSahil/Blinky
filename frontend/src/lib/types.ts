@@ -43,6 +43,11 @@ export interface TutorProgress {
   completed_instructions: string[];
 }
 
+export interface TutorConversationMessage {
+  role: 'student' | 'blinky';
+  content: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'student' | 'blinky';

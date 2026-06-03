@@ -16,6 +16,7 @@ struct TutorRequest {
     question: String,
     previous_question: Option<String>,
     progress: Option<serde_json::Value>,
+    conversation_history: Option<serde_json::Value>,
 }
 
 #[cfg(target_os = "windows")]
@@ -52,6 +53,7 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
         &request.question,
         request.previous_question.as_deref(),
         request.progress.as_ref(),
+        request.conversation_history.as_ref(),
         command.clone(),
         overlay.clone(),
     );
@@ -230,6 +232,7 @@ fn run_python_worker(
     question: &str,
     previous_question: Option<&str>,
     progress: Option<&serde_json::Value>,
+    conversation_history: Option<&serde_json::Value>,
     command_window: Option<WebviewWindow>,
     overlay_window: Option<WebviewWindow>,
 ) -> Result<String, String> {
@@ -253,6 +256,7 @@ fn run_python_worker(
         "question": question,
         "previous_question": previous_question,
         "progress": progress.unwrap_or(&serde_json::Value::Null),
+        "conversation_history": conversation_history.unwrap_or(&serde_json::Value::Null),
     });
 
     if let Some(mut stdin) = child.stdin.take() {

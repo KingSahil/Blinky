@@ -2,16 +2,24 @@ from __future__ import annotations
 
 import json
 
-def build_preflight_prompt(question: str, previous_question: str | None = None) -> str:
+def build_preflight_prompt(
+    question: str,
+    previous_question: str | None = None,
+    conversation_history: list[dict] | None = None,
+) -> str:
     previous_context_str = ""
     if previous_question:
         previous_context_str = f"\nPrevious active goal/task: {previous_question}\n"
+    history_context_str = _format_conversation_history(conversation_history)
+    if history_context_str:
+        history_context_str = f"\nRecent conversation:\n{history_context_str}\n"
 
     return f"""
 You are Blinky, an AI desktop tutor.
 
 Classify the student's request before any screen capture happens.
 {previous_context_str}
+{history_context_str}
 Student request:
 {question}
 
@@ -56,9 +64,14 @@ or:
 """.strip()
 
 
-def build_chat_prompt(question: str) -> str:
+def build_chat_prompt(question: str, conversation_history: list[dict] | None = None) -> str:
+    history_context_str = _format_conversation_history(conversation_history)
+    if history_context_str:
+        history_context_str = f"\nRecent conversation:\n{history_context_str}\n"
+
     return f"""
 You are Blinky, a warm AI desktop tutor for students.
+{history_context_str}
 
 The student says:
 {question}
@@ -88,6 +101,7 @@ def build_prompt(
     ocr_items: list[dict],
     progress: dict | None = None,
     latest_update: str | None = None,
+    conversation_history: list[dict] | None = None,
 ) -> str:
     # Filter out any OCR items that belong to Blinky itself (the host tutor app)
     # to prevent Blinky from referencing or recommending clicks inside its own UI.
@@ -111,8 +125,10 @@ def build_prompt(
         filtered_items.append(item)
 
     compact_items_lines = []
-    for item in filtered_items[:45]:
-        text_escaped = str(item.get("text", "")).replace('"', '\\"')
+    unlabeled_counts: dict[str, int] = {}
+    for item in _prompt_visible_items(filtered_items):
+        display_text = _prompt_item_text(item, unlabeled_counts)
+        text_escaped = display_text.replace('"', '\\"')
         x = item.get("x", 0)
         y = item.get("y", 0)
         w = item.get("width", 0)
@@ -129,6 +145,9 @@ def build_prompt(
     student_query_context = f"The student asks: {question}"
     if latest_update:
         student_query_context = f"The student's active goal/task is: {question}\nLatest student follow-up/comment: {latest_update}"
+    history_context_str = _format_conversation_history(conversation_history)
+    if history_context_str:
+        student_query_context = f"{student_query_context}\n\nRecent conversation:\n{history_context_str}"
 
     return f"""
 You are Blinky, a free offline AI desktop tutor for students.
@@ -152,6 +171,7 @@ Rules:
 - Stay in the active app unless the student explicitly asks to switch apps or open a different app. Do not switch to another app, browser, search engine, or website to complete a workflow that belongs inside the active app.
 - For install/add/search/configure workflows, use the active app's built-in UI (such as its extension, add-on, plugin, marketplace, settings, or package panel) when that workflow belongs to the active app.
 - For target_text in steps, ONLY reference visible UI elements from the OCR items. If a step's target is not currently visible, keep the step but set "target_text": "" so it is shown as guidance without a highlight.
+- For unlabeled icon-only controls shown as labels like "Visible Button 1" or "Visible Image 1", use the screenshot to decide what the icon is, then set target_text to that exact visible label so Blinky can highlight it. These labels are generic handles for visible controls, not app-specific knowledge.
 - ALWAYS ignore Blinky's own floating window. Blinky is the tutor app itself (labeled "Blinky app" in the header). NEVER suggest actions, clicks, or typing inside Blinky itself, unless the student explicitly asks to open or configure Blinky's own settings!
 - NEVER invent buttons, menus, commands, tabs, or labels.
 - Use exact visible text names in target_text only for controls that are currently visible and should be highlighted now.
@@ -202,3 +222,60 @@ def _string_list(progress: dict | None, key: str) -> list[str]:
     if not isinstance(values, list):
         return []
     return [str(value).strip() for value in values if str(value).strip()]
+
+
+def _format_conversation_history(conversation_history: list[dict] | None) -> str:
+    if not isinstance(conversation_history, list):
+        return ""
+    lines: list[str] = []
+    for item in conversation_history[-8:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip().lower()
+        content = " ".join(str(item.get("content", "")).split())
+        if role not in {"student", "blinky"} or not content:
+            continue
+        lines.append(f"{role}: {content[:500]}")
+    return "\n".join(lines)
+
+
+def _prompt_item_text(item: dict, unlabeled_counts: dict[str, int]) -> str:
+    text = str(item.get("text", "")).strip()
+    if text:
+        return text
+
+    source = str(item.get("source", "")).lower()
+    control_type = str(item.get("control_type", "")).strip() or "Control"
+    if source != "uia" or control_type.lower() not in {"button", "image", "hyperlink", "tabitem", "menuitem"}:
+        return ""
+
+    count_key = control_type.lower()
+    unlabeled_counts[count_key] = unlabeled_counts.get(count_key, 0) + 1
+    label = f"Visible {control_type} {unlabeled_counts[count_key]}"
+    item["ai_label"] = label
+    return label
+
+
+def _prompt_visible_items(items: list[dict]) -> list[dict]:
+    primary = items[:45]
+    selected_ids = {id(item) for item in primary}
+    controls = [
+        item for item in items
+        if id(item) not in selected_ids and _is_interactive_prompt_control(item)
+    ]
+    return [*primary, *controls[:35]]
+
+
+def _is_interactive_prompt_control(item: dict) -> bool:
+    if str(item.get("source", "")).lower() != "uia":
+        return False
+    return str(item.get("control_type", "")).lower() in {
+        "button",
+        "image",
+        "hyperlink",
+        "tabitem",
+        "menuitem",
+        "edit",
+        "textbox",
+        "combobox",
+    }

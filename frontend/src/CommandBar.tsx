@@ -13,7 +13,7 @@ import {
 } from './lib/guidance';
 import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow } from './lib/tauri';
 import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvamErrorMessage } from './lib/tts';
-import type { TutorProgress } from './lib/types';
+import type { TutorConversationMessage, TutorProgress } from './lib/types';
 
 interface TargetClickedPayload {
   step?: number;
@@ -105,6 +105,7 @@ export function CommandBar() {
   const completedInstructionsRef = useRef<string[]>([]);
   const currentGuideStepsRef = useRef<any[]>([]);
   const workflowStartedWithReadbackRef = useRef(false);
+  const conversationHistoryRef = useRef<TutorConversationMessage[]>([]);
 
   const stopSpeaking = () => {
     if (currentAudioRef.current) {
@@ -295,9 +296,11 @@ export function CommandBar() {
       setSteps([]);
       setShowGuideCompletionSummary(false);
       lastQueryRef.current = '';
+      conversationHistoryRef.current = [];
     }
 
     const previousQuestion = lastQueryRef.current || undefined;
+    const conversationHistory = conversationHistoryRef.current.slice(-8);
 
     setIsRunning(true);
     setStatus('Thinking...');
@@ -308,7 +311,7 @@ export function CommandBar() {
     
     const currentWindow = getCurrentWindow();
     try {
-      const result = await runTutor(queryText, previousQuestion, currentProgress());
+      const result = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory);
       const isContinuation = !!result.is_continuation;
 
       if (!isContinuation) {
@@ -335,6 +338,14 @@ export function CommandBar() {
       }
       await currentWindow.setFocus();
       setStatus(result.summary);
+      const newHistoryEntries: TutorConversationMessage[] = [
+        { role: 'student', content: queryText },
+        { role: 'blinky', content: result.summary },
+      ];
+      conversationHistoryRef.current = [
+        ...conversationHistoryRef.current,
+        ...newHistoryEntries,
+      ].slice(-10);
       setShowGuideCompletionSummary(hasCompletedProgress && currentGuideSteps.length === 0 && Boolean(result.summary));
       setSteps((previousSteps) => mergeGuideHistory(previousSteps, currentGuideSteps, currentProgress()));
       setQuestion('');
@@ -813,13 +824,16 @@ export function CommandBar() {
               {steps.length > 0 && (
                 <div className="command-steps-panel">
                   <h3>Action Guide</h3>
-                  <ul className="steps">
+                  <ul className={`steps ${steps.length === 1 ? 'steps-single' : ''}`}>
                     {steps.map((step, idx) => (
                       <li
-                        className={idx === steps.length - 1 ? 'guide-step-current' : 'guide-step-completed'}
+                        className={[
+                          idx === steps.length - 1 ? 'guide-step-current' : 'guide-step-completed',
+                          steps.length === 1 ? 'guide-step-single' : '',
+                        ].filter(Boolean).join(' ')}
                         key={`${step.step || idx}-${step.instruction}-${step.target_text}`}
                       >
-                        <span>{idx + 1}</span>
+                        {steps.length > 1 && <span>{idx + 1}</span>}
                         <div>
                           <p>{step.instruction}</p>
                         </div>

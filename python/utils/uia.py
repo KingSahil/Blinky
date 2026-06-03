@@ -5,7 +5,7 @@ from utils.logging import get_logger
 LOGGER = get_logger("blinky.uia")
 
 
-def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict]:
+def get_visible_ui_text(window=None, target_pid: int | None = None, include_unlabeled: bool = False) -> list[dict]:
     """Read visible UI Automation text from the active window.
 
     *window* — optional pre-resolved pywinauto element (skips Z-order scan).
@@ -70,8 +70,8 @@ def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict
             except Exception:
                 continue
 
-            text = _element_text(element)
-            if not text:
+            text = _element_text(element, ctype)
+            if not text and not (include_unlabeled and ctype in {"Button", "Image", "Hyperlink"}):
                 continue
 
             try:
@@ -93,16 +93,16 @@ def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict
                 continue
 
             items.append(
-                {
-                    "text": text,
-                    "x": x,
-                    "y": y,
-                    "width": width,
-                    "height": height,
-                    "confidence": 0.98,
-                    "source": "uia",
-                    "control_type": ctype,
-                }
+                _uia_item(
+                    text=text,
+                    x=x,
+                    y=y,
+                    width=width,
+                    height=height,
+                    source="uia",
+                    control_type=ctype,
+                    automation_id=_element_metadata(element, "automation_id"),
+                )
             )
 
         # Capture Blinky's own settings button in its floating window header!
@@ -120,7 +120,7 @@ def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict
                         try:
                             if el.element_info.control_type not in {"Button", "Image", "Pane"}:
                                 continue
-                            text = _element_text(el)
+                            text = _element_text(el, el.element_info.control_type)
                             if not text or "settings" not in text.lower():
                                 continue
                             if not el.is_visible():
@@ -132,16 +132,16 @@ def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict
                                 continue
                             x = int(rect.left)
                             y = int(rect.top)
-                            items.append({
-                                "text": text,
-                                "x": x,
-                                "y": y,
-                                "width": width,
-                                "height": height,
-                                "confidence": 0.98,
-                                "source": "blinky",
-                                "control_type": el.element_info.control_type,
-                            })
+                            items.append(_uia_item(
+                                text=text,
+                                x=x,
+                                y=y,
+                                width=width,
+                                height=height,
+                                source="blinky",
+                                control_type=el.element_info.control_type,
+                                automation_id=_element_metadata(el, "automation_id"),
+                            ))
                             LOGGER.info("UIA: Captured Blinky control element '%s' at (%d, %d)", text, x, y)
                         except Exception:
                             continue
@@ -169,7 +169,7 @@ def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict
         return []
 
 
-def _element_text(element) -> str:
+def _element_text(element, control_type: str = "") -> str:
     try:
         name = element.window_text() or element.element_info.name or ""
         help_text = ""
@@ -177,11 +177,55 @@ def _element_text(element) -> str:
             help_text = element.element_info.help_text or ""
         except Exception:
             pass
+        automation_id = _element_metadata(element, "automation_id")
         # Prefer help_text (tooltip/accessible description) when available.
         text = help_text if help_text.strip() else name
+        if not str(text).strip() and control_type in {"Button", "MenuItem", "TabItem", "TreeItem", "Hyperlink", "Edit", "Image"}:
+            text = automation_id
     except Exception:
         return ""
-    return " ".join(str(text).strip().split())
+    return _readable_metadata_text(str(text))
+
+
+def _uia_item(
+    *,
+    text: str,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    source: str,
+    control_type: str,
+    automation_id: str = "",
+) -> dict:
+    item = {
+        "text": text,
+        "x": x,
+        "y": y,
+        "width": width,
+        "height": height,
+        "source": source,
+        "control_type": control_type,
+    }
+    if automation_id:
+        item["automation_id"] = automation_id
+    return item
+
+
+def _element_metadata(element, field: str) -> str:
+    try:
+        value = getattr(element.element_info, field, "") or ""
+    except Exception:
+        return ""
+    return str(value).strip()
+
+
+def _readable_metadata_text(value: str) -> str:
+    import re
+
+    text = re.sub(r"[_\-]+", " ", value)
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
+    return " ".join(text.strip().split())
 
 
 def _dedupe(items: list[dict]) -> list[dict]:

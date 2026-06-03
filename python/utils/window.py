@@ -24,6 +24,14 @@ SUPPORTED_PROCESSES = {
     "antigravity-ide",
 }
 
+IGNORED_OVERLAY_PROCESSES = {
+    "snippingtool.exe",
+}
+
+IGNORED_OVERLAY_TITLE_HINTS = {
+    "recording toolbar",
+}
+
 
 def is_process_supported(process_name: str) -> bool:
     name_lower = process_name.lower()
@@ -34,6 +42,44 @@ def is_process_supported(process_name: str) -> bool:
     if base_name in SUPPORTED_PROCESSES:
         return True
     return False
+
+
+def is_ignored_overlay_window(process_name: str, title: str) -> bool:
+    name_lower = process_name.lower().strip()
+    title_lower = title.lower().strip()
+    return name_lower in IGNORED_OVERLAY_PROCESSES or any(hint in title_lower for hint in IGNORED_OVERLAY_TITLE_HINTS)
+
+
+def get_ignored_overlay_rects() -> list[dict[str, int]]:
+    if os.name != "nt":
+        return []
+
+    rects: list[dict[str, int]] = []
+    try:
+        from pywinauto import Desktop
+
+        for w in Desktop(backend="uia").windows():
+            try:
+                if not w.is_visible():
+                    continue
+                title = w.window_text()
+                process_name = psutil.Process(w.process_id()).name().lower()
+                if not is_ignored_overlay_window(process_name, title):
+                    continue
+                rect = w.rectangle()
+                rects.append(
+                    {
+                        "x": int(rect.left),
+                        "y": int(rect.top),
+                        "width": max(1, int(rect.width())),
+                        "height": max(1, int(rect.height())),
+                    }
+                )
+            except Exception:
+                continue
+    except Exception as exc:
+        LOGGER.warning("Failed to scan ignored overlay windows: %s", exc)
+    return rects
 
 
 def get_target_window_element(window=None, target_pid: int | None = None):
@@ -72,6 +118,10 @@ def get_target_window_element(window=None, target_pid: int | None = None):
                 # Exclude Blinky, Tauri, or prompt bars
                 if "blinky" in process_name or "tauri" in process_name or "blinky" in title.lower():
                     continue
+
+                if is_ignored_overlay_window(process_name, title):
+                    LOGGER.info("Ignoring overlay window while selecting target: %s (%s)", title, process_name)
+                    continue
                 
                 # Exclude Windows system shells and background services
                 if process_name in {
@@ -100,7 +150,13 @@ def get_target_window_element(window=None, target_pid: int | None = None):
     # Fallback to standard get_active() if custom resolution fails
     try:
         from pywinauto import Desktop
-        return Desktop(backend="uia").get_active()
+        active = Desktop(backend="uia").get_active()
+        process_name = psutil.Process(active.process_id()).name().lower()
+        title = active.window_text()
+        if is_ignored_overlay_window(process_name, title):
+            LOGGER.info("Ignoring active overlay fallback window: %s (%s)", title, process_name)
+            return None
+        return active
     except Exception:
         return None
 

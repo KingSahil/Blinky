@@ -13,6 +13,11 @@ def attach_matches(steps: list[dict], ocr_items: list[dict]) -> list[dict]:
 
 
 def find_best_match(target: str, ocr_items: list[dict], instruction: str = "") -> dict | None:
+    result = find_best_match_with_score(target, ocr_items, instruction)
+    return result["item"] if result else None
+
+
+def find_best_match_with_score(target: str, ocr_items: list[dict], instruction: str = "") -> dict | None:
     # Fallback: if target is empty, extract candidate targets from the instruction
     if not target.strip() and instruction.strip():
         candidates = _instruction_target_candidates(instruction)
@@ -43,6 +48,8 @@ def _find_best_match_core(target: str, ocr_items: list[dict], instruction: str =
 
     best_item = None
     best_score = 0.0
+    best_text_similarity = 0.0
+    candidates = []
     instruction_lower = instruction.lower()
     wants_text_input = _wants_text_input(instruction_lower)
 
@@ -61,21 +68,28 @@ def _find_best_match_core(target: str, ocr_items: list[dict], instruction: str =
         if top_right_close:
             from utils.logging import get_logger
             get_logger("blinky.matching").info("Semantic Close Button Match: matched '%s' at (%d, %d)", top_right_close.get("text"), top_right_close["x"], top_right_close["y"])
-            return top_right_close
+            return _match_diagnostics(
+                top_right_close,
+                score=1.0,
+                text_similarity=1.0,
+                target_norm=target_norm,
+                candidate_count=1,
+            )
 
     for item in ocr_items:
-        text_norm = _normalize(str(item.get("text", "")))
+        text_norm = _normalize(_matchable_text(item))
         if not text_norm:
             continue
 
         if text_norm == target_norm:
             score = 1.0
-        elif target_norm in text_norm or text_norm in target_norm:
+        elif _is_safe_partial_match(target_norm, text_norm):
             score = 0.86
         else:
             score = SequenceMatcher(None, target_norm, text_norm).ratio()
             if score < 0.65:
                 continue
+        text_similarity = score
 
         confidence = float(item.get("confidence") or 0)
         source = str(item.get("source", "")).lower()
@@ -134,18 +148,97 @@ def _find_best_match_core(target: str, ocr_items: list[dict], instruction: str =
         exact_match_bonus = 0.30 if text_norm == target_norm else 0.0
 
         weighted = score * 0.94 + confidence * 0.06 + source_bonus + size_bonus + context_bonus + source_penalty + interactive_bonus + exact_match_bonus
+        candidates.append((item, weighted, text_similarity, text_norm))
         if weighted > best_score:
             best_score = weighted
             best_item = item
+            best_text_similarity = text_similarity
 
     if best_score < 0.52:
         return None
 
-    return best_item
+    return _match_diagnostics(
+        best_item,
+        score=best_score,
+        text_similarity=best_text_similarity,
+        target_norm=target_norm,
+        candidate_count=len(candidates),
+        ambiguous_candidate_count=_ambiguous_candidate_count(best_item, best_score, candidates),
+    )
+
+
+def _match_diagnostics(
+    item: dict,
+    *,
+    score: float,
+    text_similarity: float,
+    target_norm: str,
+    candidate_count: int,
+    ambiguous_candidate_count: int = 1,
+) -> dict:
+    text_norm = _normalize(_matchable_text(item))
+    return {
+        "item": item,
+        "score": score,
+        "text_similarity": text_similarity,
+        "is_exact_text": text_norm == target_norm,
+        "source": str(item.get("source", "")).lower(),
+        "control_type": str(item.get("control_type", "")).lower(),
+        "candidate_count": candidate_count,
+        "ambiguous_candidate_count": ambiguous_candidate_count,
+    }
+
+
+def _ambiguous_candidate_count(best_item: dict, best_score: float, candidates: list[tuple[dict, float, float, str]]) -> int:
+    if not best_item:
+        return 0
+    best_text = _normalize(_matchable_text(best_item))
+    count = 1
+    for item, weighted, _text_similarity, text_norm in candidates:
+        if item is best_item:
+            continue
+        if _same_visual_target(best_item, item):
+            continue
+        if text_norm == best_text or weighted >= best_score - 0.10:
+            count += 1
+    return count
+
+
+def _matchable_text(item: dict) -> str:
+    text = str(item.get("text", "")).strip()
+    if text:
+        return text
+    return str(item.get("ai_label", "")).strip()
+
+
+def _same_visual_target(a: dict, b: dict) -> bool:
+    ax = float(a.get("x") or 0)
+    ay = float(a.get("y") or 0)
+    aw = float(a.get("width") or 0)
+    ah = float(a.get("height") or 0)
+    bx = float(b.get("x") or 0)
+    by = float(b.get("y") or 0)
+    bw = float(b.get("width") or 0)
+    bh = float(b.get("height") or 0)
+    if aw <= 0 or ah <= 0 or bw <= 0 or bh <= 0:
+        return abs((ax + aw / 2) - (bx + bw / 2)) <= 8 and abs((ay + ah / 2) - (by + bh / 2)) <= 8
+    overlap_x = max(0.0, min(ax + aw, bx + bw) - max(ax, bx))
+    overlap_y = max(0.0, min(ay + ah, by + bh) - max(ay, by))
+    overlap_area = overlap_x * overlap_y
+    smaller_area = min(aw * ah, bw * bh)
+    return smaller_area > 0 and overlap_area / smaller_area >= 0.70
 
 
 def _normalize(value: str) -> str:
     return " ".join(value.lower().strip().split())
+
+
+def _is_safe_partial_match(target_norm: str, text_norm: str) -> bool:
+    if target_norm in text_norm:
+        return len(target_norm) >= 3
+    if text_norm in target_norm:
+        return len(text_norm) >= 3
+    return False
 
 
 def _wants_text_input(instruction_lower: str) -> bool:
