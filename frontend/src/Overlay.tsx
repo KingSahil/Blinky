@@ -1,4 +1,5 @@
 import { emit, listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useEffect, useMemo, useState } from 'react';
 import { getHighlightSteps } from './lib/guidance';
 import type { TutorResult } from './lib/types';
@@ -17,6 +18,7 @@ interface HighlightFrame {
   top: number;
   width: number;
   height: number;
+  compact: boolean;
   step: number;
   targetText: string;
   instruction: string;
@@ -25,6 +27,28 @@ interface HighlightFrame {
 export function Overlay() {
   const [result, setResult] = useState<TutorResult | null>(null);
   const [dismissedKeys, setDismissedKeys] = useState<Set<string>>(() => new Set());
+  const [yOffset, setYOffset] = useState(0);
+
+  useEffect(() => {
+    const isLinux = !navigator.userAgent.includes('Windows') && !navigator.userAgent.includes('Macintosh');
+    if (isLinux) {
+      const fetchOffset = async () => {
+        try {
+          const appWindow = getCurrentWindow();
+          const position = await appWindow.outerPosition();
+          const scaleFactor = await appWindow.scaleFactor();
+          if (scaleFactor > 0) {
+            setYOffset(position.y / scaleFactor);
+          }
+        } catch (err) {
+          console.error('Failed to resolve dynamic y-offset:', err);
+        }
+      };
+      void fetchOffset();
+      const timer = window.setTimeout(fetchOffset, 200);
+      return () => window.clearTimeout(timer);
+    }
+  }, []);
 
   useEffect(() => {
     const unlisten = listen<TutorResult>('blinky://guidance', (event) => {
@@ -37,10 +61,16 @@ export function Overlay() {
     };
   }, []);
 
-  const screenshotWidth = result?.screenshot?.width || window.innerWidth;
-  const screenshotHeight = result?.screenshot?.height || window.innerHeight;
-  const scaleX = window.innerWidth / screenshotWidth;
-  const scaleY = window.innerHeight / screenshotHeight;
+  const isWindows = navigator.userAgent.includes('Windows');
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+  const pixelRatio = isWindows ? window.devicePixelRatio || 1 : 1;
+  const screenshotWidth = result?.screenshot?.width || viewportWidth * pixelRatio;
+  const screenshotHeight = result?.screenshot?.height || viewportHeight * pixelRatio;
+  const physicalScaleX = (viewportWidth * pixelRatio) / screenshotWidth;
+  const physicalScaleY = (viewportHeight * pixelRatio) / screenshotHeight;
+  const scaleX = physicalScaleX / pixelRatio;
+  const scaleY = physicalScaleY / pixelRatio;
   const frames = useMemo<HighlightFrame[]>(() => {
     return (
       getHighlightSteps(result?.steps || [])
@@ -54,29 +84,44 @@ export function Overlay() {
           const scaledH = match.height * scaleY;
           
           const textStr = match.text ? String(match.text).trim() : '';
+          const controlType = String(match.control_type || '').toLowerCase();
           const isIcon = 
             match.control_type === 'Image' ||
             (scaledW <= 40 && scaledH <= 40) ||
             (scaledW <= 48 && scaledH <= 48 && textStr.length <= 1);
+          const isWindowsSidebarIcon =
+            isWindows &&
+            ['button', 'image', 'tabitem', 'menuitem', 'custom'].includes(controlType) &&
+            match.x * scaleX <= 8 &&
+            scaledW >= 24 &&
+            scaledW <= 70 &&
+            scaledH >= 24 &&
+            scaledH <= 80;
+          const useIconFrame = isIcon || isWindowsSidebarIcon;
 
-          const paddingX = isIcon ? 4 : 20; 
-          const paddingY = isIcon ? 4 : 8;  
+          const paddingX = useIconFrame ? 4 : 20; 
+          const paddingY = useIconFrame ? 4 : 8;  
 
           const rawLeft = Math.round(match.x * scaleX) - Math.round(paddingX / 2);
-          const rawTop = Math.round(match.y * scaleY) - Math.round(paddingY / 2);
+          let rawTop = Math.round(match.y * scaleY) - Math.round(paddingY / 2);
+
+          const isLinux = !navigator.userAgent.includes('Windows') && !navigator.userAgent.includes('Macintosh');
+          if (isLinux) {
+            rawTop -= yOffset;
+          }
           const rawWidth = Math.max(8, Math.round(match.width * scaleX)) + paddingX;
           const rawHeight = Math.max(8, Math.round(match.height * scaleY)) + paddingY;
 
           // Cap to MAX_BOX, keeping the element center fixed
           // EXCEPT for wide elements (like sidebar lists) where we align to the left edge (with a small margin)
           // where the folder icon and text are actually situated!
-          const MAX_BOX_WIDTH = isIcon ? 100 : 140;
-          const MAX_BOX_HEIGHT = isIcon ? 40 : 44;
+          const MAX_BOX_WIDTH = useIconFrame ? 100 : 140;
+          const MAX_BOX_HEIGHT = useIconFrame ? 40 : 44;
 
           // Enforce a minimum size of 36px for all highlights to ensure they are easily visible,
           // particularly for small icons and dots!
           const MIN_BOX_SIZE = 36;
-          const displayHeight = Math.min(Math.max(MIN_BOX_SIZE, rawHeight), MAX_BOX_HEIGHT);
+          let displayHeight = Math.min(Math.max(MIN_BOX_SIZE, rawHeight), MAX_BOX_HEIGHT);
 
           const isInput =
             match.control_type === 'Edit' ||
@@ -86,11 +131,19 @@ export function Overlay() {
           let displayWidth = Math.min(Math.max(MIN_BOX_SIZE, rawWidth), MAX_BOX_WIDTH);
           let displayLeft = rawLeft;
 
-          if (isInput) {
+          if (isWindowsSidebarIcon) {
+            const iconBoxSize = 30;
+            const iconCenterX = rawLeft + Math.min(rawWidth / 2, 24);
+            const iconCenterY = rawTop + rawHeight / 2;
+            displayWidth = iconBoxSize;
+            displayHeight = iconBoxSize;
+            displayLeft = Math.round(iconCenterX - iconBoxSize / 2);
+            rawTop = Math.round(iconCenterY - iconBoxSize / 2 - (rawHeight - displayHeight) / 2);
+          } else if (isInput) {
             // Keep the exact input field width and bounds
             displayWidth = rawWidth;
             displayLeft = rawLeft;
-          } else if (!isIcon && rawWidth > 140) {
+          } else if (!useIconFrame && rawWidth > 140) {
             // Wide elements (likely list/sidebar rows):
             // Fit the width comfortably by estimating character length
             const textLength = match.text ? String(match.text).length : 8;
@@ -105,13 +158,22 @@ export function Overlay() {
             displayLeft = rawLeft + Math.round((rawWidth - displayWidth) / 2);
           }
           const displayTop = rawTop + Math.round((rawHeight - displayHeight) / 2);
+          const clamped = clampFrame(
+            displayLeft,
+            displayTop,
+            displayWidth,
+            displayHeight,
+            viewportWidth,
+            viewportHeight,
+          );
 
           return {
             key,
-            left: displayLeft,
-            top: displayTop,
-            width: displayWidth,
-            height: displayHeight,
+            left: clamped.left,
+            top: clamped.top,
+            width: clamped.width,
+            height: clamped.height,
+            compact: isWindowsSidebarIcon,
             step: step.step,
             targetText: step.target_text,
             instruction: step.instruction,
@@ -119,7 +181,7 @@ export function Overlay() {
         })
         .filter((frame): frame is HighlightFrame => Boolean(frame)) || []
     );
-  }, [result, scaleX, scaleY]);
+  }, [result, scaleX, scaleY, yOffset, viewportWidth, viewportHeight]);
 
   useEffect(() => {
     const unlisten = listen<GlobalClick>('blinky://global-click', (event) => {
@@ -150,7 +212,7 @@ export function Overlay() {
         if (dismissedKeys.has(frame.key)) return null;
         return (
           <div
-            className="target-frame"
+            className={`target-frame ${frame.compact ? 'target-frame-compact' : ''}`}
             key={frame.key}
             style={{
               left: frame.left,
@@ -165,6 +227,22 @@ export function Overlay() {
       })}
     </main>
   );
+}
+
+function clampFrame(left: number, top: number, width: number, height: number, viewportWidth: number, viewportHeight: number) {
+  const frameMargin = 0;
+  const pulseInset = 6;
+  const clampedWidth = Math.min(width, Math.max(8, viewportWidth - pulseInset * 2));
+  const clampedHeight = Math.min(height, Math.max(8, viewportHeight - pulseInset * 2));
+  const maxLeft = Math.max(frameMargin, viewportWidth - clampedWidth - pulseInset);
+  const maxTop = Math.max(frameMargin, viewportHeight - clampedHeight - pulseInset);
+
+  return {
+    left: Math.min(Math.max(frameMargin, left), maxLeft),
+    top: Math.min(Math.max(frameMargin, top), maxTop),
+    width: clampedWidth,
+    height: clampedHeight,
+  };
 }
 
 function containsClick(frame: HighlightFrame, click: GlobalClick, scaleX: number, scaleY: number) {

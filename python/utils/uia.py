@@ -20,6 +20,10 @@ def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict
     as the overlay window and match the screenshot after the scaleX/scaleY
     transform applied in Overlay.tsx.
     """
+    import os
+    if os.name != "nt":
+        return []
+
     try:
         from utils.window import get_target_window_element
 
@@ -145,14 +149,14 @@ def get_visible_ui_text(window=None, target_pid: int | None = None) -> list[dict
         except Exception as exc:
             LOGGER.warning("UIA: failed to scan Blinky window controls: %s", exc)
 
-        # Debug: log sidebar-region elements so we can verify positions
+        # Debug: log sidebar-region elements only when verbose logging is enabled.
         sidebar_items = [i for i in items if i["x"] <= 100]
-        LOGGER.info(
+        LOGGER.debug(
             "UIA: %d sidebar-region elements (x<=100) out of %d total",
             len(sidebar_items), len(items),
         )
         for si in sidebar_items[:15]:
-            LOGGER.info(
+            LOGGER.debug(
                 "UIA sidebar: %-60s  x=%d y=%d w=%d h=%d",
                 repr(si["text"][:55]), si["x"], si["y"], si["width"], si["height"],
             )

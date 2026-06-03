@@ -361,4 +361,67 @@ describe('shouldCompleteStepOnHighlightClick', () => {
       }),
     ).toBe(true);
   });
+
+  test('does not complete locator-only highlight steps', () => {
+    expect(
+      shouldCompleteStepOnHighlightClick({
+        step: 1,
+        instruction: 'Show me where the Extensions button is on the left sidebar.',
+        target_text: 'Extensions',
+        match: {
+          text: 'Extensions',
+          x: 18,
+          y: 170,
+          width: 26,
+          height: 26,
+          confidence: 0.9,
+          control_type: 'Button',
+        },
+      }),
+    ).toBe(false);
+  });
+
+  test('does not complete click steps for locator-only user questions', () => {
+    expect(
+      shouldCompleteStepOnHighlightClick(
+        {
+          step: 1,
+          instruction: 'Click the Extensions icon on the left sidebar.',
+          target_text: 'Extensions',
+          match: {
+            text: 'Extensions',
+            x: 18,
+            y: 170,
+            width: 26,
+            height: 26,
+            confidence: 0.9,
+            control_type: 'Button',
+          },
+        },
+        'where is the extension button',
+      ),
+    ).toBe(false);
+  });
+
+  test('keeps click steps completable for workflow user questions', () => {
+    expect(
+      shouldCompleteStepOnHighlightClick(
+        {
+          step: 1,
+          instruction: 'Click the Extensions icon on the left sidebar.',
+          target_text: 'Extensions',
+          match: {
+            text: 'Extensions',
+            x: 18,
+            y: 170,
+            width: 26,
+            height: 26,
+            confidence: 0.9,
+            control_type: 'Button',
+          },
+        },
+        'how to install code runner extension',
+      ),
+    ).toBe(true);
+  });
 });

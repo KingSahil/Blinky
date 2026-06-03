@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -10,14 +12,7 @@ from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
 from capture.screen import capture_screen
 from ocr.extract import extract_visible_text
 from utils.logging import get_logger
-from utils.matching import attach_matches
-from utils.uia import get_visible_ui_text
-from utils.window import get_active_window
-
-from capture.screen import capture_screen
-from ocr.extract import extract_visible_text
-from utils.logging import get_logger
-from utils.matching import attach_matches
+from utils.matching import attach_matches, find_best_match
 from utils.uia import get_visible_ui_text
 from utils.window import get_active_window
 
@@ -110,6 +105,10 @@ def run(question: str, previous_question: str | None = None, progress: dict | No
     # Print the capture marker to stdout and flush immediately so Rust can restore windows
     print("__BLINKY_CAPTURED__", flush=True)
 
+    locator_result = resolve_locator_fast_path(question, screenshot, target_pid, warnings, started)
+    if locator_result is not None:
+        return locator_result
+
     # 2. Run the preflight classifier
     preflight = classify_request(question, previous_question, warnings)
     
@@ -151,29 +150,19 @@ def run(question: str, previous_question: str | None = None, progress: dict | No
     ocr_items = extract_visible_text(screenshot.path)
     uia_items = get_visible_ui_text(target_pid=target_pid)
 
+    if os.name != "nt":
+        # On Linux (GNOME/Wayland), the system status bar is at the very top (y < 35 in optimized screenshot pixels).
+        # We filter out these elements to prevent accidental matching of system tray clocks, status indicators, or active app labels.
+        ocr_items = [item for item in ocr_items if item.get("y", 0) >= 35]
+        uia_items = [item for item in uia_items if item.get("y", 0) >= 35]
+
     # UIA returns coordinates in screen-absolute space (physical pixel dimensions).
     # The screenshot is scaled down to fit within 1920×1080 (thumbnail).
     # The overlay then scales everything back up by (window.innerWidth / screenshot.width).
     # To make both scales cancel correctly, we must first convert UIA coords
     # from screen space → screenshot space before the overlay sees them.
     if screenshot.screen_width != screenshot.width or screenshot.screen_height != screenshot.height:
-        sx = screenshot.width  / screenshot.screen_width
-        sy = screenshot.height / screenshot.screen_height
-        LOGGER.info(
-            "Scaling UIA coords from screen (%dx%d) → screenshot (%dx%d)  sx=%.4f sy=%.4f",
-            screenshot.screen_width, screenshot.screen_height,
-            screenshot.width, screenshot.height, sx, sy,
-        )
-        scaled: list[dict] = []
-        for item in uia_items:
-            scaled.append({
-                **item,
-                "x":      int(item["x"]      * sx),
-                "y":      int(item["y"]      * sy),
-                "width":  max(1, int(item["width"]  * sx)),
-                "height": max(1, int(item["height"] * sy)),
-            })
-        uia_items = scaled
+        uia_items = scale_uia_items_to_screenshot(uia_items, screenshot)
 
     visible_items = merge_visible_items(ocr_items, uia_items)
 
@@ -243,6 +232,105 @@ def answer_without_screen(question: str) -> dict:
     if not summary:
         raise RuntimeError("The chat model returned an empty reply.")
     return {"summary": summary, "steps": []}
+
+
+def resolve_locator_fast_path(question: str, screenshot, target_pid: int | None, warnings: list[str], started: float) -> dict | None:
+    target = extract_locator_target(question)
+    if not target:
+        return None
+
+    active_app = get_active_window(target_pid=target_pid)
+    uia_items = get_visible_ui_text(target_pid=target_pid)
+    if not uia_items:
+        return None
+
+    if screenshot.screen_width != screenshot.width or screenshot.screen_height != screenshot.height:
+        uia_items = scale_uia_items_to_screenshot(uia_items, screenshot)
+
+    uia_items.sort(key=lambda item: (int(item.get("y", 0) / 10), item.get("x", 0)))
+    match_items = uia_items if "blinky" in question.lower() else [item for item in uia_items if item.get("source") != "blinky"]
+    instruction = f"Locate the {target} control."
+    match = find_best_match(target, match_items, instruction)
+    if not match:
+        return None
+
+    step = {
+        "step": 1,
+        "instruction": f"Here is the {target}.",
+        "target_text": str(match.get("text") or target),
+        "match": match,
+    }
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    LOGGER.info("Locator fast path matched '%s' to '%s'", target, match.get("text"))
+    return {
+        "summary": f"I found the {target} in the active app.",
+        "steps": [step],
+        "active_app": active_app,
+        "ocr": {"count": len(uia_items), "items": uia_items[:80]},
+        "screenshot": {
+            "path": str(screenshot.path),
+            "width": screenshot.width,
+            "height": screenshot.height,
+        },
+        "elapsed_ms": elapsed_ms,
+        "provider": "local",
+        "warnings": warnings,
+        "is_continuation": False,
+    }
+
+
+def extract_locator_target(question: str) -> str | None:
+    text = " ".join(question.strip().split())
+    if not text:
+        return None
+
+    patterns = [
+        r"^where\s+(?:is|are)\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^where\s+can\s+i\s+find\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^where\s+do\s+i\s+find\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^show\s+me\s+where\s+(?:the\s+)?(.+?)\s+(?:is|are)(?:\?|$)",
+        r"^show\s+me\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^point\s+to\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^locate\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^highlight\s+(?:the\s+)?(.+?)(?:\?|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return clean_locator_target(match.group(1))
+    return None
+
+
+def clean_locator_target(value: str) -> str | None:
+    cleaned = value.strip(" .,!?:;\"'`()[]")
+    cleaned = re.sub(r"\s+(?:in|on|from)\s+the\s+.*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+(?:button|icon|tab|menu|control|panel|view|folder)$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip(" .,!?:;\"'`()[]")
+    return cleaned or None
+
+
+def scale_uia_items_to_screenshot(uia_items: list[dict], screenshot) -> list[dict]:
+    sx = screenshot.width / screenshot.screen_width
+    sy = screenshot.height / screenshot.screen_height
+    LOGGER.info(
+        "Scaling UIA coords from screen (%dx%d) -> screenshot (%dx%d)  sx=%.4f sy=%.4f",
+        screenshot.screen_width,
+        screenshot.screen_height,
+        screenshot.width,
+        screenshot.height,
+        sx,
+        sy,
+    )
+    return [
+        {
+            **item,
+            "x": int(item["x"] * sx),
+            "y": int(item["y"] * sy),
+            "width": max(1, int(item["width"] * sx)),
+            "height": max(1, int(item["height"] * sy)),
+        }
+        for item in uia_items
+    ]
 
 
 

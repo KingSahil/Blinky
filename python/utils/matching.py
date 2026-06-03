@@ -15,23 +15,17 @@ def attach_matches(steps: list[dict], ocr_items: list[dict]) -> list[dict]:
 def find_best_match(target: str, ocr_items: list[dict], instruction: str = "") -> dict | None:
     # Fallback: if target is empty, extract candidate targets from the instruction
     if not target.strip() and instruction.strip():
-        # 1. Look for quoted terms first (e.g., click 'Status')
-        candidates = re.findall(r"['\"`]([^'\"`]+)['\"`]", instruction)
-        
-        # 2. Look for capitalized words (excluding common stop words)
-        if not candidates:
-            words = instruction.split()
-            # Skip first word as it's often capitalized simply as the start of the sentence
-            for w in words[1:]:
-                w_clean = w.strip(".,;:!?\"'()[]")
-                if (w_clean and w_clean[0].isupper() and 
-                    w_clean.lower() not in {"the", "a", "an", "and", "or", "to", "in", "on", "at", "by", "for", "with", "about", "option", "button", "item", "tab", "menu", "sidebar"}):
-                    candidates.append(w_clean)
-                    
+        candidates = _instruction_target_candidates(instruction)
         for cand in candidates:
             res = _find_best_match_core(cand, ocr_items, instruction)
             if res:
                 return res
+
+    if _should_prefer_instruction_target(target, instruction):
+        for candidate in _instruction_target_candidates(instruction):
+            match = _find_best_match_core(candidate, ocr_items, instruction)
+            if match:
+                return match
 
     best = None
     for candidate in _target_candidates(target):
@@ -68,45 +62,6 @@ def _find_best_match_core(target: str, ocr_items: list[dict], instruction: str =
             from utils.logging import get_logger
             get_logger("blinky.matching").info("Semantic Close Button Match: matched '%s' at (%d, %d)", top_right_close.get("text"), top_right_close["x"], top_right_close["y"])
             return top_right_close
-
-    # Special active window titlebar layout/settings button fallback:
-    if "settings button left" in target_norm or "layout button" in target_norm or ("settings" in target_norm and "blinky" not in target_norm):
-        top_right_buttons = []
-        for item in ocr_items:
-            # Exclude Blinky's own items by ensuring they are from the UIA active window (source is "uia")
-            if item.get("source") == "uia" and float(item.get("y") or 0) <= 60:
-                if item.get("control_type") == "Button":
-                    top_right_buttons.append(item)
-        
-        # 1. First priority: look for a button whose text contains 'settings' or 'gear'
-        for btn in top_right_buttons:
-            btn_text = str(btn.get("text", "")).lower()
-            if "settings" in btn_text or "gear" in btn_text:
-                from utils.logging import get_logger
-                get_logger("blinky.matching").info("Semantic Settings Button Priority Match: matched '%s' at (%d, %d)", btn.get("text"), btn["x"], btn["y"])
-                return btn
-
-        # 2. Second priority: look for a button whose text contains 'layout' or 'customize'
-        for btn in top_right_buttons:
-            btn_text = str(btn.get("text", "")).lower()
-            if any(k in btn_text for k in {"layout", "customize", "control", "panel"}):
-                from utils.logging import get_logger
-                get_logger("blinky.matching").info("Semantic Layout Button Priority Match: matched '%s' at (%d, %d)", btn.get("text"), btn["x"], btn["y"])
-                return btn
-
-        # 3. Third priority: fall back by index (index 4 is 5th button (Settings), index 3 is 4th button (Layout))
-        top_right_buttons.sort(key=lambda i: float(i.get("x") or 0), reverse=True)
-        if "settings" in target_norm:
-            if len(top_right_buttons) >= 5:
-                layout_btn = top_right_buttons[4]
-                from utils.logging import get_logger
-                get_logger("blinky.matching").info("Semantic Settings Button Index Match: matched '%s' at (%d, %d)", layout_btn.get("text"), layout_btn["x"], layout_btn["y"])
-                return layout_btn
-        if len(top_right_buttons) >= 4:
-            layout_btn = top_right_buttons[3]
-            from utils.logging import get_logger
-            get_logger("blinky.matching").info("Semantic Layout Button Index Match: matched '%s' at (%d, %d)", layout_btn.get("text"), layout_btn["x"], layout_btn["y"])
-            return layout_btn
 
     for item in ocr_items:
         text_norm = _normalize(str(item.get("text", "")))
@@ -217,6 +172,67 @@ def _is_input_control(text_norm: str, control_type: str, automation_id: str) -> 
     return any(hint in searchable_text for hint in {"search", "filter", "find"})
 
 
+def _should_prefer_instruction_target(target: str, instruction: str) -> bool:
+    instruction_norm = _normalize(instruction)
+    target_norm = _normalize(target)
+    if not instruction_norm or not target_norm or _wants_text_input(instruction_norm):
+        return False
+
+    action_hint = any(
+        hint in instruction_norm
+        for hint in {"click", "open", "select", "show", "locate", "point to", "find"}
+    )
+    control_hint = any(
+        hint in instruction_norm
+        for hint in {"icon", "button", "tab", "menu", "sidebar", "activity bar", "panel", "view"}
+    )
+    if not action_hint or not control_hint:
+        return False
+
+    if target_norm in instruction_norm:
+        return False
+    return not any(candidate in instruction_norm for candidate in _target_candidates(target))
+
+
+def _instruction_target_candidates(instruction: str) -> list[str]:
+    candidates = re.findall(r"['\"`]([^'\"`]+)['\"`]", instruction)
+
+    patterns = [
+        r"\b(?:click|open|select|show|locate|find)\s+(?:the\s+)?(.+?)\s+(?:icon|button|tab|menu|panel|view)\b",
+        r"\bpoint\s+to\s+(?:the\s+)?(.+?)\s+(?:icon|button|tab|menu|panel|view)\b",
+    ]
+    for pattern in patterns:
+        for match in re.findall(pattern, instruction, flags=re.IGNORECASE):
+            cleaned = _clean_instruction_candidate(match)
+            if cleaned:
+                candidates.append(cleaned)
+
+    if not candidates:
+        words = instruction.split()
+        # Skip first word as it's often capitalized simply as the start of the sentence.
+        for word in words[1:]:
+            cleaned = _clean_instruction_candidate(word)
+            if cleaned and cleaned[0].isupper() and cleaned.lower() not in _INSTRUCTION_STOP_WORDS:
+                candidates.append(cleaned)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = _normalize(candidate)
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(candidate)
+    return deduped
+
+
+def _clean_instruction_candidate(value: str) -> str:
+    cleaned = value.strip(".,;:!?\"'()[]")
+    cleaned = re.sub(r"\s+on\s+the\s+.*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+in\s+the\s+.*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+from\s+the\s+.*$", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
 def _target_candidates(target: str) -> list[str]:
     normalized = _normalize(target)
     candidates = [normalized] if normalized else []
@@ -239,4 +255,27 @@ def _target_candidates(target: str) -> list[str]:
     if stripped and stripped not in candidates:
         candidates.append(stripped)
     return candidates
+
+
+_INSTRUCTION_STOP_WORDS = {
+    "the",
+    "a",
+    "an",
+    "and",
+    "or",
+    "to",
+    "in",
+    "on",
+    "at",
+    "by",
+    "for",
+    "with",
+    "about",
+    "option",
+    "button",
+    "item",
+    "tab",
+    "menu",
+    "sidebar",
+}
 

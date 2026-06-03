@@ -40,10 +40,14 @@ export function getWorkflowContinuationReadback(startedWithReadback: boolean): b
   return startedWithReadback;
 }
 
-export function shouldCompleteStepOnHighlightClick(step: Pick<TutorStep, 'instruction' | 'target_text' | 'match'>): boolean {
+export function shouldCompleteStepOnHighlightClick(step: Pick<TutorStep, 'instruction' | 'target_text' | 'match'>, originalQuery = ''): boolean {
+  if (isLocatorOnlyText(originalQuery)) return false;
+
   const instruction = normalizeGuideText(step.instruction);
   const targetText = normalizeGuideText(step.target_text);
   const controlType = normalizeGuideText(step.match?.control_type);
+
+  if (isLocatorOnlyText(instruction)) return false;
 
   const wantsTextEntry = [
     'type',
@@ -102,6 +106,20 @@ function isCompletedStep(step: TutorStep, progress: CompletedGuideProgress): boo
 
 function normalizeGuideText(value: string | undefined): string {
   return (value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function isLocatorOnlyText(value: string | undefined): boolean {
+  const text = normalizeGuideText(value);
+  return [
+    'where is',
+    'where are',
+    'show me',
+    'point to',
+    'locate',
+    'highlight',
+    'where can i find',
+    'where do i find',
+  ].some((hint) => text.includes(hint));
 }
 
 function isSameGuideStep(left: TutorStep, right: TutorStep): boolean {

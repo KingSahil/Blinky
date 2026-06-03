@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from ai.groq_client import _validate_response as validate_groq_response
 from ai.ollama_client import _validate_response as validate_ollama_response
 from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
-from main import run
+from main import extract_locator_target, run
 from utils.matching import attach_matches
 from utils.matching import find_best_match
 
@@ -203,6 +204,68 @@ class GuidanceFlowTests(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(match["text"], "Extensions")
 
+    def test_matching_prefers_instruction_target_when_ai_target_text_disagrees(self) -> None:
+        items = [
+            {
+                "text": "Explorer (Ctrl+Shift+E)",
+                "x": 0,
+                "y": 52,
+                "width": 72,
+                "height": 73,
+                "confidence": 0.9,
+                "source": "uia",
+                "control_type": "Button",
+            },
+            {
+                "text": "Extensions (Ctrl+Shift+X) - 2 require restart",
+                "x": 0,
+                "y": 196,
+                "width": 72,
+                "height": 73,
+                "confidence": 0.9,
+                "source": "uia",
+                "control_type": "Button",
+            },
+        ]
+
+        match = find_best_match(
+            "Explorer (Ctrl+Shift+E)",
+            items,
+            "Click the Extensions icon on the left sidebar.",
+        )
+
+        self.assertIsNotNone(match)
+        self.assertIn("Extensions", match["text"])
+
+    def test_locator_settings_does_not_match_customize_layout(self) -> None:
+        items = [
+            {
+                "text": "Customize Layout...",
+                "x": 1482,
+                "y": 6,
+                "width": 38,
+                "height": 30,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Button",
+            },
+            {
+                "text": "Settings",
+                "x": 1615,
+                "y": 384,
+                "width": 38,
+                "height": 38,
+                "confidence": 0.98,
+                "source": "blinky",
+                "control_type": "Button",
+            },
+        ]
+
+        match = find_best_match("settings", items, "Locate the settings control.")
+
+        self.assertIsNotNone(match)
+        self.assertEqual(match["text"], "Settings")
+
     def test_matching_prefers_search_input_over_header_for_type_instruction(self) -> None:
         items = [
             {
@@ -295,6 +358,92 @@ class GuidanceFlowTests(unittest.TestCase):
         self.assertEqual(result["summary"], "Here is the next step to install.")
         self.assertTrue(result["is_continuation"])
         mock_capture.assert_called_once()
+
+    def test_locator_target_extraction_removes_generic_words(self) -> None:
+        self.assertEqual(extract_locator_target("where is the extension button?"), "extension")
+        self.assertEqual(extract_locator_target("show me where the frontend folder is"), "frontend")
+        self.assertIsNone(extract_locator_target("how to install code runner extension"))
+
+    def test_locator_question_uses_local_uia_match_without_ocr_or_ai(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1728,
+            height=1080,
+            screen_width=2560,
+            screen_height=1600,
+        )
+        items = [
+            {
+                "text": "Extensions (Ctrl+Shift+X)",
+                "x": 0,
+                "y": 196,
+                "width": 72,
+                "height": 73,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Button",
+            }
+        ]
+
+        with (
+            patch("main.capture_screen", return_value=screenshot),
+            patch("utils.window.get_target_window_element", return_value=None),
+            patch("main.get_active_window", return_value={"title": "VS Code", "process": "code.exe"}),
+            patch("main.get_visible_ui_text", return_value=items),
+            patch("main.extract_visible_text", side_effect=AssertionError("OCR should be skipped")),
+            patch("main.ask_text_model", side_effect=AssertionError("preflight AI should be skipped")),
+            patch("main.ask_model", side_effect=AssertionError("guidance AI should be skipped")),
+        ):
+            result = run("where is the extension button?")
+
+        self.assertEqual(result["provider"], "local")
+        self.assertEqual(result["steps"][0]["match"]["text"], "Extensions (Ctrl+Shift+X)")
+        self.assertEqual(result["ocr"]["count"], 1)
+
+    def test_locator_question_ignores_blinky_controls_unless_requested(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1728,
+            height=1080,
+            screen_width=2560,
+            screen_height=1600,
+        )
+        items = [
+            {
+                "text": "Customize Layout...",
+                "x": 1482,
+                "y": 6,
+                "width": 38,
+                "height": 30,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Button",
+            },
+            {
+                "text": "Settings",
+                "x": 1615,
+                "y": 384,
+                "width": 38,
+                "height": 38,
+                "confidence": 0.98,
+                "source": "blinky",
+                "control_type": "Button",
+            },
+        ]
+
+        with (
+            patch("main.capture_screen", return_value=screenshot),
+            patch("utils.window.get_target_window_element", return_value=None),
+            patch("main.get_active_window", return_value={"title": "VS Code", "process": "code.exe"}),
+            patch("main.get_visible_ui_text", return_value=items),
+            patch("main.extract_visible_text", return_value=[]),
+            patch("main.ask_text_model", return_value={"needs_screen": True, "is_continuation": False}),
+            patch("main.ask_model", return_value={"summary": "No settings button is visible.", "steps": []}),
+        ):
+            result = run("where is settings?")
+
+        self.assertNotEqual(result["provider"], "local")
+        self.assertEqual(result["steps"], [])
 
 
 if __name__ == "__main__":

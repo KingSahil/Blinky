@@ -1084,19 +1084,35 @@ h3 {
 
 .target-frame {
   position: absolute;
-  border: 2px solid rgba(167, 255, 122, 0.96);
-  border-radius: 10px;
-  box-shadow:
-    0 0 34px rgba(167, 255, 122, 0.48),
-    inset 0 0 18px rgba(167, 255, 122, 0.18);
+  border: 3px solid #a7ff7a;
+  border-radius: 8px;
+  background: transparent !important;
+  box-shadow: none !important;
+  animation: borderPulse 1.8s infinite ease-in-out;
 }
 
 .target-pulse {
   position: absolute;
-  inset: -8px;
-  border: 1px solid rgba(56, 232, 255, 0.8);
-  border-radius: 14px;
+  inset: -6px;
+  border: 1.5px solid rgba(56, 232, 255, 0.9);
+  border-radius: 12px;
+  background: transparent !important;
+  box-shadow: none !important;
   animation: pulse 1.5s ease-out infinite;
+}
+
+.target-frame-compact .target-pulse {
+  inset: -2px;
+  border-radius: 9px;
+}
+
+@keyframes borderPulse {
+  0%, 100% {
+    border-color: #a7ff7a;
+  }
+  50% {
+    border-color: rgba(167, 255, 122, 0.3);
+  }
 }
 
 @keyframes slowPulse {

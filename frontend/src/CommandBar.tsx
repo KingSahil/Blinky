@@ -460,7 +460,7 @@ export function CommandBar() {
           target_text: targetText || '',
           match: null,
         };
-      if (!shouldCompleteStepOnHighlightClick(clickedStep)) {
+      if (!shouldCompleteStepOnHighlightClick(clickedStep, query)) {
         void hideOverlay();
         return;
       }
