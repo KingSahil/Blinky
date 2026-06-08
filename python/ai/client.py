@@ -18,14 +18,15 @@ def ask_model(prompt: str, screenshot_path: Path) -> dict[str, Any]:
     raise RuntimeError("Unsupported BLINKY_AI_PROVIDER. Use 'ollama' or 'groq'.")
 
 
-def ask_text_model(prompt: str) -> dict[str, Any]:
+def ask_text_model(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
     provider = (os.getenv("BLINKY_AI_PROVIDER", "ollama").strip() or "ollama").lower()
     if provider == "groq":
-        return ask_groq_text(prompt)
+        return ask_groq_text(prompt, max_tokens)
     if provider == "ollama":
-        return ask_ollama_text(prompt)
+        return ask_ollama_text(prompt, max_tokens)
 
     raise RuntimeError("Unsupported BLINKY_AI_PROVIDER. Use 'ollama' or 'groq'.")
+
 
 
 def get_provider_label() -> str:

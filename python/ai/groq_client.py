@@ -73,7 +73,7 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
     return _validate_response(_parse_json(content))
 
 
-def ask_groq_text(prompt: str) -> dict[str, Any]:
+def ask_groq_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is required when BLINKY_AI_PROVIDER=groq.")
@@ -96,7 +96,7 @@ def ask_groq_text(prompt: str) -> dict[str, Any]:
             json={
                 "model": model,
                 "temperature": 0.1,
-                "max_tokens": 300,
+                "max_tokens": max_tokens,
                 "response_format": {"type": "json_object"},
                 "messages": [{"role": "user", "content": prompt}],
             },
@@ -111,6 +111,7 @@ def ask_groq_text(prompt: str) -> dict[str, Any]:
         raise RuntimeError(_format_groq_error(response))
     body = response.json()
     return _parse_json(_extract_content(body))
+
 
 
 def _active_groq_model() -> str:

@@ -1,0 +1,42 @@
+{
+  "lookup_youtube_stats": {
+    "name": "lookup_youtube_stats",
+    "description": "Lookup subscriber counts, views, and growth from a YouTube channel by handle or name",
+    "filepath": "python/tools/lookup_youtube_stats.py",
+    "arguments": [
+      "channel_name"
+    ]
+  },
+  "find_crypto_price": {
+    "name": "find_crypto_price",
+    "description": "Find the current price of a specified cryptocurrency on CoinMarketCap.",
+    "filepath": "python/tools/find_crypto_price.py",
+    "arguments": [
+      "crypto_name"
+    ]
+  },
+  "lookup_wikipedia_entity": {
+    "name": "lookup_wikipedia_entity",
+    "description": "Searches Wikipedia for a given entity (person, concept, product, etc.) and returns the search results and page information.",
+    "filepath": "python/tools/lookup_wikipedia_entity.py",
+    "arguments": [
+      "entity_name"
+    ],
+    "status": "generalized",
+    "verification_args": {
+      "entity_name": "Quantum Computing"
+    }
+  },
+  "search_product_info": {
+    "name": "search_product_info",
+    "description": "Performs a general search on Google for a specified product or item and extracts structured information from the search results.",
+    "filepath": "python/tools/search_product_info.py",
+    "arguments": [
+      "product_query"
+    ],
+    "status": "generalized",
+    "verification_args": {
+      "product_query": "best noise cancelling headphones"
+    }
+  }
+}

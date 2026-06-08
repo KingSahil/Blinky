@@ -55,7 +55,7 @@ def ask_ollama(prompt: str) -> dict[str, Any]:
     )
 
 
-def ask_ollama_text(prompt: str) -> dict[str, Any]:
+def ask_ollama_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
     ollama_url = os.getenv("BLINKY_OLLAMA_URL", DEFAULT_OLLAMA_URL).strip() or DEFAULT_OLLAMA_URL
     model = os.getenv("BLINKY_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL).strip() or DEFAULT_OLLAMA_MODEL
     timeout_seconds = _ollama_timeout_seconds()
@@ -70,7 +70,7 @@ def ask_ollama_text(prompt: str) -> dict[str, Any]:
                 "format": "json",
                 "options": {
                     "temperature": 0.1,
-                    "num_predict": 300,
+                    "num_predict": max_tokens,
                 },
             },
             timeout=timeout_seconds,
@@ -80,6 +80,7 @@ def ask_ollama_text(prompt: str) -> dict[str, Any]:
     response.raise_for_status()
     body = response.json()
     return _parse_json(body.get("response", ""))
+
 
 
 def _ollama_timeout_seconds() -> int:
