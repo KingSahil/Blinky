@@ -107,14 +107,30 @@ async def execute_script(filepath, args_json, timeout=30):
 def stream_synthesis_llm(query, tool_output, callback):
     provider = (os.getenv("BLINKY_AI_PROVIDER", "ollama").strip() or "ollama").lower()
     
+    # Format and prune the raw tool output to prevent context window overflow
+    if isinstance(tool_output, dict) and "products" in tool_output:
+        products = tool_output["products"][:12]  # Limit to top 12 relevant items
+        formatted_data = ""
+        for idx, p in enumerate(products):
+            formatted_data += f"{idx+1}. Product Name: {p.get('name')}\n   Price: {p.get('price')}\n   Link: {p.get('link')}\n   Source: {p.get('source')}\n\n"
+    else:
+        # Fallback to general JSON format if not a products dictionary
+        formatted_data = json.dumps(tool_output, indent=2)[:4000]
+
     prompt = f"""
 You are Blinky, a helpful AI assistant.
 The user asked: "{query}"
 
-We executed a web browser automation search and gathered this raw data:
-{json.dumps(tool_output, indent=2)}
+We gathered this product data from e-commerce sites:
+{formatted_data}
 
-Synthesize a professional, user-friendly final response answering the user's request. Avoid mentioning system internal details (like "Playwright script output"). Give direct details.
+Instructions:
+1. List ONLY the actual specific products from the data above that match the user's query.
+2. For each product, you MUST output it in this exact format:
+   * **[Product Name]** - [Price] - [[Link to Product]]([Exact Link URL])
+3. Do NOT invent or list other product categories (like keyboards, headsets, controllers) if they are not in the data above.
+4. Rely strictly on the gathered e-commerce data. If a product is not listed above, do not recommend it.
+5. Keep your tone direct and friendly. Do NOT use placeholders like example.com. Use the exact URLs from the data.
 """
 
     if provider == "groq":
@@ -273,25 +289,154 @@ async def execute_single_tool_call(tool_call, registry, query, semaphore, reques
         
     return success, result_data, error_details
 
-async def handle_request(line):
-    try:
-        req = json.loads(line)
-    except Exception as e:
-        send_response("unknown", "error", error={"code": "PARSE_ERROR", "message": "Invalid line JSON", "details": str(e)})
-        return
+def post_process_synthesis(text: str, tool_output) -> str:
+    if not isinstance(tool_output, dict) or "products" not in tool_output:
+        return text
+        
+    products = tool_output["products"][:12]
+    
+    # Replace example.com links
+    for idx, p in enumerate(products):
+        real_link = p.get("link", "")
+        real_name = p.get("name", "")
+        if not real_link:
+            continue
+            
+        patterns = [
+            rf'https?://example\.com/product/?{idx+1}\b',
+            rf'example\.com/product/?{idx+1}\b',
+        ]
+        for pat in patterns:
+            text = re.sub(pat, real_link, text)
+            
+        text = text.replace(f"Product {idx+1}", real_name)
+        text = text.replace(f"product {idx+1}", real_name)
 
-    request_id = req.get("requestId", "unknown")
-    query = req.get("query", "").strip()
+    # General placeholders replacement
+    amazon_products = [p for p in products if "amazon" in p.get("source", "").lower()]
+    flipkart_products = [p for p in products if "flipkart" in p.get("source", "").lower()]
+    
+    if amazon_products and "[Amazon Link]" in text:
+        text = text.replace("[Amazon Link]", f"[Amazon Link]({amazon_products[0].get('link')})")
+    if flipkart_products and "[Flipkart Link]" in text:
+        text = text.replace("[Flipkart Link]", f"[Flipkart Link]({flipkart_products[0].get('link')})")
 
-    if not query:
-        send_response(request_id, "error", error={"code": "INVALID_QUERY", "message": "Query text cannot be empty", "details": ""})
-        return
+    # Generic title mapping based on link presence
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        for p in products:
+            real_link = p.get("link", "")
+            real_name = p.get("name", "")
+            if real_link and real_link in line:
+                generic_titles = ["Cosmic Byte Gaming Mouse", "Cosmic Byte mouse", "gaming mouse", "Gaming Mouse"]
+                for gt in generic_titles:
+                    if gt in line and real_name not in line:
+                        lines[i] = line.replace(gt, f"**{real_name}**", 1)
+                        break
+    text = "\n".join(lines)
 
-    send_response(request_id, "processing", data={"message": "Analyzing query and routing..."})
+    # Clean up any lines that contain generic N/A placeholders or empty headers
+    lines = text.split("\n")
+    cleaned_lines = []
+    for i, line in enumerate(lines):
+        # If it ends with a colon, check if it's an empty header
+        if line.strip().endswith(":"):
+            has_items = False
+            for j in range(i + 1, len(lines)):
+                next_line = lines[j].strip()
+                if not next_line:
+                    continue
+                if next_line.endswith(":"):
+                    break
+                if next_line.startswith(("-", "*", "1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.", "0.")):
+                    if "Price (N/A)" in next_line or "[Link]" in next_line or "N/A" in next_line:
+                        continue
+                    has_items = True
+                    break
+                break
+            
+            lower_line = line.lower()
+            if not has_items and any(w in lower_line for w in ["available", "recommend", "mice", "mouse", "list", "result"]):
+                continue
+
+        if "Price (N/A)" in line or "[Link]" in line:
+            continue
+        cleaned_lines.append(line)
+    text = "\n".join(cleaned_lines).strip()
+
+    # If the LLM failed to output the links, construct a verified Markdown table and append it
+    has_real_links = any(p.get("link", "") in text for p in products)
+    if not has_real_links:
+        table_md = "\n### 🛒 Verified Product Recommendations\n\n"
+        table_md += "| Product Name | Price | Link | Source |\n"
+        table_md += "| :--- | :--- | :--- | :--- |\n"
+        
+        valid_count = 0
+        for p in products:
+            name = p.get("name", "")
+            price = p.get("price", "")
+            link = p.get("link", "")
+            source = p.get("source", "")
+            if name and price and link:
+                table_md += f"| {name} | {price} | [View Product]({link}) | {source} |\n"
+                valid_count += 1
+                if valid_count >= 8:
+                    break
+        table_md += "\n"
+        text = text + "\n" + table_md
+
+    return text
+
+async def run_query_pipeline(
+    query: str,
+    web_search_enabled: bool,
+    conversation_history: list = None,
+    on_status = None,
+    on_chunk = None
+) -> str:
+    new_tool_generated = False
+    new_tool_name = None
+    new_arguments = None
+    raw_result = None
+
+    if web_search_enabled:
+        from wil.pipeline import WILPipeline
+        pipeline = WILPipeline()
+        def on_wil_status(phase: str, data: dict):
+            if on_status:
+                on_status({
+                    "status": f"wil_{phase}",
+                    "message": data.get("message", f"WIL Stage: {phase}")
+                })
+        try:
+            wil_res = await pipeline.run(
+                query=query,
+                conversation_history=conversation_history,
+                on_status=on_wil_status,
+                on_chunk=on_chunk
+            )
+            from utils.sufficiency_checker import check_sufficiency
+            is_sufficient, reason = check_sufficiency(query, wil_res["synthesized_response"])
+            if is_sufficient:
+                return wil_res["synthesized_response"]
+            else:
+                if on_status:
+                    on_status({
+                        "status": "wil_retrying",
+                        "message": f"Web search results insufficient ({reason}). Retrying with toolkits..."
+                    })
+        except Exception as e:
+            if on_status:
+                on_status({
+                    "status": "wil_error",
+                    "message": f"WIL search encountered error: {str(e)}. Retrying with toolkits..."
+                })
+
+    # Toolkit & Code Gen Fallback/Direct
+    if on_status:
+        on_status({"message": "Analyzing query and routing..."})
 
     registry = await load_registry_async()
-    
-    # 1. Routing Phase
     tools_summary = ""
     for name, details in registry.items():
         tools_summary += f"- Name: {name}\n  Description: {details.get('description', '')}\n  Arguments: {details.get('arguments', [])}\n"
@@ -313,27 +458,6 @@ Return a JSON object containing:
 3. "confidence": integer between 0 and 100 representing your confidence level in the match or mismatch
 4. "reasoning": string explaining the reasoning for your decision
 
-Example matched response with multiple calls:
-{{
-  "match": true,
-  "tool_calls": [
-    {{ "tool_name": "lookup_youtube_stats", "arguments": {{ "channel_name": "@MrBeast" }} }},
-    {{ "tool_name": "lookup_youtube_stats", "arguments": {{ "channel_name": "@PewDiePie" }} }}
-  ],
-  "confidence": 95,
-  "reasoning": "The query asks for subscriber stats for MrBeast and PewDiePie, matching two calls to lookup_youtube_stats.",
-  "arguments": {{}}
-}}
-
-Example unmatched response:
-{{
-  "match": false,
-  "tool_calls": [],
-  "confidence": 15,
-  "reasoning": "The query asks for the weather, which none of the existing tools can resolve.",
-  "arguments": {{}}
-}}
-
 Respond ONLY with valid JSON.
 """
     query_sig = get_query_signature(query)
@@ -346,14 +470,12 @@ Respond ONLY with valid JSON.
             route_decision = parse_routing_decision(raw_decision)
             ROUTE_CACHE[query_sig] = route_decision
         except Exception as e:
-            send_response(request_id, "error", error={"code": "LLM_ROUTING_ERROR", "message": "AI routing failed", "details": str(e)})
-            return
+            raise RuntimeError(f"AI routing failed: {str(e)}")
 
     match = route_decision.get("match", False)
     confidence = int(route_decision.get("confidence", 0))
     reasoning = route_decision.get("reasoning", "")
     
-    # Backward compatibility and extraction
     tool_calls = route_decision.get("tool_calls", [])
     if not tool_calls and route_decision.get("tool_name"):
         tool_calls = [{
@@ -361,37 +483,55 @@ Respond ONLY with valid JSON.
             "arguments": route_decision.get("arguments", {})
         }]
 
-    # Routing confidence threshold check (>= 80)
     routing_confidence_low = False
     if match and confidence < 80:
         match = False
         routing_confidence_low = True
 
-    raw_result = None
     combined_result = None
-    new_tool_generated = False
-    new_tool_name = None
-    new_arguments = None
-    
     successful_results = []
     failed_details = []
 
     if match and tool_calls:
-        # Enforce rate-limit and resources: max 3 concurrent executions
         tool_calls = tool_calls[:3]
-        
-        send_response(request_id, "processing", data={
-            "message": f"Routing to {len(tool_calls)} tool call(s) (Confidence: {confidence}%)...",
-            "confidence": confidence,
-            "reasoning": reasoning
-        })
+        if on_status:
+            on_status({
+                "message": f"Routing to {len(tool_calls)} tool call(s) (Confidence: {confidence}%)...",
+                "confidence": confidence,
+                "reasoning": reasoning
+            })
         
         semaphore = asyncio.Semaphore(3)
-        tasks = [
-            execute_single_tool_call(tc, registry, query, semaphore, request_id)
-            for tc in tool_calls
-        ]
         
+        async def exec_tc(tc):
+            t_name = tc.get("tool_name", "")
+            t_args = tc.get("arguments", {})
+            if t_name not in registry:
+                return False, None, f"Tool '{t_name}' not found in registry"
+            t_details = registry[t_name]
+            filepath = Path(__file__).parent / "tools" / f"{t_name}.py"
+            reg_args = t_details.get("arguments", [])
+            mapped_args = {}
+            for arg in reg_args:
+                if arg in t_args:
+                    mapped_args[arg] = t_args[arg]
+                elif len(reg_args) == 1:
+                    val = list(t_args.values())[0] if t_args else query
+                    mapped_args[arg] = val
+                else:
+                    mapped_args[arg] = query
+            if on_status:
+                on_status({
+                    "status": "executing_tool",
+                    "tool_name": t_name,
+                    "arguments": mapped_args,
+                    "message": f"Executing tool '{t_name}' with arguments {mapped_args}..."
+                })
+            async with semaphore:
+                success, res_data, err_details = await execute_script(filepath, mapped_args)
+            return success, res_data, err_details
+
+        tasks = [exec_tc(tc) for tc in tool_calls]
         execution_results = await asyncio.gather(*tasks, return_exceptions=True)
         
         for idx, res in enumerate(execution_results):
@@ -404,35 +544,31 @@ Respond ONLY with valid JSON.
             else:
                 failed_details.append(f"Tool call {idx} failed: {error_details}")
 
-        # Combine results
         if len(successful_results) == 1:
             combined_result = successful_results[0]
         elif len(successful_results) > 1:
-            combined_result = {
-                "combined_tool_outputs": successful_results
-            }
+            combined_result = {"combined_tool_outputs": successful_results}
 
-    # Evaluate sufficiency using sufficiency_checker
     is_sufficient = False
     sufficiency_reason = "No successful tool execution"
     if combined_result:
         from utils.sufficiency_checker import check_sufficiency
-        is_sufficient, sufficiency_reason = check_sufficiency(query, combined_result)
+        is_sufficient, reason = check_sufficiency(query, combined_result)
+        sufficiency_reason = reason
 
     if is_sufficient:
         raw_result = combined_result
     else:
-        # 2. Code Generation Phase (Fallback / Unmatched)
         if routing_confidence_low:
             msg = f"No confident match (Confidence: {confidence}%). Generating custom script..."
         else:
             msg = f"Tool execution insufficient or unmatched ({sufficiency_reason}). Generating custom script..."
-            
-        send_response(request_id, "processing", data={
-            "message": msg,
-            "confidence": confidence,
-            "reasoning": reasoning
-        })
+        if on_status:
+            on_status({
+                "message": msg,
+                "confidence": confidence,
+                "reasoning": reasoning
+            })
 
         generator_prompt = f"""
 You are Blinky's Playwright code generator.
@@ -447,7 +583,6 @@ Reason for insufficiency: {sufficiency_reason}
 
 Please write the custom script targeting specifically the missing details or correcting the insufficiency.
 """
-
         generator_prompt += """
 Standards:
 - Use Playwright's async API.
@@ -502,10 +637,8 @@ CODE:
                 resp.raise_for_status()
                 gen_text = resp.json().get("response", "")
         except Exception as e:
-            send_response(request_id, "error", error={"code": "LLM_GENERATION_ERROR", "message": "Failed to generate automation code", "details": str(e)})
-            return
+            raise RuntimeError(f"Failed to generate automation code: {str(e)}")
 
-        # Parse output fields using regex (robust parsing)
         new_tool_name_match = re.search(r"TOOL_NAME:\s*([a-zA-Z0-9_-]+)", gen_text, re.IGNORECASE)
         if new_tool_name_match:
             new_tool_name = new_tool_name_match.group(1).strip()
@@ -541,42 +674,25 @@ CODE:
                         break
                 if not new_code and all_blocks:
                     new_code = all_blocks[0]
-                
-                if not new_code:
-                    if "import playwright" in gen_text or "async def " in gen_text:
-                        start_idx = gen_text.find("import ")
-                        if start_idx == -1:
-                            start_idx = gen_text.find("async def ")
-                        if start_idx != -1:
-                            new_code = gen_text[start_idx:]
 
         if not new_code or not new_code.strip():
-            send_response(request_id, "error", error={"code": "GENERATION_INVALID", "message": "AI generated empty tool or code block", "details": gen_text})
-            return
+            raise RuntimeError("AI generated empty tool or code block")
 
         new_code = new_code.strip()
-        
-        # Unique staging filename: temp_candidate_{request_id}.py
-        temp_tool_name = f"temp_candidate_{request_id}"
+        import uuid
+        temp_tool_name = f"temp_candidate_{uuid.uuid4().hex}"
         temp_tool_filepath = Path(__file__).parent / "tools" / f"{temp_tool_name}.py"
 
-        # Diagnostic logging of generated code
-        from utils.logging import get_logger
-        logger = get_logger("blinky.router")
-        logger.info(f"Generated custom code for request {request_id}:\n{new_code}")
-
-        # Static Code Audit
         is_safe, audit_msg = audit_code(new_code)
         if not is_safe:
-            logger.warning(f"Safety audit rejected request {request_id}. Reason: {audit_msg}")
-            send_response(request_id, "error", error={"code": "SAFETY_AUDIT_REJECTED", "message": "Static safety audit rejected the generated script", "details": audit_msg})
-            return
+            raise RuntimeError(f"Static safety audit rejected: {audit_msg}")
 
         temp_tool_filepath.parent.mkdir(parents=True, exist_ok=True)
         with open(temp_tool_filepath, "w") as f:
             f.write(new_code)
 
-        send_response(request_id, "processing", data={"message": "Verifying custom automation execution..."})
+        if on_status:
+            on_status({"message": "Verifying custom automation execution..."})
 
         test_args = {}
         for arg in new_arguments:
@@ -585,7 +701,6 @@ CODE:
         success, result_data, error_details = await execute_script(temp_tool_filepath, test_args)
 
         if success:
-            # Move staging file to final file
             new_tool_filepath = Path(__file__).parent / "tools" / f"{new_tool_name}.py"
             try:
                 if new_tool_filepath.exists():
@@ -607,7 +722,6 @@ CODE:
             }
             await save_registry_async(registry)
             
-            # Combine partial tool results and custom tool results
             if combined_result:
                 raw_result = {
                     "partial_tool_results": combined_result,
@@ -623,30 +737,21 @@ CODE:
                 except Exception:
                     pass
             
-            # If fallback tool also failed and we have partial tools result, use them, otherwise return error
             if combined_result:
                 raw_result = combined_result
             else:
-                send_response(request_id, "error", error={"code": "VERIFICATION_FAILED", "message": "Generated tool failed verification run", "details": error_details})
-                return
+                raise RuntimeError(f"Generated tool failed verification: {error_details}")
 
-    # 3. Real-time Text Streaming Synthesis Phase
     if raw_result:
-        send_response(request_id, "processing", data={"message": "", "is_chunk": True})
-        
         full_synthesis = []
         def chunk_callback(chunk):
             full_synthesis.append(chunk)
-            send_response(request_id, "processing", data={"message": chunk, "is_chunk": True})
+            if on_chunk:
+                on_chunk(chunk)
 
-        # Run block in threadpool executor to avoid blocking asyncio loop
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, stream_synthesis_llm, query, raw_result, chunk_callback)
-
-        final_text = "".join(full_synthesis)
-        send_response(request_id, "success", data={"response": final_text})
-
-        # Launch background tool generalization loop after success response has been sent to client
+        
         if new_tool_generated:
             from utils.generalizer import generalize_tool
             asyncio.create_task(generalize_tool(
@@ -656,6 +761,48 @@ CODE:
                 REGISTRY_PATH,
                 audit_code
             ))
+        synthesized_text = "".join(full_synthesis)
+        return post_process_synthesis(synthesized_text, raw_result)
+    
+    return "No search results could be synthesized."
+
+
+async def handle_request(line):
+    try:
+        req = json.loads(line)
+    except Exception as e:
+        send_response("unknown", "error", error={"code": "PARSE_ERROR", "message": "Invalid line JSON", "details": str(e)})
+        return
+
+    request_id = req.get("requestId", "unknown")
+    query = req.get("query", "").strip()
+
+    if not query:
+        send_response(request_id, "error", error={"code": "INVALID_QUERY", "message": "Query text cannot be empty", "details": ""})
+        return
+
+    web_search_enabled = bool(req.get("webSearchEnabled", False) or req.get("web_search_enabled", False))
+
+    def on_status(status_or_data, message=None):
+        if isinstance(status_or_data, dict):
+            send_response(request_id, "processing", data=status_or_data)
+        else:
+            send_response(request_id, "processing", data={"status": status_or_data, "message": message})
+        
+    def on_chunk(chunk):
+        send_response(request_id, "processing", data={"message": chunk, "is_chunk": True})
+
+    try:
+        final_response = await run_query_pipeline(
+            query=query,
+            web_search_enabled=web_search_enabled,
+            conversation_history=req.get("conversation_history"),
+            on_status=on_status,
+            on_chunk=on_chunk
+        )
+        send_response(request_id, "success", data={"response": final_response})
+    except Exception as e:
+        send_response(request_id, "error", error={"code": "PIPELINE_ERROR", "message": str(e), "details": ""})
 
 
 async def main():

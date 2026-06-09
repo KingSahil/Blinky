@@ -90,9 +90,43 @@ def run(
     previous_question: str | None = None,
     progress: dict | None = None,
     conversation_history: list[dict] | None = None,
+    web_search_enabled: bool = False,
 ) -> dict:
     started = time.perf_counter()
     warnings: list[str] = []
+
+    if web_search_enabled:
+        import asyncio
+        from agent_router import run_query_pipeline
+        def on_status(status_or_data, message=None):
+            if isinstance(status_or_data, dict):
+                phase = status_or_data.get("status", "processing")
+                msg = status_or_data.get("message", "")
+            else:
+                phase = status_or_data
+                msg = message
+            print(json.dumps({"type": "status", "phase": phase, "message": msg}), flush=True)
+            LOGGER.info(f"WIL Pipeline Status [{phase}]: {msg}")
+        def on_chunk(chunk):
+            print(json.dumps({"type": "chunk", "message": chunk}), flush=True)
+        final_answer = asyncio.run(run_query_pipeline(
+            query=question,
+            web_search_enabled=True,
+            conversation_history=conversation_history,
+            on_status=on_status,
+            on_chunk=on_chunk
+        ))
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return {
+            "summary": final_answer,
+            "steps": [],
+            "active_app": {"title": "", "process": "", "supported": False},
+            "ocr": {"count": 0, "items": []},
+            "elapsed_ms": elapsed_ms,
+            "provider": get_provider_label(),
+            "warnings": warnings,
+            "is_continuation": False,
+        }
 
     locator_target = extract_locator_target(question)
     force_screen = should_force_screen_context(question, previous_question)
@@ -128,7 +162,26 @@ def run(
 
     if not needs_screen:
         chat_started = time.perf_counter()
-        chat_result = answer_without_screen(question, conversation_history)
+        if web_search_enabled:
+            import asyncio
+            from agent_router import run_query_pipeline
+            def on_status(status_or_data, message=None):
+                if isinstance(status_or_data, dict):
+                    phase = status_or_data.get("status", "processing")
+                    msg = status_or_data.get("message", "")
+                else:
+                    phase = status_or_data
+                    msg = message
+                LOGGER.info(f"WIL Pipeline Status [{phase}]: {msg}")
+            final_answer = asyncio.run(run_query_pipeline(
+                query=question,
+                web_search_enabled=True,
+                conversation_history=conversation_history,
+                on_status=on_status
+            ))
+            chat_result = {"summary": final_answer}
+        else:
+            chat_result = answer_without_screen(question, conversation_history)
         log_stage_timing("chat", chat_started)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         return {
@@ -141,6 +194,7 @@ def run(
             "warnings": warnings,
             "is_continuation": is_continuation,
         }
+
 
     # 1. Lock the target window by PID and capture the screenshot only after
     # we know the request needs screen context.
@@ -267,10 +321,11 @@ def classify_request(
 
 
 def answer_without_screen(question: str, conversation_history: list[dict] | None = None) -> dict:
-    payload = ask_text_model(build_chat_prompt(question, conversation_history))
-    summary = str(payload.get("summary", "")).strip()
-    if not summary:
-        raise RuntimeError("The chat model returned an empty reply.")
+    from wil.reasoner import Reasoner
+    reasoner = Reasoner()
+    def on_chunk(chunk):
+        print(json.dumps({"type": "chunk", "message": chunk}), flush=True)
+    summary = reasoner.synthesize(question, "Answer directly from your pre-trained knowledge base. Do not mention system details.", on_chunk)
     return {"summary": summary, "steps": []}
 
 
@@ -743,15 +798,17 @@ def main() -> None:
         if not isinstance(progress, dict):
             progress = {}
         conversation_history = normalize_conversation_history(payload.get("conversation_history"))
+        web_search_enabled = bool(payload.get("web_search_enabled", False))
         if not question:
             raise ValueError("Question is required.")
 
-        result = run(question, previous_question, progress, conversation_history)
+        result = run(question, previous_question, progress, conversation_history, web_search_enabled=web_search_enabled)
         print(json.dumps(result, ensure_ascii=True))
     except Exception as exc:
         LOGGER.exception("Worker failed")
         print(json.dumps({"error": str(exc), "steps": [], "warnings": [str(exc)]}))
         sys.exit(1)
+
 
 
 if __name__ == "__main__":

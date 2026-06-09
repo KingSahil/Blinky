@@ -19,6 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { usePCWebSocket, ConnectionStatus } from './usePCWebSocket';
+import Markdown from 'react-native-markdown-display';
 
 const STORAGE_KEY = '@blinky_pc_ip';
 
@@ -34,6 +35,8 @@ export default function App() {
   const [agentError, setAgentError] = useState<string | null>(null);
   const [confidence, setConfidence] = useState<number | null>(null);
   const [reasoning, setReasoning] = useState<string | null>(null);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+  const [wilStage, setWilStage] = useState<'none' | 'planning' | 'retrieving' | 'acquiring' | 'processing' | 'reasoning'>('none');
 
   // Watch for incoming WebSocket responses from Python daemon
   useEffect(() => {
@@ -41,6 +44,10 @@ export default function App() {
       const { status: respStatus, data, error } = latestResponse;
       if (respStatus === 'processing') {
         setAgentStatus('processing');
+        if (data?.status && data.status.startsWith('wil_')) {
+          const stage = data.status.replace('wil_', '');
+          setWilStage(stage);
+        }
         if (data?.is_chunk) {
           setAgentProgressMsg(prev => prev + (data?.message || ''));
         } else {
@@ -57,9 +64,11 @@ export default function App() {
         setAgentStatus('success');
         setAgentResult(data);
         setAgentError(null);
+        setWilStage('none');
       } else if (respStatus === 'error') {
         setAgentStatus('error');
         setAgentError(error?.message || 'An unknown error occurred');
+        setWilStage('none');
       }
     }
   }, [latestResponse]);
@@ -83,8 +92,9 @@ export default function App() {
     setAgentError(null);
     setConfidence(null);
     setReasoning(null);
+    setWilStage(webSearchEnabled ? 'planning' : 'none');
 
-    const success = sendQuery(queryText.trim(), generateUuid());
+    const success = sendQuery(queryText.trim(), generateUuid(), webSearchEnabled);
     if (!success) {
       setAgentStatus('error');
       setAgentError('Failed to send query. Check PC connection.');
@@ -300,6 +310,21 @@ export default function App() {
                   autoCapitalize="none"
                   autoCorrect={false}
                 />
+                <TouchableOpacity
+                  style={[
+                    styles.webSearchToggle,
+                    webSearchEnabled && styles.webSearchToggleActive
+                  ]}
+                  onPress={() => setWebSearchEnabled(!webSearchEnabled)}
+                  disabled={!isConnected || agentStatus === 'processing'}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons 
+                    name="globe-outline" 
+                    size={20} 
+                    color={webSearchEnabled ? '#3B82F6' : '#6C6985'} 
+                  />
+                </TouchableOpacity>
               </View>
 
               <View style={styles.actionRow}>
@@ -326,6 +351,29 @@ export default function App() {
                     <ActivityIndicator size="small" color="#10B981" style={{ marginRight: 8 }} />
                     <Text style={styles.feedbackText}>{agentProgressMsg}</Text>
                   </View>
+                  {webSearchEnabled && wilStage !== 'none' && (
+                    <View style={styles.progressBarWrapper}>
+                      <View style={styles.progressSegmentsRow}>
+                        {['planning', 'retrieving', 'acquiring', 'processing', 'reasoning'].map((stage, idx) => {
+                          const stages = ['planning', 'retrieving', 'acquiring', 'processing', 'reasoning'];
+                          const currentStageIndex = stages.indexOf(wilStage);
+                          const isCompletedOrActive = idx <= currentStageIndex;
+                          return (
+                            <View
+                              key={stage}
+                              style={[
+                                styles.progressSegment,
+                                isCompletedOrActive ? styles.progressSegmentActive : styles.progressSegmentInactive
+                              ]}
+                            />
+                          );
+                        })}
+                      </View>
+                      <Text style={styles.progressStageText}>
+                        Web Search: {wilStage.charAt(0).toUpperCase() + wilStage.slice(1)}...
+                      </Text>
+                    </View>
+                  )}
                   {confidence !== null && (
                     <View style={{ marginTop: 8, borderTopWidth: 1, borderTopColor: 'rgba(16, 185, 129, 0.2)', paddingTop: 6 }}>
                       <Text style={{ color: '#8A86AA', fontSize: 12, textAlign: 'center' }}>
@@ -355,7 +403,7 @@ export default function App() {
                     <Text style={styles.resultTitle}>Result Details</Text>
                   </View>
                   {agentResult.response ? (
-                    <Text style={styles.resultParagraph}>{agentResult.response}</Text>
+                    <Markdown style={markdownStyles}>{agentResult.response}</Markdown>
                   ) : (
                     Object.entries(agentResult).map(([key, value]) => {
                       if (key === 'raw_metadata' && Array.isArray(value)) {
@@ -749,5 +797,78 @@ const styles = StyleSheet.create({
     marginTop: 18,
     letterSpacing: 0.5,
   },
+  webSearchToggle: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: 'transparent',
+    marginLeft: 8,
+  },
+  webSearchToggleActive: {
+    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+  },
+  progressBarWrapper: {
+    marginTop: 12,
+    alignItems: 'center',
+    width: '100%',
+  },
+  progressSegmentsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 6,
+    gap: 4,
+  },
+  progressSegment: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
+  },
+  progressSegmentActive: {
+    backgroundColor: '#3B82F6',
+  },
+  progressSegmentInactive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+  },
+  progressStageText: {
+    color: '#8A86AA',
+    fontSize: 12,
+    fontWeight: '600',
+    marginTop: 4,
+  },
 });
+
+const markdownStyles = {
+  body: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    lineHeight: 22,
+    fontWeight: '500' as const,
+  },
+  heading1: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700' as const,
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  heading2: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600' as const,
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  paragraph: {
+    marginBottom: 8,
+  },
+  bullet_list: {
+    marginBottom: 8,
+  },
+  ordered_list: {
+    marginBottom: 8,
+  },
+  link: {
+    color: '#3B82F6',
+  },
+};
 

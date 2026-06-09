@@ -46,6 +46,16 @@ def check_sufficiency(query: str, tool_outputs: Any) -> Tuple[bool, str]:
                 if "error" in lower_serialized and len(serialized) < 150:
                     return False, f"Heuristic matches error/failure in response: {serialized}"
 
+    # Verify budget/price constraint representation if requested
+    query_lower = query.lower()
+    has_price_request = any(k in query_lower for k in ["under", "below", "price", "budget", "cost", "rupees", "rs.", "₹", "inr"])
+    if has_price_request:
+        output_str = tool_outputs if isinstance(tool_outputs, str) else json.dumps(tool_outputs)
+        has_prices = any(k in output_str for k in ["Rs.", "₹", "Rs", "rupees", "INR"]) or re.search(r'\b\d{3,5}\b', output_str)
+        if not has_prices:
+            return False, "Query specifies a price or budget limit, but the response does not contain any prices/numbers to verify."
+
+
     # LLM Sufficiency Audit
     prompt = f"""
 You are Blinky's Quality Sufficiency Auditor.

@@ -8,3 +8,6 @@ pywinauto==0.6.9; sys_platform == 'win32'
 requests>=2.34.2
 typing-extensions>=4.15.0
 pytesseract>=0.3.10; sys_platform != 'win32'
+httpx>=0.28.0
+beautifulsoup4>=4.13.0
+pytest-asyncio>=0.23.0

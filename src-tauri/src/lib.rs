@@ -19,6 +19,7 @@ struct TutorRequest {
     previous_question: Option<String>,
     progress: Option<serde_json::Value>,
     conversation_history: Option<serde_json::Value>,
+    web_search_enabled: Option<bool>,
 }
 
 #[cfg(target_os = "windows")]
@@ -56,6 +57,7 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
         request.previous_question.as_deref(),
         request.progress.as_ref(),
         request.conversation_history.as_ref(),
+        request.web_search_enabled.unwrap_or(false),
         command.clone(),
         overlay.clone(),
     );
@@ -92,6 +94,12 @@ fn show_overlay(app: AppHandle) -> Result<(), String> {
         configure_overlay_passthrough(&overlay);
     }
     Ok(())
+}
+
+#[tauri::command]
+fn open_url(app: AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_shell::ShellExt;
+    app.shell().open(url, None).map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -235,6 +243,7 @@ fn run_python_worker(
     previous_question: Option<&str>,
     progress: Option<&serde_json::Value>,
     conversation_history: Option<&serde_json::Value>,
+    web_search_enabled: bool,
     command_window: Option<WebviewWindow>,
     overlay_window: Option<WebviewWindow>,
 ) -> Result<String, String> {
@@ -259,6 +268,7 @@ fn run_python_worker(
         "previous_question": previous_question,
         "progress": progress.unwrap_or(&serde_json::Value::Null),
         "conversation_history": conversation_history.unwrap_or(&serde_json::Value::Null),
+        "web_search_enabled": web_search_enabled,
     });
 
     if let Some(mut stdin) = child.stdin.take() {
@@ -287,6 +297,22 @@ fn run_python_worker(
                 restored = true;
             }
         } else {
+            // Check if it's a real-time status/chunk JSON line
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if let Some(msg_type) = parsed.get("type").and_then(|t| t.as_str()) {
+                    if msg_type == "status" {
+                        if let Some(ref w) = command_window {
+                            let _ = w.emit("blinky://tutor-status", parsed.clone());
+                        }
+                    } else if msg_type == "chunk" {
+                        if let Some(ref w) = command_window {
+                            let _ = w.emit("blinky://tutor-chunk", parsed.clone());
+                        }
+                    }
+                    line.clear();
+                    continue;
+                }
+            }
             stdout_accumulated.push_str(&line);
         }
         line.clear();
@@ -505,7 +531,8 @@ pub fn run() {
             resize_command_window,
             resize_and_move_command_window,
             get_settings,
-            save_settings
+            save_settings,
+            open_url
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {

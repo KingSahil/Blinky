@@ -88,9 +88,9 @@ export function usePCWebSocket() {
     return false;
   }, []);
 
-  const sendQuery = useCallback((query: string, requestId: string) => {
+  const sendQuery = useCallback((query: string, requestId: string, webSearchEnabled?: boolean) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      const payload = JSON.stringify({ requestId, query });
+      const payload = JSON.stringify({ requestId, query, webSearchEnabled });
       wsRef.current.send(payload);
       return true;
     }

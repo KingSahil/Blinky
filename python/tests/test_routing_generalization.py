@@ -230,3 +230,60 @@ print(json.dumps({"custom_result": "done"}))
                                 "confidence": 90,
                                 "reasoning": "one lookup request"
                             })
+
+@pytest.mark.asyncio
+async def test_wil_pipeline_insufficient_fallback():
+    # Test that when web_search_enabled is True but WIL pipeline returns an insufficient response,
+    # it falls back to the toolkits and queries/routes tools.
+    agent_router.ROUTE_CACHE.clear()
+    agent_router.ROUTE_CACHE["insufficient query"] = {
+        "match": True,
+        "tool_calls": [
+            {"tool_name": "lookup_youtube_stats", "arguments": {"channel_name": "@MrBeast"}}
+        ],
+        "confidence": 90,
+        "reasoning": "one lookup request"
+    }
+
+    mock_registry = {
+        "lookup_youtube_stats": {
+            "name": "lookup_youtube_stats",
+            "description": "YouTube stats details",
+            "arguments": ["channel_name"]
+        }
+    }
+
+    mock_wil_result = {
+        "synthesized_response": "I could not find any information about MrBeast.",
+        "sources": []
+    }
+
+    with patch("wil.pipeline.WILPipeline.run", return_value=mock_wil_result) as mock_wil_run:
+        with patch("agent_router.load_registry_async", return_value=mock_registry):
+            with patch("agent_router.execute_script", return_value=(True, {"subscribers": "100M"}, "")) as mock_exec:
+                # First check_sufficiency is for WIL pipeline synthesized_response (returns False)
+                # Second check_sufficiency is for tool combined_result (returns True)
+                with patch("utils.sufficiency_checker.check_sufficiency") as mock_check_suff:
+                    mock_check_suff.side_effect = [
+                        (False, "Response indicates search failure"),
+                        (True, "sufficient")
+                    ]
+                    with patch("agent_router.send_response") as mock_send:
+                        line = json.dumps({
+                            "requestId": "999",
+                            "query": "insufficient query",
+                            "web_search_enabled": True
+                        })
+                        await agent_router.handle_request(line)
+                        
+                        mock_wil_run.assert_called_once()
+                        mock_exec.assert_called_once()
+                        # Verify the retrying status message was sent
+                        mock_send.assert_any_call("999", "processing", data={
+                            "status": "wil_retrying",
+                            "message": "Web search results insufficient (Response indicates search failure). Retrying with toolkits..."
+                        })
+                        # Verify final response success from fallback tool
+                        success_calls = [c for c in mock_send.call_args_list if c[0][0] == "999" and c[0][1] == "success"]
+                        assert len(success_calls) > 0
+
