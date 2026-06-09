@@ -3,6 +3,7 @@ node_modules/
 .venv/
 env/
 venv/
+.brain
 
 # Build & Output Directories
 tmp/

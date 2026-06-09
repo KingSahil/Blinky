@@ -1,3 +1,5 @@
+mod websocket;
+
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -518,6 +520,11 @@ pub fn run() {
         })
         .setup(|app| {
             setup_tray(app)?;
+
+            // Start background WebSocket server for remote control
+            tauri::async_runtime::spawn(async move {
+                websocket::start_websocket_server().await;
+            });
 
             #[cfg(target_os = "windows")]
             if let Some(overlay) = app.get_webview_window("overlay") {
