@@ -6,6 +6,7 @@ export async function runTutor(
   previousQuestion?: string,
   progress?: TutorProgress,
   conversationHistory?: TutorConversationMessage[],
+  webSearchEnabled?: boolean,
 ): Promise<TutorResult> {
   return invoke<TutorResult>('run_tutor', {
     request: {
@@ -13,6 +14,7 @@ export async function runTutor(
       previous_question: previousQuestion,
       progress,
       conversation_history: conversationHistory,
+      web_search_enabled: webSearchEnabled,
     },
   });
 }
@@ -50,5 +52,9 @@ export async function getSettings(): Promise<BlinkySettings> {
 
 export async function saveSettings(provider: string, shortcut: string, sarvamApiKey: string, groqApiKey: string): Promise<void> {
   return invoke('save_settings', { provider, shortcut, sarvamApiKey, groqApiKey });
+}
+
+export async function openUrl(url: string): Promise<void> {
+  return invoke('open_url', { url });
 }
 
