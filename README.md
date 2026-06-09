@@ -12,6 +12,7 @@
 <img src="https://img.shields.io/badge/React-TypeScript-61dafb?style=for-the-badge">
 <img src="https://img.shields.io/badge/Bun-1.3.14-f9f1e1?style=for-the-badge">
 <img src="https://img.shields.io/badge/Python-3.11-yellow?style=for-the-badge">
+<img src="https://img.shields.io/badge/Playwright-Edge-green?style=for-the-badge">
 
 </p>
 
@@ -40,7 +41,7 @@
 
 ---
 
-An AI-powered Windows desktop tutor that teaches users software directly on their screen using local AI.
+An AI-powered Windows desktop tutor that teaches users software directly on their screen using local AI. In web mode it can also open/search in your default Edge browser and run a bounded safe-click loop after reading the screen.
 
 # ⚡ Quick Start
 
@@ -59,7 +60,7 @@ Install the following software:
 
 ```powershell
 ollama pull gemma4:e4b
-````
+```
 
 ---
 
@@ -109,9 +110,7 @@ Blinky will:
 * Detect the active application
 * Generate AI instructions
 * Highlight matching UI elements
-
-```
-```
+* In globe/web mode, optionally click safe matched targets for up to 5 observe-act attempts
 
 
 ## Provider Configuration
@@ -173,6 +172,19 @@ Blinky will:
 
 ## 🌟 Recent Enhancements
 
+### 🧭 Bounded Autopilot Loop
+Blinky can now run a small observe-act-observe loop from the command bar's globe/web mode.
+- It first lets the browser agent open or search in Edge when the request is a web task.
+- It then reads the visible screen, chooses one immediate next step, and clicks only matched safe actions such as click/open/select/choose/go to.
+- It stops after 5 attempts, when the task is complete, when the same target repeats, or when the next action is unsafe.
+- Typing, searching into forms, buying, paying, installing, enabling, deleting, login, and submit actions stay manual.
+
+### 🌐 Edge Browser Intelligence
+The Python router now has a safer browser-planning path before generated tools.
+- Common open/search/site-search requests are planned as JSON actions.
+- Playwright launches visible Microsoft Edge (`msedge`) instead of a hidden throwaway browser when possible.
+- Generated Playwright code is still available as a fallback, but common API mistakes are repaired before safety auditing and verification.
+
 ### 🛡️ Dynamic Capture Exclusion (Flicker-Free Mode)
 Blinky now uses the native Windows API (`SetWindowDisplayAffinity` / `WDA_EXCLUDEFROMCAPTURE`) to exclude its own command and overlay windows from screen captures programmatically. 
 - **The Blinky UI remains fully visible and active to you.**
@@ -212,6 +224,9 @@ Runs fully offline using:
 
 ## 🎯 Smart Overlay Highlighting
 Highlights buttons and menus directly on the user's screen.
+
+## 🖱️ Safe Autopilot Clicking
+When globe/web mode is active, Blinky can convert matched screenshot coordinates back to physical screen coordinates and call the native Windows click command. The AI still sees the optimized screenshot; the click lands in the real desktop coordinate space.
 
 ## ⚡ Global Hotkey Workflow
 
@@ -287,6 +302,23 @@ Blinky transforms software learning into an **interactive real-time experience**
 │ Overlay Highlight   │
 │ Guidance            │
 └─────────────────────┘
+
+Globe/web mode adds:
+
+┌─────────────────────┐
+│ Browser Planner     │
+│ Playwright + Edge   │
+└──────────┬──────────┘
+           ↓
+┌─────────────────────┐
+│ Screen Tutor        │
+│ Observe Next Step   │
+└──────────┬──────────┘
+           ↓
+┌─────────────────────┐
+│ Native Safe Click   │
+│ Max 5 Attempts      │
+└─────────────────────┘
 ```
 
 ---
@@ -305,6 +337,7 @@ Blinky transforms software learning into an **interactive real-time experience**
 | OCR Fallback | EasyOCR |
 | Screen Capture | `dxcam` |
 | Window Detection | `pywinauto` |
+| Browser Automation | Playwright + Microsoft Edge |
 | Overlay System | Transparent Tauri Window |
 
 ---
@@ -326,6 +359,7 @@ python/
 ├── Capture scripts
 ├── OCR pipeline
 ├── AI integration
+├── Edge browser agent
 ├── Window detection
 └── Matching logic
 
@@ -400,6 +434,8 @@ Blinky will:
 3. Detect the active application
 4. Generate AI instructions
 5. Highlight matching buttons/menus
+
+With the globe icon enabled, Blinky may also open/search in Edge and perform safe matched clicks for up to 5 attempts.
 
 ---
 
@@ -481,7 +517,8 @@ Other applications may work depending on OCR quality.
 - Multi-monitor support
 - Cursor tracking
 - AI workflow memory
-- Auto-guided walkthroughs
+- Richer autopilot verification
+- Safe typed-input handoff
 
 ---
 

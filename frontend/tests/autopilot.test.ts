@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { getClickablePoint, isSafeAutopilotStep, runAutopilotLoop } from '../src/lib/autopilot';
+import { getClickablePoint, getPhysicalClickablePoint, isSafeAutopilotStep, runAutopilotLoop } from '../src/lib/autopilot';
 import type { TutorResult, TutorStep } from '../src/lib/types';
 
 function step(instruction: string, target = 'Gaming'): TutorStep {
@@ -48,6 +48,19 @@ describe('getClickablePoint', () => {
   test('returns the center of the matched target', () => {
     expect(getClickablePoint(step('Click Gaming.'))).toEqual({ x: 140, y: 220 });
   });
+
+  test('scales optimized screenshot coordinates to physical screen coordinates', () => {
+    const screen = result([step('Click Gaming.')]);
+    screen.screenshot = {
+      path: 'screenshots/test.jpg',
+      width: 1728,
+      height: 1080,
+      screen_width: 2560,
+      screen_height: 1600,
+    };
+
+    expect(getPhysicalClickablePoint(step('Click Gaming.'), screen)).toEqual({ x: 207, y: 326 });
+  });
 });
 
 describe('runAutopilotLoop', () => {
@@ -66,6 +79,27 @@ describe('runAutopilotLoop', () => {
     expect(output.finalResult.summary).toBe('Done');
     expect(output.attempts).toBe(1);
     expect(output.stopReason).toBe('complete');
+  });
+
+  test('clicks physical screen coordinates when screenshot was downsampled', async () => {
+    const clicked: Array<{ x: number; y: number }> = [];
+    const first = result([step('Click Gaming.')]);
+    first.screenshot = {
+      path: 'screenshots/test.jpg',
+      width: 1728,
+      height: 1080,
+      screen_width: 2560,
+      screen_height: 1600,
+    };
+    const observations = [first, result([], 'Done')];
+
+    await runAutopilotLoop({
+      observe: async () => observations.shift()!,
+      act: async (point) => clicked.push(point),
+      wait: async () => {},
+    });
+
+    expect(clicked).toEqual([{ x: 207, y: 326 }]);
   });
 
   test('stops after five attempts', async () => {

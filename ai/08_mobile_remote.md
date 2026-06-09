@@ -11,7 +11,7 @@ The app connects to the desktop WebSocket server and offers:
 - streamed progress and final results
 - power operations: sleep, restart, shutdown
 
-It does not call `run_tutor` directly and does not render desktop overlay highlights. Its query path goes through `src-tauri/src/websocket.rs` and `python/agent_router.py`.
+It does not call `run_tutor` directly, does not render desktop overlay highlights, and does not run the desktop command-bar autopilot loop. Its query path goes through `src-tauri/src/websocket.rs` and `python/agent_router.py`.
 
 ## 2. Main Files
 
@@ -56,6 +56,8 @@ Incoming responses update:
 - optional `reasoning`
 
 When `data.is_chunk` is true, chunks are appended to `agentProgressMsg` for streamed synthesis.
+
+Mobile browser-agent queries can open/search through the router's safe browser planner or use registered/generated tools, but the phone is not the screen-observe/click actor. Bounded safe clicks are handled only by the desktop command bar, where the app can observe the screen and call `click_screen_point`.
 
 ## 5. Power Commands
 

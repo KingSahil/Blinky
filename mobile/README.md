@@ -1,6 +1,6 @@
 # Blinky Remote Mobile Client
 
-This directory contains the React Native Expo mobile application that connects to the Blinky desktop client to remotely trigger power management actions (Sleep, Restart, Shut Down) over your local Wi-Fi network.
+This directory contains the React Native Expo mobile application that connects to the Blinky desktop client over local Wi-Fi. It can send power actions and remote browser-agent queries to the desktop WebSocket server.
 
 ## Prerequisites
 
@@ -38,4 +38,12 @@ This directory contains the React Native Expo mobile application that connects t
    * **Windows**: Run `ipconfig` in Command Prompt and check your IPv4 address under your wireless adapter.
 3. In the mobile application screen, input your PC's IP address (e.g., `192.168.1.15`).
 4. Tap **Establish Link** to connect.
-5. Use the control buttons on your phone to trigger actions on your PC!
+5. Use the control buttons on your phone to trigger actions on your PC, or send an agent query from the mobile UI.
+
+## What Mobile Can Control
+
+- Power actions: Sleep, Restart, Shut Down.
+- Remote AI/browser queries through `ws://<pc>:9001`.
+- Streamed status and final agent responses.
+
+The mobile app does not render the desktop overlay and does not run the command bar autopilot loop. Screen reading, highlighting, and safe desktop clicks are desktop command-bar features.

@@ -1,28 +1,29 @@
 # Blinky AI Documentation Hub
 
-This folder is the developer and AI-agent map for the Blinky repository. It reflects the current codebase: a Tauri desktop tutor, a Python screen-understanding worker, a Python browser-agent sidecar exposed over WebSocket, and an Expo mobile remote.
+This folder is the developer and AI-agent map for the Blinky repository. It reflects the current codebase: a Tauri desktop tutor, a bounded screen autopilot loop, a Python screen-understanding worker, a Python browser-agent sidecar exposed over WebSocket, and an Expo mobile remote.
 
 ## Reading Order
 
 | File | Purpose |
 | :--- | :--- |
 | `00_repo_summary.md` | Repository map, setup commands, and guide index. |
-| `01_architecture.md` | Desktop architecture, IPC/event flow, settings, and platform notes. |
-| `02_coordinate_scaling.md` | Screenshot, UIA, and overlay coordinate transforms. |
-| `03_matching_heuristics.md` | Target matching, merge rules, and post-processing pipeline. |
-| `04_ai_inference.md` | Screen tutor prompts, preflight, provider clients, locator fast path, and conversation state. |
+| `01_architecture.md` | Desktop architecture, IPC/event flow, autopilot, settings, and platform notes. |
+| `02_coordinate_scaling.md` | Screenshot, UIA, overlay, and autopilot click coordinate transforms. |
+| `03_matching_heuristics.md` | Target matching, merge rules, post-processing, and autopilot safety gates. |
+| `04_ai_inference.md` | Screen tutor prompts, preflight, provider clients, locator fast path, conversation state, and autopilot continuation. |
 | `05_sarvam.md` | Sarvam TTS/STT integration used by the desktop command bar. |
 | `06_detailed_summaries.md` | Per-file implementation reference for core modules. |
-| `07_agent_router.md` | Remote browser-agent sidecar, generated tools, streaming synthesis, and WebSocket protocol. |
+| `07_agent_router.md` | Browser-agent sidecar, Edge controller, generated tools, streaming synthesis, and WebSocket protocol. |
 | `08_mobile_remote.md` | Expo mobile remote app, connection lifecycle, PC controls, and remote agent UI. |
 | `files_index.json` | Machine-readable file index for agents and scripts. |
 
 ## Current Product Shape
 
-Blinky has two major interaction modes:
+Blinky has three major interaction modes:
 
 1. **Desktop screen tutor**: The Tauri command bar accepts a question, Python captures the active screen, OCR/UIA extract visible controls, an LLM returns the immediate next action, and the overlay highlights the matched UI element.
-2. **Remote mobile control**: The Expo app connects to the desktop WebSocket server on port `9001`, sends power commands or browser-agent queries, and displays streamed status/results from `python/agent_router.py`.
+2. **Desktop globe/web mode**: The command bar can route web tasks through the Python browser planner, open/search in visible Microsoft Edge through Playwright, then run a bounded observe-act loop that clicks only safe matched targets for up to 5 attempts.
+3. **Remote mobile control**: The Expo app connects to the desktop WebSocket server on port `9001`, sends power commands or browser-agent queries, and displays streamed status/results from `python/agent_router.py`.
 
 ## Repository Map
 
@@ -31,7 +32,7 @@ c:\projects\Jarvis
 ├── ai/                  Documentation hub
 ├── frontend/src/        React/Tauri command bar and overlay views
 ├── mobile/              Expo remote controller
-├── python/              Screen tutor worker, AI clients, OCR/capture, router tools
+├── python/              Screen tutor worker, AI clients, OCR/capture, browser agent, router tools
 ├── scripts/             Setup and Ollama checks
 ├── shared/              Result schema examples
 └── src-tauri/           Rust host, WebSocket server, tray, shortcuts, windows
@@ -68,10 +69,13 @@ npm run start
 | Ollama model | `gemma4:e4b` |
 | Groq model | `meta-llama/llama-4-scout-17b-16e-instruct` |
 | Sarvam TTS/STT | `bulbul:v3` / `saaras:v3` |
+| Browser controller | Playwright `chromium.launch(channel="msedge", headless=false)` by default |
+| Autopilot attempts | 5 max per command-bar globe/web request |
 
 ## Agent Notes
 
 - Treat `CommandBar.tsx` as the primary command UI. `App.tsx` remains as the default route fallback and is less feature-complete.
 - Keep the Python screen worker stdout JSON-clean. The only non-JSON stdout marker is `__BLINKY_CAPTURED__`.
-- Keep screen-tutor guidance single-step. The frontend advances by re-running the worker after each completed step.
+- Keep screen-tutor guidance single-step. The frontend advances by re-running the worker after each completed step or after each safe autopilot click.
+- Autopilot clicks only matched safe actions. Do not add automatic typing, purchase, login, install, enable, delete, or submit behavior without a separate safety design.
 - The mobile agent path is separate from the screen-tutor path. It uses WebSocket -> Rust daemon manager -> `python/agent_router.py`, not `run_tutor`.

@@ -22,6 +22,8 @@ This guide covers the desktop screen-tutor inference path. The remote browser-ag
 
 `python/main.py` normalizes this history to the last 10 entries and `prompt.py` includes up to the last 8 entries in prompts.
 
+In command-bar globe/web mode, `runWebActionThenScreenGuidance()` first lets the browser agent open/search the relevant page. Then `runAutopilotLoop()` repeatedly calls the same `runTutor()` screen path after each safe click. There is no separate "multi-step script" prompt for autopilot; the model still returns one immediate next screen action and the frontend handles retry, stopping, and safety.
+
 ## 3. Locator Fast Path
 
 Locator-style requests can return without the main LLM screen prompt:
@@ -119,3 +121,14 @@ After model output:
 4. `steps[:1]` enforces single-step mode even if a model returns more.
 
 See `03_matching_heuristics.md` for scoring and merge details.
+
+## 9. Autopilot Continuation
+
+Autopilot uses normal continuation inputs:
+
+- the original user request remains the goal,
+- completed instructions/targets are tracked in the command bar,
+- each click is followed by a fresh screenshot/OCR/LLM pass,
+- the next returned step is rechecked by the frontend safety gate before any new click.
+
+This keeps browser tasks adaptive: if a click changes the page, the next observation decides what to do next. If nothing changes or the next action becomes unsafe, the loop stops and leaves the visible Action Guide for the user.

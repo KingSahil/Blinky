@@ -102,6 +102,12 @@
         },
         "height": {
           "type": "integer"
+        },
+        "screen_width": {
+          "type": "integer"
+        },
+        "screen_height": {
+          "type": "integer"
         }
       }
     },

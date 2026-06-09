@@ -87,6 +87,27 @@ Programmatically restricts the return payload to a single step, minimizing laten
 
 ---
 
+## 5. Autopilot Safety Gate
+
+The bounded autopilot loop in `frontend/src/lib/autopilot.ts` does not trust every AI step. It only acts on the current single step after matching has already attached a visible target box.
+
+A step is eligible when:
+
+- `match` exists.
+- The instruction contains a safe action hint: `click`, `open`, `select`, `choose`, or `go to`.
+- The instruction does not contain a blocked hint: `type`, `enter`, `search`, `submit`, `install`, `enable`, `delete`, `remove`, `buy`, `purchase`, `pay`, `sign in`, or `login`.
+
+The loop stops when:
+
+- there is no next instruction,
+- the next target is missing or unsafe,
+- the same instruction/target/box repeats after a click,
+- or the configured attempt limit is reached, currently 5.
+
+The matcher remains responsible for finding the target. Autopilot is only the bounded act-and-reobserve wrapper around that existing screen understanding.
+
+---
+
 ## Related Guides & Files
 - [01 System Architecture](file:///c:/projects/Jarvis/ai/01_architecture.md)
 - [Fuzzy Matcher Module](file:///c:/projects/Jarvis/python/utils/matching.py)

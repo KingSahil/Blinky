@@ -30,6 +30,8 @@ export interface TutorResult {
   screenshot?: {
     width: number;
     height: number;
+    screen_width?: number;
+    screen_height?: number;
     path: string;
   };
   elapsed_ms: number;

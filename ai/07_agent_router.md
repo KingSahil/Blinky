@@ -1,6 +1,6 @@
 # Blinky Remote Agent Router
 
-The remote agent router is separate from the desktop screen-tutor worker. It powers mobile queries sent over WebSocket and lives in `python/agent_router.py`.
+The agent router is separate from the desktop screen-tutor worker. It powers mobile queries sent over WebSocket and command-bar globe/web requests that need browser intelligence. It lives in `python/agent_router.py`.
 
 ## 1. Transport
 
@@ -65,7 +65,7 @@ Terminal statuses are `success` or `error`. Streaming synthesis chunks use:
 
 ## 4. Built-In Direct Resolvers
 
-Before tool routing and code generation, `agent_router.py` handles browser-opening requests:
+Before registered tool routing and code generation, `agent_router.py` handles browser-opening requests:
 
 - direct `https://...` URLs
 - domain-like inputs such as `example.com`
@@ -74,9 +74,25 @@ Before tool routing and code generation, `agent_router.py` handles browser-openi
 - `open/search/find/play <terms> in youtube`
 - AI-resolved open/navigation intents such as `open whatsapp`, `open notion`, or `launch spotify`
 
-These use Python `webbrowser.open()` after either deterministic parsing or an AI URL-resolution step. Open/navigation intents do not generate Playwright tools unless the AI URL resolver cannot confidently map them to a public URL.
+These fast paths avoid generated Playwright tools for common navigation. The browser planner described below is preferred for web tasks that need visible Edge automation.
 
-## 5. Registered Tools
+## 5. Safe Browser Planner
+
+`python/browser_agent.py` asks the LLM for a small JSON plan instead of arbitrary code. Supported actions are intentionally narrow:
+
+- `open_url`
+- `web_search`
+- `site_search`
+
+Accepted plans run through `python/browser_controller.py`, which launches visible Microsoft Edge through Playwright by default:
+
+```text
+chromium.launch(channel="msedge", headless=false)
+```
+
+This path is faster and safer than generating a one-off script for prompts like "open YouTube", "search gaming chair on Amazon", or "find Python docs". Unsupported browser actions fall through to the rest of the router instead of being guessed.
+
+## 6. Registered Tools
 
 The router loads `python/tools/registry.json` asynchronously. Current registered tools include:
 
@@ -100,25 +116,26 @@ The LLM routing prompt receives tool names, descriptions, and arguments, then re
 
 Confidence below `80` is treated as no confident match.
 
-## 6. Execution and Sufficiency
+## 7. Execution and Sufficiency
 
 Tool calls run with a max concurrency of 3. Each script receives JSON args through `sys.argv[1]` and should return JSON on stdout.
 
 After execution, `utils.sufficiency_checker.check_sufficiency(query, combined_result)` decides whether the tool output answers the user. If sufficient, the router streams synthesized final text. If insufficient or unmatched, it enters code generation.
 
-## 7. Generated Tool Lifecycle
+## 8. Generated Tool Lifecycle
 
 For unmatched/insufficient requests:
 
 1. The router asks the selected LLM to generate a Playwright async Python tool.
 2. It parses `TOOL_NAME`, `DESCRIPTION`, `ARGUMENTS`, and a Python code block.
-3. `audit_code()` rejects forbidden imports/calls such as `exec`, `eval`, `os.system`, `subprocess`, `shutil`, and `pty`.
-4. The script is written as `python/tools/temp_candidate_<requestId>.py`.
-5. The router executes it once for verification.
-6. On success, it renames the file to the final tool name and updates `registry.json`.
-7. A background generalization task may run through `utils.generalizer.generalize_tool()`.
+3. `repair_generated_playwright_code()` fixes common bad API usage, such as awaiting `set_default_timeout` or putting timeouts on ElementHandle methods.
+4. `audit_code()` rejects forbidden imports/calls such as `exec`, `eval`, `os.system`, `subprocess`, `shutil`, and `pty`.
+5. The script is written as `python/tools/temp_candidate_<requestId>.py`.
+6. The router executes it once for verification.
+7. On success, it renames the file to the final tool name and updates `registry.json`.
+8. A background generalization task may run through `utils.generalizer.generalize_tool()`.
 
-## 8. Synthesis
+## 9. Synthesis
 
 `stream_synthesis_llm()` turns raw tool output into a user-facing answer. It streams either:
 
@@ -127,8 +144,9 @@ For unmatched/insufficient requests:
 
 Each chunk is forwarded to the WebSocket client using the `is_chunk` processing envelope.
 
-## 9. Safety Notes
+## 10. Safety Notes
 
+- Prefer the safe browser planner for open/search/site-search tasks.
 - Generated tools are audited, but the audit is intentionally simple. Treat router-generated files as untrusted until reviewed.
 - The router writes to `python/tools/` and `python/tools/registry.json`.
 - Power commands are immediate OS commands from Rust and should only be exposed on trusted local networks.

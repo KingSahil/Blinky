@@ -86,7 +86,38 @@ This dynamic shift guarantees that graphical highlights overlay target items wit
 
 ---
 
-## 4. Highlight Box Sizing & Capping
+## 4. Autopilot Click Scaling
+
+The screen tutor and matcher always return `step.match` boxes in downsampled screenshot-space. This is correct for the overlay and for LLM reasoning, but native mouse clicks need physical desktop coordinates.
+
+`python/main.py` includes both coordinate spaces in every result:
+
+```json
+"screenshot": {
+  "width": 1728,
+  "height": 1080,
+  "screen_width": 2560,
+  "screen_height": 1600
+}
+```
+
+`frontend/src/lib/autopilot.ts` first takes the center of the matched screenshot-space box:
+
+$$x_{\text{center}} = x_{\text{ss}} + \frac{w_{\text{ss}}}{2}$$
+
+$$y_{\text{center}} = y_{\text{ss}} + \frac{h_{\text{ss}}}{2}$$
+
+Then it maps that point back to physical desktop coordinates before calling Rust:
+
+$$x_{\text{physical}} = \text{round}\left(x_{\text{center}} \times \frac{\text{screen\_width}}{\text{screenshot.width}}\right)$$
+
+$$y_{\text{physical}} = \text{round}\left(y_{\text{center}} \times \frac{\text{screen\_height}}{\text{screenshot.height}}\right)$$
+
+`src-tauri/src/lib.rs` receives the physical point in `click_screen_point` and sends a Windows `SendInput` click. If physical dimensions are absent, the frontend falls back to screenshot-space coordinates for backward compatibility.
+
+---
+
+## 5. Highlight Box Sizing & Capping
 
 To prevent large highlight boxes from cluttering the screen or looking unpolished, [Overlay.tsx](file:///c:/projects/Jarvis/frontend/src/Overlay.tsx) applies custom sizing restrictions based on the control type:
 

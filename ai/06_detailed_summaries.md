@@ -8,11 +8,12 @@ This reference summarizes the files that most often matter when changing Blinky.
 
 Rust Tauri app core.
 
-- Exposes frontend commands: `run_tutor`, `show_overlay`, `hide_overlay`, `show_command_bar`, `resize_command_window`, `resize_and_move_command_window`, `get_settings`, `save_settings`.
+- Exposes frontend commands: `run_tutor`, `click_screen_point`, `show_overlay`, `hide_overlay`, `show_command_bar`, `resize_command_window`, `resize_and_move_command_window`, `get_settings`, `save_settings`.
 - Spawns `python/main.py` for screen-tutor requests.
 - Sends `question`, `previous_question`, `progress`, and `conversation_history` over stdin.
 - Watches stdout for `__BLINKY_CAPTURED__` and restores capture visibility immediately.
 - Emits `blinky://guidance`, `blinky://open-command`, `blinky://global-click`, and `blinky://global-enter`.
+- Uses Windows `SendInput` for `click_screen_point`, receiving physical screen coordinates from the frontend autopilot loop.
 - Registers Ctrl+Shift+Enter and Ctrl+Shift+Space, with the active shortcut selected by `.env`.
 - Starts the WebSocket server from `websocket.rs`.
 
@@ -48,6 +49,7 @@ Route switch:
 Primary command UI.
 
 - Submits tutor requests through `runTutor()`.
+- In globe/web mode, runs `runWebActionThenScreenGuidance()` and then `runAutopilotLoop()` for bounded safe clicks.
 - Tracks progress, current guide step, completed targets/instructions, last query, and conversation history.
 - Handles Sarvam microphone recording, transcription, TTS playback, and voice-first readback.
 - Listens for `blinky://target-clicked` and `blinky://global-enter` to advance workflows.
@@ -79,9 +81,27 @@ Pure step-state helpers.
 - Merges completed history with the current pending step.
 - Decides whether the summary bubble should be visible.
 
+### `frontend/src/lib/autopilot.ts`
+
+Bounded observe-act loop for command-bar globe/web mode.
+
+- Observes the current screen through a caller-provided `observe()`.
+- Allows only matched click/open/select/choose/go-to style steps.
+- Blocks typing, submit, install, enable, delete, purchase/payment, and login actions.
+- Converts matched screenshot-space centers into physical screen coordinates using `screenshot.screen_width` and `screenshot.screen_height`.
+- Stops on completion, unsafe/missing targets, unchanged repeated targets, or the max-attempt limit.
+
+### `frontend/src/lib/webGuidance.ts`
+
+Bridge between browser intelligence and screen guidance.
+
+- Calls `runAgentQuery()` first for web tasks.
+- Calls `runTutor()` after the browser action to read the visible screen.
+- Falls back to the browser result if screen guidance fails.
+
 ### `frontend/src/lib/tauri.ts`
 
-Typed wrappers around Tauri `invoke()` calls.
+Typed wrappers around Tauri `invoke()` calls, including `clickScreenPoint()` for native autopilot clicks.
 
 ### `frontend/src/lib/tts.ts`
 
@@ -102,6 +122,7 @@ Stdin/stdout screen-tutor orchestrator.
 - Scales UIA coordinates into screenshot space.
 - Merges and sorts visible items.
 - Builds prompts, calls the selected AI provider, attaches matches, fills search fallbacks, and slices to one step.
+- Returns both optimized screenshot dimensions and physical screen dimensions so frontend clicks can be scaled correctly.
 
 ### `python/ai/prompt.py`
 
@@ -163,13 +184,30 @@ Target matcher.
 
 Line-oriented sidecar daemon for WebSocket queries.
 
+- Tries the safe browser planner before registered/generated tools.
 - Directly handles known open/search commands.
 - Loads `python/tools/registry.json`.
 - Routes to registered tools by LLM decision.
 - Runs up to 3 tool calls concurrently.
 - Checks sufficiency.
-- Generates, audits, verifies, and registers Playwright tools when needed.
+- Repairs common generated Playwright API mistakes, then audits, verifies, and registers tools when needed.
 - Streams synthesized text chunks back to Rust.
+
+### `python/browser_agent.py`
+
+Safe JSON browser planner used before the slower generated-tool path.
+
+- Classifies requests into `open_url`, `web_search`, or `site_search`.
+- Rejects unsupported browser actions instead of inventing brittle scripts.
+- Runs accepted plans through `BrowserController`.
+
+### `python/browser_controller.py`
+
+Persistent Playwright browser controller.
+
+- Launches Chromium with `channel="msedge"` by default.
+- Uses visible browser mode by default.
+- Reuses the browser/context/page across requests when possible.
 
 ### `python/tools/registry.json`
 

@@ -1,21 +1,26 @@
 # Blinky System Architecture
 
-Blinky is a local-first desktop tutor with a companion mobile remote. The desktop app is built with Tauri 2, React, Rust, and Python. It can either guide a user on the visible desktop screen or accept remote WebSocket requests from the mobile app.
+Blinky is a local-first desktop tutor with a companion mobile remote. The desktop app is built with Tauri 2, React, Rust, and Python. It can guide a user on the visible desktop screen, run a bounded safe-click autopilot loop in web mode, or accept remote WebSocket requests from the mobile app.
 
 ## 1. Runtime Surfaces
 
 ```text
 User
 ├── Desktop command bar (/command)
-│   └── Tauri run_tutor command
-│       └── python/main.py screen tutor worker
-│           └── OCR + UIA + LLM + matching
-│               └── overlay highlight (/overlay)
+│   ├── normal mode
+│   │   └── Tauri run_tutor command
+│   │       └── python/main.py screen tutor worker
+│   │           └── OCR + UIA + LLM + matching
+│   │               └── overlay highlight (/overlay)
+│   └── globe/web mode
+│       └── runAgentQuery -> browser_agent/browser_controller
+│           └── visible Microsoft Edge through Playwright
+│               └── runTutor observe -> click_screen_point act -> repeat max 5
 └── Expo mobile app
     └── ws://<pc>:9001
         └── src-tauri/src/websocket.rs
             └── persistent python/agent_router.py sidecar
-                └── registered/generated browser tools + streamed synthesis
+                └── safe browser planner + registered/generated browser tools + streamed synthesis
 ```
 
 ## 2. Desktop Screen Tutor Flow
@@ -31,6 +36,8 @@ User
 9. On Windows, Rust monitors global clicks/Enter and emits `blinky://global-click` or `blinky://global-enter`.
 10. `CommandBar.tsx` records completed progress and re-runs `run_tutor` for the next screen state.
 
+In globe/web mode, `CommandBar.tsx` first runs `runAgentQuery()` so the browser planner can open/search in Edge. It then calls `runAutopilotLoop()`, which repeatedly observes the screen with `runTutor()`, clicks one safe matched target through `click_screen_point`, waits briefly, and observes again. The loop stops at completion, unsafe/missing targets, unchanged repeated targets, or 5 attempts.
+
 ## 3. Remote WebSocket / Agent Flow
 
 At app startup, `src-tauri/src/lib.rs` spawns `websocket::start_websocket_server()`.
@@ -43,7 +50,7 @@ Expo app
   -> line-delimited JSON responses stream back to the phone
 ```
 
-Direct power commands are `power_off`, `restart`, and `sleep`. Query messages are forwarded to `agent_router.py`, which can open/search known sites, execute registered tools, generate and verify new Playwright tools, and stream synthesized answers.
+Direct power commands are `power_off`, `restart`, and `sleep`. Query messages are forwarded to `agent_router.py`, which first tries the safe browser planner, then registered tools, then generated Playwright tools, and finally streams synthesized answers.
 
 See `07_agent_router.md` and `08_mobile_remote.md`.
 
@@ -64,6 +71,13 @@ Important events:
 | `blinky://global-click` | Rust Windows polling thread | overlay | Report desktop click coordinates. |
 | `blinky://target-clicked` | overlay | command | Mark highlighted step as completed. |
 | `blinky://global-enter` | Rust Windows polling thread | app event bus | Advance text-entry steps after Enter. |
+
+Important commands:
+
+| Command | Source | Purpose |
+| :--- | :--- | :--- |
+| `run_tutor` | frontend -> Rust -> Python | Capture/read the screen and return the next tutor step. |
+| `click_screen_point` | frontend -> Rust | Native Windows click at physical screen coordinates for safe autopilot actions. |
 
 ## 5. Python Screen Worker Contract
 
@@ -108,7 +122,13 @@ It returns one JSON object:
   ],
   "active_app": { "title": "...", "process": "...", "supported": true },
   "ocr": { "count": 42, "items": [] },
-  "screenshot": { "path": "tmp\\captures\\...", "width": 1728, "height": 1080 },
+  "screenshot": {
+    "path": "tmp\\captures\\...",
+    "width": 1728,
+    "height": 1080,
+    "screen_width": 2560,
+    "screen_height": 1600
+  },
   "elapsed_ms": 740,
   "provider": "Groq",
   "warnings": [],
@@ -132,11 +152,14 @@ Settings are persisted to `.env` through `get_settings` / `save_settings` in Rus
 | `GROQ_API_KEY` | Python/Rust settings | Required for Groq. |
 | `SARVAM_API_KEY` | Frontend/Rust settings | Required for voice features. |
 | `BLINKY_SHORTCUT` | Rust/frontend | `Enter` or `Space`, meaning Ctrl+Shift+Enter or Ctrl+Shift+Space. |
+| `BLINKY_BROWSER_CHANNEL` | Python browser controller | Defaults to `msedge`. |
+| `BLINKY_BROWSER_HEADLESS` | Python browser controller | Defaults to visible browser mode (`false`). |
 
 ## 7. Platform Notes
 
 - Windows capture exclusion uses `SetWindowDisplayAffinity` with `WDA_EXCLUDEFROMCAPTURE`.
 - Windows global click and Enter detection uses `GetAsyncKeyState` in a background thread.
+- Windows autopilot clicking uses `SendInput` and expects physical virtual-desktop coordinates.
 - Linux overlay positioning avoids the GNOME top panel by moving the overlay below the panel when `XDG_CURRENT_DESKTOP` contains `GNOME`.
 - UIA is Windows-only. On non-Windows, screen understanding relies primarily on screenshot/OCR paths.
 - `mobile/AGENTS.md` says Expo docs must be checked before editing mobile code.

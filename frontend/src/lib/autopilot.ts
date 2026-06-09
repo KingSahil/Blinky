@@ -45,7 +45,7 @@ export async function runAutopilotLoop({
     }
 
     const beforeSignature = getStepSignature(nextStep);
-    const point = getClickablePoint(nextStep);
+    const point = getPhysicalClickablePoint(nextStep, current);
     await act(point, nextStep);
     attempts += 1;
     await wait();
@@ -81,6 +81,19 @@ export function getClickablePoint(step: TutorStep): ScreenPoint {
   return {
     x: Math.round(match.x + match.width / 2),
     y: Math.round(match.y + match.height / 2),
+  };
+}
+
+export function getPhysicalClickablePoint(step: TutorStep, result: TutorResult): ScreenPoint {
+  const point = getClickablePoint(step);
+  const screenshot = result.screenshot;
+  if (!screenshot?.screen_width || !screenshot?.screen_height) {
+    return point;
+  }
+
+  return {
+    x: Math.round(point.x * (screenshot.screen_width / screenshot.width)),
+    y: Math.round(point.y * (screenshot.screen_height / screenshot.height)),
   };
 }
 

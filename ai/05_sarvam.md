@@ -86,7 +86,15 @@ The STT module transcribes the user's voice prompts.
 
 ---
 
-## 5. Error Handling & Parsing
+## 5. Voice With Web/Autopilot Mode
+
+Voice input still enters through `CommandBar.tsx`, so a spoken prompt can trigger either normal screen guidance or globe/web mode depending on the UI state. Sarvam only handles speech transcription and readback; it does not make browser-routing or autopilot decisions.
+
+Autopilot clicks remain governed by `frontend/src/lib/autopilot.ts` safety gates. Spoken workflows follow the same safe-click rules as typed workflows, and typed follow-up actions stay manual.
+
+---
+
+## 6. Error Handling & Parsing
 
 Sarvam API response structures are parsed by a custom utility `getSarvamErrorMessage`:
 * Safely extracts nested error fields (`error`, `message`, `detail`, `code`).

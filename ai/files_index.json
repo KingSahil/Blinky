@@ -6,23 +6,23 @@
     },
     {
       "path": "ai/01_architecture.md",
-      "desc": "Current architecture for desktop screen tutor, remote WebSocket agent, Tauri windows/events, settings, and platform behavior"
+      "desc": "Current architecture for desktop screen tutor, bounded autopilot, browser agent, remote WebSocket agent, Tauri windows/events, settings, and platform behavior"
     },
     {
       "path": "ai/02_coordinate_scaling.md",
-      "desc": "Coordinate mapping between physical screens, downsampled screenshots, UIA bounds, and overlay CSS pixels"
+      "desc": "Coordinate mapping between physical screens, downsampled screenshots, UIA bounds, overlay CSS pixels, and autopilot native clicks"
     },
     {
       "path": "ai/03_matching_heuristics.md",
-      "desc": "Fuzzy target matching, UIA/OCR merge rules, bonuses, penalties, ambiguity handling, and single-step post-processing"
+      "desc": "Fuzzy target matching, UIA/OCR merge rules, bonuses, penalties, ambiguity handling, single-step post-processing, and autopilot safety gating"
     },
     {
       "path": "ai/04_ai_inference.md",
-      "desc": "Screen tutor preflight, continuation state, locator fast path, prompt construction, Ollama/Groq clients, and post-inference enforcement"
+      "desc": "Screen tutor preflight, continuation state, locator fast path, prompt construction, Ollama/Groq clients, post-inference enforcement, and autopilot continuation"
     },
     {
       "path": "ai/05_sarvam.md",
-      "desc": "Sarvam text-to-speech and speech-to-text integration for the desktop command bar"
+      "desc": "Sarvam text-to-speech and speech-to-text integration for the desktop command bar, including voice behavior with web/autopilot mode"
     },
     {
       "path": "ai/06_detailed_summaries.md",
@@ -30,7 +30,7 @@
     },
     {
       "path": "ai/07_agent_router.md",
-      "desc": "Remote browser-agent sidecar, WebSocket query protocol, registered/generated tools, safety audit, and streaming synthesis"
+      "desc": "Browser-agent sidecar, Edge Playwright controller, WebSocket query protocol, registered/generated tools, safety audit, and streaming synthesis"
     },
     {
       "path": "ai/08_mobile_remote.md",
@@ -42,7 +42,7 @@
     },
     {
       "path": "frontend/src/CommandBar.tsx",
-      "desc": "Primary desktop command bar with tutor execution, continuation progress, voice input/readback, settings, and overlay coordination"
+      "desc": "Primary desktop command bar with tutor execution, web guidance, bounded autopilot, continuation progress, voice input/readback, settings, and overlay coordination"
     },
     {
       "path": "frontend/src/App.tsx",
@@ -57,8 +57,16 @@
       "desc": "Pure helpers for visible steps, current pending step, highlightable step, completion decisions, guide history, and summary visibility"
     },
     {
+      "path": "frontend/src/lib/autopilot.ts",
+      "desc": "Bounded observe-act loop for safe matched clicks, physical coordinate scaling, retry limits, and stop reasons"
+    },
+    {
+      "path": "frontend/src/lib/webGuidance.ts",
+      "desc": "Runs browser-agent actions before screen guidance for command-bar globe/web mode"
+    },
+    {
       "path": "frontend/src/lib/tauri.ts",
-      "desc": "Typed frontend wrappers for Tauri commands including run_tutor, overlay visibility, command sizing, and settings"
+      "desc": "Typed frontend wrappers for Tauri commands including run_tutor, native click_screen_point, overlay visibility, command sizing, and settings"
     },
     {
       "path": "frontend/src/lib/tts.ts",
@@ -66,7 +74,7 @@
     },
     {
       "path": "src-tauri/src/lib.rs",
-      "desc": "Tauri app core: commands, tray, shortcuts, capture exclusion, Python screen worker spawning, overlay events, settings, and global click/Enter polling"
+      "desc": "Tauri app core: commands, native SendInput clicking, tray, shortcuts, capture exclusion, Python screen worker spawning, overlay events, settings, and global click/Enter polling"
     },
     {
       "path": "src-tauri/src/websocket.rs",
@@ -78,11 +86,19 @@
     },
     {
       "path": "python/main.py",
-      "desc": "Screen tutor worker: routing, capture marker, locator fast path, OCR/UIA merge, AI prompt call, matching, search fallback, and single-step result"
+      "desc": "Screen tutor worker: routing, capture marker, locator fast path, OCR/UIA merge, AI prompt call, matching, search fallback, physical screenshot metadata, and single-step result"
     },
     {
       "path": "python/agent_router.py",
-      "desc": "Remote agent sidecar: direct open/search commands, LLM tool routing, tool execution, generated Playwright tools, and streamed synthesis"
+      "desc": "Agent sidecar: safe browser planner, direct open/search commands, LLM tool routing, tool execution, repaired generated Playwright tools, and streamed synthesis"
+    },
+    {
+      "path": "python/browser_agent.py",
+      "desc": "Safe JSON browser planner for open_url, web_search, and site_search actions"
+    },
+    {
+      "path": "python/browser_controller.py",
+      "desc": "Persistent Playwright controller that opens visible Microsoft Edge by default"
     },
     {
       "path": "python/ai/prompt.py",

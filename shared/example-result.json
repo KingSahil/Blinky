@@ -40,7 +40,9 @@
   "screenshot": {
     "path": "tmp/captures/screen-demo.png",
     "width": 1920,
-    "height": 1080
+    "height": 1080,
+    "screen_width": 1920,
+    "screen_height": 1080
   },
   "elapsed_ms": 1800,
   "warnings": []
