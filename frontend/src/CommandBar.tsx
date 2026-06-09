@@ -3,6 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { runAutopilotLoop } from './lib/autopilot';
 import {
   getCurrentGuideSteps,
   getDisplaySteps,
@@ -12,9 +13,10 @@ import {
   shouldCompleteStepOnHighlightClick,
   shouldShowSummaryBubble,
 } from './lib/guidance';
-import { runAgentQuery, runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow } from './lib/tauri';
+import { runAgentQuery, runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickScreenPoint } from './lib/tauri';
 import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvamErrorMessage } from './lib/tts';
-import type { TutorConversationMessage, TutorProgress } from './lib/types';
+import type { TutorConversationMessage, TutorProgress, TutorResult } from './lib/types';
+import { runWebActionThenScreenGuidance } from './lib/webGuidance';
 
 interface TargetClickedPayload {
   step?: number;
@@ -345,9 +347,34 @@ export function CommandBar() {
     
     const currentWindow = getCurrentWindow();
     try {
-      const result = webSearchEnabled
-        ? await runAgentQuery(queryText)
-        : await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, webSearchEnabled);
+      let result: TutorResult;
+      if (webSearchEnabled) {
+        let firstObservation: TutorResult | null = null;
+        const autopilot = await runAutopilotLoop({
+          maxAttempts: 5,
+          observe: async () => {
+            if (!firstObservation) {
+              firstObservation = await runWebActionThenScreenGuidance({
+                query: queryText,
+                previousQuestion,
+                progress: currentProgress(),
+                conversationHistory,
+                runAgentQuery,
+                runTutor,
+              });
+              return firstObservation;
+            }
+            return runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, true);
+          },
+          act: async (point) => {
+            setStatus(`Autopilot clicking (${point.x}, ${point.y})...`);
+            await clickScreenPoint(point.x, point.y);
+          },
+        });
+        result = autopilot.finalResult;
+      } else {
+        result = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, webSearchEnabled);
+      }
       const isContinuation = !!result.is_continuation;
 
       if (!isContinuation) {

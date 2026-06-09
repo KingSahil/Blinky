@@ -125,6 +125,11 @@ fn hide_overlay(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn click_screen_point(x: i32, y: i32) -> Result<(), String> {
+    click_screen_point_impl(x, y)
+}
+
+#[tauri::command]
 fn show_command_bar(app: AppHandle) -> Result<(), String> {
     show_command_window(&app);
     Ok(())
@@ -553,6 +558,7 @@ pub fn run() {
             run_agent_query,
             show_overlay,
             hide_overlay,
+            click_screen_point,
             show_command_bar,
             resize_command_window,
             resize_and_move_command_window,
@@ -692,6 +698,73 @@ fn start_global_click_listener(app: AppHandle) {
 #[cfg(not(target_os = "windows"))]
 fn start_global_click_listener(_app: AppHandle) {
     // No-op on Linux/macOS to avoid CPU spinning or panic
+}
+
+#[cfg(target_os = "windows")]
+fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
+        MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_ABSOLUTE,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN,
+    };
+
+    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+    if width <= 1 || height <= 1 {
+        return Err("Cannot determine virtual screen size".to_string());
+    }
+
+    let absolute_x = ((x - left) as i64 * 65535 / (width - 1) as i64) as i32;
+    let absolute_y = ((y - top) as i64 * 65535 / (height - 1) as i64) as i32;
+    let flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+    let mut inputs = [
+        mouse_input(absolute_x, absolute_y, flags | MOUSEEVENTF_MOVE),
+        mouse_input(absolute_x, absolute_y, flags | MOUSEEVENTF_LEFTDOWN),
+        mouse_input(absolute_x, absolute_y, flags | MOUSEEVENTF_LEFTUP),
+    ];
+
+    let sent = unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_mut_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        )
+    };
+    if sent != inputs.len() as u32 {
+        return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn mouse_input(dx: i32, dy: i32, flags: u32) -> windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT,
+    };
+
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx,
+                dy,
+                mouseData: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn click_screen_point_impl(_x: i32, _y: i32) -> Result<(), String> {
+    Err("Autopilot clicking is only implemented on Windows".to_string())
 }
 
 #[cfg(target_os = "windows")]

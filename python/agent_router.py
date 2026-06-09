@@ -10,6 +10,7 @@ import requests
 from pathlib import Path
 from urllib.parse import quote_plus
 from ai.client import ask_text_model
+from browser_agent import plan_browser_action, run_browser_plan
 
 REGISTRY_PATH = Path(__file__).parent / "tools" / "registry.json"
 REGISTRY_LOCK = asyncio.Lock()
@@ -46,6 +47,33 @@ def send_response(request_id, status, data=None, error=None):
         "error": error
     }
     print(json.dumps(response), flush=True)
+
+def repair_generated_playwright_code(code_str: str) -> str:
+    code = code_str
+    code = re.sub(
+        r"await\s+((?:page|context)\.set_default_(?:navigation_)?timeout\()",
+        r"\1",
+        code,
+    )
+    for method in (
+        "query_selector_all",
+        "query_selector",
+        "text_content",
+        "inner_text",
+        "get_attribute",
+        "evaluate",
+    ):
+        code = re.sub(
+            rf"(\.{method}\(.*),\s*timeout\s*=\s*\d+(\))",
+            r"\1\2",
+            code,
+        )
+        code = re.sub(
+            rf"\.{method}\(\s*timeout\s*=\s*\d+\s*\)",
+            f".{method}()",
+            code,
+        )
+    return code
 
 def audit_code(code_str):
     try:
@@ -448,7 +476,9 @@ Standards:
 - The script must accept JSON input via `sys.argv[1]` to extract parameters.
 - The script MUST output the final retrieved data as a single JSON object to stdout. Print all debugging or log messages to stderr.
 - Return JSON for handled failures too, for example `{"success": false, "error": "..."}`; do not only print errors to stderr.
-- Set bounded Playwright waits in the generated code: call `page.set_default_timeout(8000)` and pass explicit `timeout=8000` to navigation or selector waits.
+- Set bounded Playwright waits in the generated code: call `page.set_default_timeout(8000)` and pass explicit `timeout=8000` to navigation waits and locator waits.
+- Do not await set_default_timeout or set_default_navigation_timeout; they are synchronous methods in Playwright Python.
+- Do not pass timeout to ElementHandle methods such as query_selector_all, query_selector, text_content, inner_text, get_attribute, or evaluate.
 - Prefer `wait_until="domcontentloaded"` for `page.goto(...)` so verification does not hang on ads, analytics, or long-polling resources.
 - Avoid selector waits that depend on Google-specific markup such as `div.g`; collect useful data from stable page titles, URLs, links, or site-specific selectors with short timeouts.
 - Keep the code highly concise, clean, and avoid verbose comments or redundant logic to ensure the response fits within limits.
@@ -574,6 +604,20 @@ async def handle_request(line):
             send_response(request_id, "success", data={"response": f"Opened {label}."})
         except Exception as e:
             send_response(request_id, "error", error={"code": "AI_OPEN_URL_FAILED", "message": f"Failed to open {label}", "details": str(e)})
+        return
+
+    browser_plan = plan_browser_action(query)
+    if browser_plan.get("match"):
+        send_response(request_id, "processing", data={
+            "message": "Planning safe browser action...",
+            "action": browser_plan.get("action", ""),
+            "confidence": browser_plan.get("confidence", 0),
+        })
+        try:
+            result = await run_browser_plan(browser_plan)
+            send_response(request_id, "success", data=result)
+        except Exception as e:
+            send_response(request_id, "error", error={"code": "BROWSER_PLAN_FAILED", "message": "Failed to run browser action", "details": str(e)})
         return
 
     registry = await load_registry_async()
@@ -809,7 +853,7 @@ Respond ONLY with valid JSON.
             send_response(request_id, "error", error={"code": "GENERATION_INVALID", "message": "AI generated empty tool or code block", "details": gen_text})
             return
 
-        new_code = new_code.strip()
+        new_code = repair_generated_playwright_code(new_code.strip())
         
         # Unique staging filename: temp_candidate_{request_id}.py
         temp_tool_name = f"temp_candidate_{request_id}"
