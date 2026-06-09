@@ -3,6 +3,7 @@ dxcam==0.3.0; sys_platform == 'win32'
 numpy>=1.26.0
 pillow>=12.2.0
 psutil>=7.2.2
+playwright>=1.49.0
 pywin32>=311; sys_platform == 'win32'
 pywinauto==0.6.9; sys_platform == 'win32'
 requests>=2.34.2

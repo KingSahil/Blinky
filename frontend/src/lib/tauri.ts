@@ -19,6 +19,14 @@ export async function runTutor(
   });
 }
 
+export async function runAgentQuery(query: string): Promise<TutorResult> {
+  return invoke<TutorResult>('run_agent_query', {
+    request: {
+      query,
+    },
+  });
+}
+
 export async function showOverlay(): Promise<void> {
   return invoke('show_overlay');
 }

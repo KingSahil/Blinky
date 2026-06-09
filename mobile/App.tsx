@@ -16,11 +16,26 @@ import {
   ScrollView
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { usePCWebSocket, ConnectionStatus } from './usePCWebSocket';
 
 const STORAGE_KEY = '@blinky_pc_ip';
+
+const getExpoHostIp = (): string | null => {
+  const hostUri =
+    Constants.expoConfig?.hostUri ||
+    Constants.expoGoConfig?.debuggerHost ||
+    Constants.manifest?.debuggerHost;
+
+  if (!hostUri) {
+    return null;
+  }
+
+  const host = hostUri.split('/')[0]?.split(':')[0]?.trim();
+  return host || null;
+};
 
 export default function App() {
   const [ipAddress, setIpAddress] = useState('');
@@ -92,16 +107,16 @@ export default function App() {
   };
 
 
-  // Load saved IP address on launch
+  // Load saved IP address on launch, or prefill from the Expo dev server host.
   useEffect(() => {
     async function loadIp() {
       try {
         const savedIp = await AsyncStorage.getItem(STORAGE_KEY);
-        if (savedIp) {
-          setIpAddress(savedIp);
-        }
+        const detectedIp = getExpoHostIp();
+        setIpAddress(savedIp || detectedIp || '');
       } catch (e) {
         console.error('Failed to load host IP address', e);
+        setIpAddress(getExpoHostIp() || '');
       }
     }
     loadIp();

@@ -21,6 +21,11 @@ struct TutorRequest {
     conversation_history: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AgentQueryRequest {
+    query: String,
+}
+
 #[cfg(target_os = "windows")]
 #[derive(Clone, Serialize)]
 struct GlobalClick {
@@ -36,7 +41,10 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
     let overlay = app.get_webview_window("overlay");
     let command = app.get_webview_window("command");
 
-    let overlay_was_visible = overlay.as_ref().map(|w| w.is_visible().unwrap_or(false)).unwrap_or(false);
+    let overlay_was_visible = overlay
+        .as_ref()
+        .map(|w| w.is_visible().unwrap_or(false))
+        .unwrap_or(false);
 
     // Exclude windows from captures programmatically so they are not captured by the system,
     // while remaining fully visible and active for the user.
@@ -75,7 +83,13 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
 
     // Now restore/show overlay with highlights if applicable
     if let Some(ref w) = overlay {
-        if overlay_was_visible || parsed.get("steps").and_then(|s| s.as_array()).map(|a| !a.is_empty()).unwrap_or(false) {
+        if overlay_was_visible
+            || parsed
+                .get("steps")
+                .and_then(|s| s.as_array())
+                .map(|a| !a.is_empty())
+                .unwrap_or(false)
+        {
             let _ = w.emit("blinky://guidance", parsed.clone());
             let _ = w.show();
             configure_overlay_passthrough(w);
@@ -83,6 +97,14 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
     }
 
     Ok(parsed)
+}
+
+#[tauri::command]
+async fn run_agent_query(
+    app: AppHandle,
+    request: AgentQueryRequest,
+) -> Result<serde_json::Value, String> {
+    websocket::run_agent_query(&app, &request.query).await
 }
 
 #[tauri::command]
@@ -111,7 +133,9 @@ fn show_command_bar(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn resize_command_window(app: AppHandle, height: f64) -> Result<(), String> {
     if let Some(command) = app.get_webview_window("command") {
-        let current_size = command.inner_size().unwrap_or(tauri::PhysicalSize::new(760, 580));
+        let current_size = command
+            .inner_size()
+            .unwrap_or(tauri::PhysicalSize::new(760, 580));
         let scale_factor = command.scale_factor().unwrap_or(1.0);
         let current_logical_width = current_size.width as f64 / scale_factor;
         let size = tauri::LogicalSize::new(current_logical_width, height);
@@ -121,7 +145,13 @@ fn resize_command_window(app: AppHandle, height: f64) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn resize_and_move_command_window(app: AppHandle, x: f64, y: f64, width: f64, height: f64) -> Result<(), String> {
+fn resize_and_move_command_window(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
     if let Some(command) = app.get_webview_window("command") {
         let size = tauri::LogicalSize::new(width, height);
         let pos = tauri::LogicalPosition::new(x, y);
@@ -143,12 +173,12 @@ struct BlinkySettings {
 async fn get_settings(app: AppHandle) -> Result<BlinkySettings, String> {
     let root = project_root(&app)?;
     let env_vars = read_env_file(&root);
-    
+
     let mut provider = "groq".to_string();
     let mut shortcut = "Enter".to_string();
     let mut sarvam_api_key = "".to_string();
     let mut groq_api_key = "".to_string();
-    
+
     for (key, val) in env_vars {
         if key == "BLINKY_AI_PROVIDER" {
             provider = val.to_lowercase();
@@ -160,26 +190,37 @@ async fn get_settings(app: AppHandle) -> Result<BlinkySettings, String> {
             groq_api_key = val;
         }
     }
-    
-    Ok(BlinkySettings { provider, shortcut, sarvam_api_key, groq_api_key })
+
+    Ok(BlinkySettings {
+        provider,
+        shortcut,
+        sarvam_api_key,
+        groq_api_key,
+    })
 }
 
 #[tauri::command]
-async fn save_settings(app: AppHandle, provider: String, shortcut: String, sarvam_api_key: String, groq_api_key: String) -> Result<(), String> {
+async fn save_settings(
+    app: AppHandle,
+    provider: String,
+    shortcut: String,
+    sarvam_api_key: String,
+    groq_api_key: String,
+) -> Result<(), String> {
     let root = project_root(&app)?;
     ensure_env_file(&root);
     let env_path = root.join(".env");
-    
+
     // Read the current contents of .env
     let contents = std::fs::read_to_string(&env_path).unwrap_or_default();
-    
+
     // Parse lines, update values, and rebuild
     let mut lines: Vec<String> = contents.lines().map(|s| s.to_string()).collect();
     let mut provider_found = false;
     let mut shortcut_found = false;
     let mut sarvam_api_key_found = false;
     let mut groq_api_key_found = false;
-    
+
     for line in lines.iter_mut() {
         let trimmed = line.trim();
         if trimmed.starts_with("BLINKY_AI_PROVIDER=") {
@@ -196,7 +237,7 @@ async fn save_settings(app: AppHandle, provider: String, shortcut: String, sarva
             groq_api_key_found = true;
         }
     }
-    
+
     if !provider_found {
         lines.push(format!("BLINKY_AI_PROVIDER={}", provider));
     }
@@ -209,11 +250,11 @@ async fn save_settings(app: AppHandle, provider: String, shortcut: String, sarva
     if !groq_api_key_found {
         lines.push(format!("GROQ_API_KEY={}", groq_api_key));
     }
-    
+
     let new_contents = lines.join("\n") + "\n";
     std::fs::write(&env_path, new_contents)
         .map_err(|err| format!("Failed to write .env file: {err}"))?;
-        
+
     Ok(())
 }
 
@@ -267,7 +308,10 @@ fn run_python_worker(
             .map_err(|err| format!("Failed to write to Python worker: {err}"))?;
     }
 
-    let child_stdout = child.stdout.take().ok_or("Failed to open Python worker stdout")?;
+    let child_stdout = child
+        .stdout
+        .take()
+        .ok_or("Failed to open Python worker stdout")?;
     let mut reader = BufReader::new(child_stdout);
     let mut stdout_accumulated = String::new();
     let mut line = String::new();
@@ -293,7 +337,9 @@ fn run_python_worker(
     }
 
     let stderr_reader = child.stderr.take().map(BufReader::new);
-    let status = child.wait().map_err(|err| format!("Failed to wait for python worker: {err}"))?;
+    let status = child
+        .wait()
+        .map_err(|err| format!("Failed to wait for python worker: {err}"))?;
 
     if !status.success() {
         let mut stderr_str = String::new();
@@ -316,7 +362,10 @@ fn ensure_env_file(root: &PathBuf) {
         if example_path.exists() {
             let _ = std::fs::copy(&example_path, &env_path);
         } else {
-            let _ = std::fs::write(&env_path, b"BLINKY_AI_PROVIDER=groq\nBLINKY_SHORTCUT=Space\n");
+            let _ = std::fs::write(
+                &env_path,
+                b"BLINKY_AI_PROVIDER=groq\nBLINKY_SHORTCUT=Space\n",
+            );
         }
     }
 }
@@ -328,10 +377,7 @@ fn read_env_file(root: &PathBuf) -> Vec<(String, String)> {
         return Vec::new();
     };
 
-    contents
-        .lines()
-        .filter_map(parse_env_line)
-        .collect()
+    contents.lines().filter_map(parse_env_line).collect()
 }
 
 fn parse_env_line(line: &str) -> Option<(String, String)> {
@@ -386,7 +432,6 @@ fn project_root(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|err| format!("Cannot locate app resource directory: {err}"))
 }
 
-
 fn python_executable(root: &PathBuf) -> PathBuf {
     let bin_path = root.join(".venv").join("bin").join("python");
     let scripts_path = root.join(".venv").join("Scripts").join("python.exe");
@@ -413,18 +458,18 @@ fn configure_overlay_passthrough(window: &WebviewWindow) {
     {
         if let Ok(Some(monitor)) = window.current_monitor() {
             let scale_factor = monitor.scale_factor();
-            
+
             // Query the desktop environment to only apply panel offsets on GNOME
             let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
                 .map(|val| val.to_uppercase().contains("GNOME"))
                 .unwrap_or(false);
-                
+
             let bar_height = if is_gnome {
                 (32.0 * scale_factor) as i32
             } else {
                 0
             };
-            
+
             let size = monitor.size();
             let physical_width = size.width;
             let physical_height = size.height.saturating_sub(bar_height as u32);
@@ -433,7 +478,10 @@ fn configure_overlay_passthrough(window: &WebviewWindow) {
                 width: physical_width,
                 height: physical_height,
             }));
-            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: 0, y: bar_height }));
+            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                x: 0,
+                y: bar_height,
+            }));
         }
     }
 
@@ -470,7 +518,10 @@ fn configure_overlay_passthrough(window: &WebviewWindow) {
                 SetWindowLongW(
                     hwnd,
                     GWL_EXSTYLE,
-                    style | WS_EX_TRANSPARENT as i32 | WS_EX_LAYERED as i32 | WS_EX_TOOLWINDOW as i32,
+                    style
+                        | WS_EX_TRANSPARENT as i32
+                        | WS_EX_LAYERED as i32
+                        | WS_EX_TOOLWINDOW as i32,
                 );
             }
         }
@@ -499,6 +550,7 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             run_tutor,
+            run_agent_query,
             show_overlay,
             hide_overlay,
             show_command_bar,
@@ -542,19 +594,22 @@ pub fn run() {
             for code in [Code::Enter, Code::Space] {
                 let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), code);
                 let app_handle = app_handle.clone();
-                if let Err(err) = app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-                    if event.state() == ShortcutState::Pressed {
-                        let active = get_active_shortcut_from_env(&app_handle);
-                        let is_match = match code {
-                            Code::Enter => active == "Enter",
-                            Code::Space => active == "Space",
-                            _ => false,
-                        };
-                        if is_match {
-                            show_command_window(&app_handle);
-                        }
-                    }
-                }) {
+                if let Err(err) =
+                    app.global_shortcut()
+                        .on_shortcut(shortcut, move |_app, _shortcut, event| {
+                            if event.state() == ShortcutState::Pressed {
+                                let active = get_active_shortcut_from_env(&app_handle);
+                                let is_match = match code {
+                                    Code::Enter => active == "Enter",
+                                    Code::Space => active == "Space",
+                                    _ => false,
+                                };
+                                if is_match {
+                                    show_command_window(&app_handle);
+                                }
+                            }
+                        })
+                {
                     eprintln!("Failed to register command shortcut {code:?}: {err}");
                 }
             }
@@ -654,7 +709,9 @@ impl GlobalClick {
 #[cfg(target_os = "windows")]
 fn read_mouse_click(was_left_down: &mut bool, was_right_down: &mut bool) -> Option<GlobalClick> {
     use windows_sys::Win32::Foundation::POINT;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
     let is_left_down = unsafe { (GetAsyncKeyState(VK_LBUTTON as i32) & 0x8000u16 as i16) != 0 };

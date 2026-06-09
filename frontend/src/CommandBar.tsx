@@ -12,7 +12,7 @@ import {
   shouldCompleteStepOnHighlightClick,
   shouldShowSummaryBubble,
 } from './lib/guidance';
-import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow } from './lib/tauri';
+import { runAgentQuery, runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow } from './lib/tauri';
 import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvamErrorMessage } from './lib/tts';
 import type { TutorConversationMessage, TutorProgress } from './lib/types';
 
@@ -345,7 +345,9 @@ export function CommandBar() {
     
     const currentWindow = getCurrentWindow();
     try {
-      const result = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, webSearchEnabled);
+      const result = webSearchEnabled
+        ? await runAgentQuery(queryText)
+        : await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, webSearchEnabled);
       const isContinuation = !!result.is_continuation;
 
       if (!isContinuation) {

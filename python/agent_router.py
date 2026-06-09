@@ -14,6 +14,7 @@ from ai.client import ask_text_model
 REGISTRY_PATH = Path(__file__).parent / "tools" / "registry.json"
 REGISTRY_LOCK = asyncio.Lock()
 ROUTE_CACHE = {}
+GENERATED_TOOL_VERIFY_TIMEOUT = 12
 
 async def load_registry_async():
     async with REGISTRY_LOCK:
@@ -55,14 +56,21 @@ def audit_code(code_str):
     forbidden_imports = {"subprocess", "shutil", "os.system", "os.popen", "pty"}
     forbidden_calls = {"exec", "eval", "system", "popen", "spawn"}
 
+    uses_playwright = False
+    has_default_timeout = False
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name in forbidden_imports:
                     return False, f"Forbidden import found: {alias.name}"
+                if alias.name == "playwright" or alias.name.startswith("playwright."):
+                    uses_playwright = True
         elif isinstance(node, ast.ImportFrom):
             if node.module in forbidden_imports:
                 return False, f"Forbidden import found: {node.module}"
+            if node.module and (node.module == "playwright" or node.module.startswith("playwright.")):
+                uses_playwright = True
             for alias in node.names:
                 if f"{node.module}.{alias.name}" in forbidden_imports:
                     return False, f"Forbidden import found: {node.module}.{alias.name}"
@@ -74,6 +82,15 @@ def audit_code(code_str):
             elif isinstance(node.func, ast.Attribute):
                 if node.func.attr in forbidden_calls:
                     return False, f"Forbidden attribute call: {node.func.attr}"
+                if node.func.attr in {"set_default_timeout", "set_default_navigation_timeout"}:
+                    has_default_timeout = True
+                if uses_playwright and node.func.attr in {"goto", "wait_for_selector", "wait_for_load_state"}:
+                    has_timeout_kwarg = any(keyword.arg == "timeout" for keyword in node.keywords)
+                    if not has_timeout_kwarg:
+                        return False, f"Playwright call '{node.func.attr}' must include a bounded timeout"
+
+    if uses_playwright and not has_default_timeout:
+        return False, "Generated Playwright code must set a bounded timeout with page.set_default_timeout(...) or context.set_default_timeout(...)"
 
     return True, ""
 
@@ -89,7 +106,11 @@ async def execute_script(filepath, args_json, timeout=30):
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             proc.kill()
-            return False, "TIMEOUT", "Process execution timed out after 30 seconds"
+            try:
+                await proc.wait()
+            except Exception:
+                pass
+            return False, "TIMEOUT", f"Process execution timed out after {timeout:g} seconds"
 
         stdout_decoded = stdout.decode().strip()
         stderr_decoded = stderr.decode().strip()
@@ -259,6 +280,8 @@ def resolve_open_url_request(query: str) -> tuple[str, str] | None:
         "github": ("GitHub", "https://github.com"),
         "chatgpt": ("ChatGPT", "https://chatgpt.com"),
         "wikipedia": ("Wikipedia", "https://www.wikipedia.org"),
+        "whatsapp": ("WhatsApp", "https://web.whatsapp.com"),
+        "whatsapp web": ("WhatsApp", "https://web.whatsapp.com"),
     }
     if target in known_sites:
         return known_sites[target]
@@ -270,6 +293,57 @@ def resolve_open_url_request(query: str) -> tuple[str, str] | None:
         return (target, f"https://{target}")
 
     return None
+
+def resolve_ai_open_url_request(query: str) -> tuple[str, str] | None:
+    normalized = " ".join(query.strip().split())
+    if not normalized.lower().startswith(("open ", "launch ", "go to ", "navigate to ")):
+        return None
+
+    prompt = f"""
+You resolve browser open/navigation commands for Blinky.
+
+User command: "{query}"
+
+If this command asks to open a website or web app, infer the best public URL.
+Return ONLY valid JSON with:
+{{
+  "match": true,
+  "label": "short human-readable app/site name",
+  "url": "https://...",
+  "confidence": 0-100,
+  "reasoning": "brief reason"
+}}
+
+If it is not a web open/navigation request or you are unsure, return:
+{{
+  "match": false,
+  "label": "",
+  "url": "",
+  "confidence": 0,
+  "reasoning": "brief reason"
+}}
+
+Rules:
+- Use the official public website or web app URL when clear.
+- Do not return local filesystem paths or shell commands.
+- Do not invent a URL for ambiguous commands.
+- The URL must start with https:// or http://.
+"""
+    try:
+        decision = parse_routing_decision(ask_text_model(prompt))
+    except Exception:
+        return None
+
+    if not decision.get("match"):
+        return None
+
+    confidence = int(decision.get("confidence", 0) or 0)
+    url = str(decision.get("url", "")).strip()
+    label = str(decision.get("label", "")).strip() or url
+    if confidence < 70 or not re.fullmatch(r"https?://[^\s]+", url):
+        return None
+
+    return (label, url)
 
 def resolve_web_search_request(query: str) -> tuple[str, str] | None:
     normalized = " ".join(query.strip().split())
@@ -286,18 +360,110 @@ def resolve_web_search_request(query: str) -> tuple[str, str] | None:
 def resolve_youtube_search_request(query: str) -> tuple[str, str] | None:
     normalized = " ".join(query.strip().split())
     match = re.match(
-        r"^(?:open|search|find|play)\s+(.+?)\s+(?:on\s+)?(?:you\s*tube|youtube)$",
+        r"^(?:open|search|find|play)\s+(.+?)\s+(?:(?:on|in)\s+)?(?:you\s*tube|youtube)$",
         normalized,
         flags=re.IGNORECASE,
     )
-    if not match:
-        return None
+    terms = match.group(1).strip(" .,!?:;\"'`()[]") if match else ""
+    if not terms:
+        flexible_match = re.match(
+            r"^(?:open|search|find|play)\s+(.+)$",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        if not flexible_match:
+            return None
+        tail = flexible_match.group(1)
+        if not re.search(r"\byou\s*tube\b|\byoutube\b", tail, flags=re.IGNORECASE):
+            return None
+        terms = re.sub(r"\b(?:you\s*tube|youtube)\b", " ", tail, flags=re.IGNORECASE)
+        terms = re.sub(r"\b(?:video|videos)\b", " video ", terms, count=1, flags=re.IGNORECASE)
+        terms = " ".join(terms.strip(" .,!?:;\"'`()[]").split())
 
-    terms = match.group(1).strip(" .,!?:;\"'`()[]")
     if not terms:
         return None
 
     return (terms, f"https://www.youtube.com/results?search_query={quote_plus(terms)}")
+
+def is_playwright_health_check_request(query: str) -> bool:
+    normalized = re.sub(r"[?!.]+$", "", " ".join(query.lower().strip().split()))
+    return normalized in {
+        "test playwright",
+        "check playwright",
+        "playwright test",
+        "does playwright work",
+        "is playwright working",
+    }
+
+async def run_playwright_health_check() -> tuple[bool, str]:
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as e:
+        return False, f"Playwright import failed: {e}"
+
+    browser = None
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            page.set_default_timeout(5000)
+            await page.goto(
+                "data:text/html,<html><title>Blinky Playwright OK</title><body><h1 id='ok'>ok</h1></body></html>",
+                wait_until="domcontentloaded",
+                timeout=5000,
+            )
+            text = await page.locator("#ok").text_content(timeout=5000)
+            if str(text).strip() != "ok":
+                return False, "Playwright launched Chromium, but the local smoke page did not render correctly."
+            return True, "Playwright is working."
+    except Exception as e:
+        return False, f"Playwright smoke test failed: {e}"
+    finally:
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+
+def build_generator_prompt(query: str, combined_result=None, sufficiency_reason: str = "") -> str:
+    prompt = f"""
+You are Blinky's Playwright code generator.
+Write a complete, single-file Python script to automate a browser using Playwright to solve this query:
+"{query}"
+"""
+    if combined_result:
+        prompt += f"""
+Note: We previously tried executing registered tools, but the results were insufficient.
+Partial results retrieved: {json.dumps(combined_result, indent=2)}
+Reason for insufficiency: {sufficiency_reason}
+
+Please write the custom script targeting specifically the missing details or correcting the insufficiency.
+"""
+
+    prompt += """
+Standards:
+- Use Playwright's async API.
+- Run Chromium in headless mode by default.
+- Use `try...finally` to guarantee browser closure.
+- The script must accept JSON input via `sys.argv[1]` to extract parameters.
+- The script MUST output the final retrieved data as a single JSON object to stdout. Print all debugging or log messages to stderr.
+- Return JSON for handled failures too, for example `{"success": false, "error": "..."}`; do not only print errors to stderr.
+- Set bounded Playwright waits in the generated code: call `page.set_default_timeout(8000)` and pass explicit `timeout=8000` to navigation or selector waits.
+- Prefer `wait_until="domcontentloaded"` for `page.goto(...)` so verification does not hang on ads, analytics, or long-polling resources.
+- Avoid selector waits that depend on Google-specific markup such as `div.g`; collect useful data from stable page titles, URLs, links, or site-specific selectors with short timeouts.
+- Keep the code highly concise, clean, and avoid verbose comments or redundant logic to ensure the response fits within limits.
+- IMPORTANT: Do NOT use fragile Google Shopping-specific selectors (like `div[data-section-title*='Shopping']`). If searching on Google, use general, robust result headers (e.g. `div.g` or `h3`) or query e-commerce sites directly.
+
+Format your output exactly as follows:
+TOOL_NAME: <a_descriptive_snake_case_name_relevant_to_the_query>
+DESCRIPTION: <a_one_line_description_of_what_this_tool_does>
+ARGUMENTS: query
+CODE:
+```python
+# Your full python code here
+```
+"""
+    return prompt
 
 async def execute_single_tool_call(tool_call, registry, query, semaphore, request_id):
     tool_name = tool_call.get("tool_name", "")
@@ -349,6 +515,15 @@ async def handle_request(line):
 
     send_response(request_id, "processing", data={"message": "Analyzing query and routing..."})
 
+    if is_playwright_health_check_request(query):
+        send_response(request_id, "processing", data={"message": "Testing Playwright locally..."})
+        ok, message = await run_playwright_health_check()
+        if ok:
+            send_response(request_id, "success", data={"response": message})
+        else:
+            send_response(request_id, "error", error={"code": "PLAYWRIGHT_HEALTHCHECK_FAILED", "message": "Playwright health check failed", "details": message})
+        return
+
     open_url = resolve_open_url_request(query)
     if open_url:
         label, url = open_url
@@ -386,6 +561,19 @@ async def handle_request(line):
             send_response(request_id, "success", data={"response": f"Searched for {terms}."})
         except Exception as e:
             send_response(request_id, "error", error={"code": "WEB_SEARCH_FAILED", "message": f"Failed to search for {terms}", "details": str(e)})
+        return
+
+    ai_open_url = resolve_ai_open_url_request(query)
+    if ai_open_url:
+        label, url = ai_open_url
+        send_response(request_id, "processing", data={"message": f"Opening {label}..."})
+        try:
+            opened = await asyncio.to_thread(webbrowser.open, url)
+            if not opened:
+                raise RuntimeError("The default browser did not accept the AI-resolved open request")
+            send_response(request_id, "success", data={"response": f"Opened {label}."})
+        except Exception as e:
+            send_response(request_id, "error", error={"code": "AI_OPEN_URL_FAILED", "message": f"Failed to open {label}", "details": str(e)})
         return
 
     registry = await load_registry_async()
@@ -533,39 +721,7 @@ Respond ONLY with valid JSON.
             "reasoning": reasoning
         })
 
-        generator_prompt = f"""
-You are Blinky's Playwright code generator.
-Write a complete, single-file Python script to automate a browser using Playwright to solve this query:
-"{query}"
-"""
-        if combined_result:
-            generator_prompt += f"""
-Note: We previously tried executing registered tools, but the results were insufficient.
-Partial results retrieved: {json.dumps(combined_result, indent=2)}
-Reason for insufficiency: {sufficiency_reason}
-
-Please write the custom script targeting specifically the missing details or correcting the insufficiency.
-"""
-
-        generator_prompt += """
-Standards:
-- Use Playwright's async API.
-- Run Chromium in headless mode by default.
-- Use `try...finally` to guarantee browser closure.
-- The script must accept JSON input via `sys.argv[1]` to extract parameters.
-- The script MUST output the final retrieved data as a single JSON object to stdout. Print all debugging or log messages to stderr.
-- Keep the code highly concise, clean, and avoid verbose comments or redundant logic to ensure the response fits within limits.
-- IMPORTANT: Do NOT use fragile Google Shopping-specific selectors (like `div[data-section-title*='Shopping']`). If searching on Google, use general, robust result headers (e.g. `div.g` or `h3`) or query e-commerce sites directly.
-
-Format your output exactly as follows:
-TOOL_NAME: <a_descriptive_snake_case_name_relevant_to_the_query>
-DESCRIPTION: <a_one_line_description_of_what_this_tool_does>
-ARGUMENTS: query
-CODE:
-```python
-# Your full python code here
-```
-"""
+        generator_prompt = build_generator_prompt(query, combined_result, sufficiency_reason)
         try:
             provider = (os.getenv("BLINKY_AI_PROVIDER", "ollama").strip() or "ollama").lower()
             if provider == "groq":
@@ -681,7 +837,11 @@ CODE:
         for arg in new_arguments:
             test_args[arg] = query
 
-        success, result_data, error_details = await execute_script(temp_tool_filepath, test_args)
+        success, result_data, error_details = await execute_script(
+            temp_tool_filepath,
+            test_args,
+            timeout=GENERATED_TOOL_VERIFY_TIMEOUT,
+        )
 
         if success:
             # Move staging file to final file

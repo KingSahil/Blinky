@@ -65,15 +65,16 @@ Terminal statuses are `success` or `error`. Streaming synthesis chunks use:
 
 ## 4. Built-In Direct Resolvers
 
-Before LLM routing, `agent_router.py` handles simple browser-opening requests:
+Before tool routing and code generation, `agent_router.py` handles browser-opening requests:
 
-- `open youtube`, `open google`, `open gmail`, `open github`, `open chatgpt`, `open wikipedia`
 - direct `https://...` URLs
 - domain-like inputs such as `example.com`
 - `search ...` or `google ...`
 - `open/search/find/play <terms> on youtube`
+- `open/search/find/play <terms> in youtube`
+- AI-resolved open/navigation intents such as `open whatsapp`, `open notion`, or `launch spotify`
 
-These use Python `webbrowser.open()`.
+These use Python `webbrowser.open()` after either deterministic parsing or an AI URL-resolution step. Open/navigation intents do not generate Playwright tools unless the AI URL resolver cannot confidently map them to a public URL.
 
 ## 5. Registered Tools
 
