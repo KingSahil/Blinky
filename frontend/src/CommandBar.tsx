@@ -1,7 +1,8 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2 } from 'lucide-react';
+import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import {
   getCurrentGuideSteps,
   getDisplaySteps,
@@ -29,6 +30,7 @@ interface TutorRunOptions {
 export function CommandBar() {
   const [question, setQuestion] = useState('');
   const [isRunning, setIsRunning] = useState(false);
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const defaultStatus = 'Ask anything on your screen';
 
   const [isResizing, setIsResizing] = useState(false);
@@ -121,6 +123,38 @@ export function CommandBar() {
       if (currentAudioRef.current) {
         currentAudioRef.current.pause();
       }
+    };
+  }, []);
+
+  // Listen for real-time status and streaming chunks from python worker
+  useEffect(() => {
+    let unlistenStatus: Promise<any>;
+    let unlistenChunk: Promise<any>;
+
+    unlistenStatus = listen<{ phase: string; message: string }>('blinky://tutor-status', (event) => {
+      setStatus(event.payload.message);
+    });
+
+    unlistenChunk = listen<{ message: string }>('blinky://tutor-chunk', (event) => {
+      setStatus((prev) => {
+        if (
+          prev === 'Thinking...' ||
+          prev === 'Reading the screen...' ||
+          prev === 'Synthesizing streamed answer...' ||
+          prev === 'Answering directly from your pre-trained knowledge base...' ||
+          prev.startsWith('Searching SearXNG') ||
+          prev.startsWith('Fetching content') ||
+          prev.startsWith('Cleaning and filtering')
+        ) {
+          return event.payload.message;
+        }
+        return prev + event.payload.message;
+      });
+    });
+
+    return () => {
+      void unlistenStatus.then((dispose) => dispose());
+      void unlistenChunk.then((dispose) => dispose());
     };
   }, []);
 
@@ -311,7 +345,7 @@ export function CommandBar() {
     
     const currentWindow = getCurrentWindow();
     try {
-      const result = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory);
+      const result = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, webSearchEnabled);
       const isContinuation = !!result.is_continuation;
 
       if (!isContinuation) {
@@ -776,6 +810,18 @@ export function CommandBar() {
             />
             <button
               type="button"
+              className={`command-websearch-btn ${webSearchEnabled ? 'active' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setWebSearchEnabled(!webSearchEnabled);
+              }}
+              disabled={isRunning || isTranscribing}
+              title="Toggle Web Search"
+            >
+              <Globe size={16} />
+            </button>
+            <button
+              type="button"
               className={`command-mic-btn ${isRecording ? 'recording' : ''} ${isTranscribing ? 'loading' : ''}`}
               onClick={(e) => {
                 e.stopPropagation();
@@ -797,13 +843,23 @@ export function CommandBar() {
             </button>
           </div>
 
+          {webSearchEnabled && isRunning && (
+            <div className="command-progress-bar-container">
+              <div className="command-progress-bar-fill" />
+              <div className="command-progress-status-text">
+                <Globe size={12} className="spin" />
+                <span>Web Intelligence Search Active...</span>
+              </div>
+            </div>
+          )}
+
           {showStatus && (
             <div className="command-result-container">
               {showSummaryBubble && (
                 <div className="command-summary-bubble">
                   <Sparkles size={14} className="summary-sparkle" />
                   <div className="command-summary-text-container">
-                    <span className="command-status">{status}</span>
+                    <span className="command-status"><ReactMarkdown>{status}</ReactMarkdown></span>
                     {steps.length > 0 && sarvamApiKey && (
                       <button
                         type="button"

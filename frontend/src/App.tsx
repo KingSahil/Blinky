@@ -2,7 +2,8 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
-import { runTutor, showOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow } from './lib/tauri';
+import ReactMarkdown from 'react-markdown';
+import { runTutor, showOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, openUrl } from './lib/tauri';
 
 export function App() {
   const [question, setQuestion] = useState('');
@@ -146,6 +147,38 @@ export function App() {
     const unlisten = listen('blinky://open-command', focusInput);
     return () => {
       unlisten.then((dispose) => dispose());
+    };
+  }, []);
+
+  // Listen for real-time status and streaming chunks from python worker
+  useEffect(() => {
+    let unlistenStatus: Promise<any>;
+    let unlistenChunk: Promise<any>;
+
+    unlistenStatus = listen<{ phase: string; message: string }>('blinky://tutor-status', (event) => {
+      setStatus(event.payload.message);
+    });
+
+    unlistenChunk = listen<{ message: string }>('blinky://tutor-chunk', (event) => {
+      setStatus((prev) => {
+        if (
+          prev === 'Thinking...' ||
+          prev === 'Reading the screen...' ||
+          prev === 'Synthesizing streamed answer...' ||
+          prev === 'Answering directly from your pre-trained knowledge base...' ||
+          prev.startsWith('Searching SearXNG') ||
+          prev.startsWith('Fetching content') ||
+          prev.startsWith('Cleaning and filtering')
+        ) {
+          return event.payload.message;
+        }
+        return prev + event.payload.message;
+      });
+    });
+
+    return () => {
+      void unlistenStatus.then((dispose) => dispose());
+      void unlistenChunk.then((dispose) => dispose());
     };
   }, []);
 
@@ -418,7 +451,28 @@ export function App() {
             <div className="command-result-container">
               <div className="command-summary-bubble">
                 <Sparkles size={14} className="summary-sparkle" />
-                <span className="command-status">{status}</span>
+                <span className="command-status">
+                  <ReactMarkdown
+                    components={{
+                      a: ({ node, href, children, ...props }) => (
+                        <a
+                          href={href}
+                          {...props}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            if (href) {
+                              void openUrl(href);
+                            }
+                          }}
+                        >
+                          {children}
+                        </a>
+                      )
+                    }}
+                  >
+                    {status}
+                  </ReactMarkdown>
+                </span>
               </div>
 
               {steps.length > 0 && (
