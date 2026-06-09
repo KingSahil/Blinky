@@ -286,13 +286,12 @@ export default function App() {
             {/* Blinky Browser Agent Card (Glassmorphic) */}
             <View style={[styles.card, !isConnected && styles.cardDisabled]}>
               <Text style={styles.cardTitle}>AI Browser Assistant</Text>
-              <Text style={styles.cardSubtitle}>Ask Blinky to search or navigate the web for you</Text>
               
               <View style={styles.inputWrapper}>
                 <Ionicons name="sparkles-outline" size={20} color="#6C6985" style={styles.inputIcon} />
                 <TextInput
                   style={[styles.input, !isConnected && styles.inputDisabled]}
-                  placeholder="Ask something (e.g. Look up @MrBeast)"
+                  placeholder="Ask something"
                   placeholderTextColor="#6C6985"
                   value={queryText}
                   onChangeText={setQueryText}
@@ -377,7 +376,6 @@ export default function App() {
             {/* PC Controls Card (Glassmorphic) */}
             <View style={[styles.card, !isConnected && styles.cardDisabled]}>
               <Text style={styles.cardTitle}>Power Operations</Text>
-              <Text style={styles.cardSubtitle}>Ensure your PC is on the same local Wi-Fi network</Text>
               
               {actionFeedback && (
                 <View style={styles.feedbackContainer}>
@@ -537,12 +535,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#FFFFFF',
     letterSpacing: 0.3,
-  },
-  cardSubtitle: {
-    fontSize: 13,
-    color: '#6C6985',
-    marginBottom: 20,
-    marginTop: -16,
   },
   inputWrapper: {
     backgroundColor: 'rgba(0, 0, 0, 0.45)',

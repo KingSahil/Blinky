@@ -1,5 +1,6 @@
 use std::process::Command as StdCommand;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::OnceLock;
 use tokio::net::TcpListener;
@@ -17,13 +18,14 @@ struct AgentDaemon {
 
 impl AgentDaemon {
     async fn start() -> Result<Self, std::io::Error> {
-        let mut script_path = std::path::PathBuf::from("python/agent_router.py");
-        if !script_path.exists() {
-            script_path = std::path::PathBuf::from("../python/agent_router.py");
-        }
+        let root = project_root();
+        let script_path = root.join("python").join("agent_router.py");
+        let python = python_executable(&root);
 
-        let mut cmd = TokioCommand::new("python3");
-        cmd.args(&["-u", script_path.to_str().unwrap()])
+        let mut cmd = TokioCommand::new(python);
+        cmd.arg("-u")
+            .arg(&script_path)
+            .current_dir(&root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
@@ -54,6 +56,57 @@ impl AgentDaemon {
         let mut line = String::new();
         self.reader.read_line(&mut line).await?;
         Ok(line)
+    }
+}
+
+fn project_root() -> PathBuf {
+    if let Ok(cwd) = std::env::current_dir() {
+        if cwd.join("python").exists() {
+            return cwd;
+        }
+        if cwd.join("_up_").join("python").exists() {
+            return cwd.join("_up_");
+        }
+        if let Some(parent) = cwd.parent() {
+            if parent.join("python").exists() {
+                return parent.to_path_buf();
+            }
+            if parent.join("_up_").join("python").exists() {
+                return parent.join("_up_");
+            }
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            if exe_dir.join("python").exists() {
+                return exe_dir.to_path_buf();
+            }
+            if exe_dir.join("_up_").join("python").exists() {
+                return exe_dir.join("_up_");
+            }
+        }
+    }
+
+    PathBuf::from(".")
+}
+
+fn python_executable(root: &PathBuf) -> PathBuf {
+    let bin_path = root.join(".venv").join("bin").join("python");
+    let scripts_path = root.join(".venv").join("Scripts").join("python.exe");
+    if bin_path.exists() {
+        bin_path
+    } else if scripts_path.exists() {
+        scripts_path
+    } else {
+        #[cfg(target_os = "windows")]
+        {
+            PathBuf::from("python")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PathBuf::from("python3")
+        }
     }
 }
 
@@ -206,7 +259,10 @@ async fn forward_query_to_daemon(
                     
                     // Forward line to websocket
                     if let Err(e) = ws_stream.send(tokio_tungstenite::tungstenite::Message::Text(line.clone().into())).await {
-                        return Err(e.into());
+                        eprintln!("Client disconnected while streaming daemon response: {:?}", e);
+                        let _ = daemon.child.kill().await;
+                        *guard = None;
+                        return Ok(());
                     }
 
                     // Check for terminal state
