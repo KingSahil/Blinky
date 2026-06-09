@@ -5,8 +5,10 @@ import ast
 import re
 import asyncio
 import subprocess
+import webbrowser
 import requests
 from pathlib import Path
+from urllib.parse import quote_plus
 from ai.client import ask_text_model
 
 REGISTRY_PATH = Path(__file__).parent / "tools" / "registry.json"
@@ -239,6 +241,64 @@ def parse_routing_decision(raw_decision: str) -> dict:
             
     return decision
 
+def resolve_open_url_request(query: str) -> tuple[str, str] | None:
+    normalized = " ".join(query.strip().lower().split())
+    if not normalized.startswith(("open ", "launch ", "go to ", "navigate to ")):
+        return None
+
+    target = re.sub(r"^(open|launch|go to|navigate to)\s+", "", normalized).strip()
+    target = target.strip(" .,!?:;\"'`()[]")
+    if not target:
+        return None
+
+    known_sites = {
+        "youtube": ("YouTube", "https://www.youtube.com"),
+        "you tube": ("YouTube", "https://www.youtube.com"),
+        "google": ("Google", "https://www.google.com"),
+        "gmail": ("Gmail", "https://mail.google.com"),
+        "github": ("GitHub", "https://github.com"),
+        "chatgpt": ("ChatGPT", "https://chatgpt.com"),
+        "wikipedia": ("Wikipedia", "https://www.wikipedia.org"),
+    }
+    if target in known_sites:
+        return known_sites[target]
+
+    if re.fullmatch(r"https?://[^\s]+", target):
+        return (target, target)
+
+    if re.fullmatch(r"(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s]*)?", target):
+        return (target, f"https://{target}")
+
+    return None
+
+def resolve_web_search_request(query: str) -> tuple[str, str] | None:
+    normalized = " ".join(query.strip().split())
+    if not normalized.lower().startswith(("search ", "google ")):
+        return None
+
+    terms = re.sub(r"^(search|google)\s+", "", normalized, flags=re.IGNORECASE).strip()
+    terms = terms.strip(" .,!?:;\"'`()[]")
+    if not terms:
+        return None
+
+    return (terms, f"https://www.google.com/search?q={quote_plus(terms)}")
+
+def resolve_youtube_search_request(query: str) -> tuple[str, str] | None:
+    normalized = " ".join(query.strip().split())
+    match = re.match(
+        r"^(?:open|search|find|play)\s+(.+?)\s+(?:on\s+)?(?:you\s*tube|youtube)$",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+
+    terms = match.group(1).strip(" .,!?:;\"'`()[]")
+    if not terms:
+        return None
+
+    return (terms, f"https://www.youtube.com/results?search_query={quote_plus(terms)}")
+
 async def execute_single_tool_call(tool_call, registry, query, semaphore, request_id):
     tool_name = tool_call.get("tool_name", "")
     arguments = tool_call.get("arguments", {})
@@ -288,6 +348,45 @@ async def handle_request(line):
         return
 
     send_response(request_id, "processing", data={"message": "Analyzing query and routing..."})
+
+    open_url = resolve_open_url_request(query)
+    if open_url:
+        label, url = open_url
+        send_response(request_id, "processing", data={"message": f"Opening {label}..."})
+        try:
+            opened = await asyncio.to_thread(webbrowser.open, url)
+            if not opened:
+                raise RuntimeError("The default browser did not accept the open request")
+            send_response(request_id, "success", data={"response": f"Opened {label}."})
+        except Exception as e:
+            send_response(request_id, "error", error={"code": "OPEN_URL_FAILED", "message": f"Failed to open {label}", "details": str(e)})
+        return
+
+    youtube_search = resolve_youtube_search_request(query)
+    if youtube_search:
+        terms, url = youtube_search
+        send_response(request_id, "processing", data={"message": f"Searching YouTube for {terms}..."})
+        try:
+            opened = await asyncio.to_thread(webbrowser.open, url)
+            if not opened:
+                raise RuntimeError("The default browser did not accept the YouTube search request")
+            send_response(request_id, "success", data={"response": f"Searched YouTube for {terms}."})
+        except Exception as e:
+            send_response(request_id, "error", error={"code": "YOUTUBE_SEARCH_FAILED", "message": f"Failed to search YouTube for {terms}", "details": str(e)})
+        return
+
+    web_search = resolve_web_search_request(query)
+    if web_search:
+        terms, url = web_search
+        send_response(request_id, "processing", data={"message": f"Searching for {terms}..."})
+        try:
+            opened = await asyncio.to_thread(webbrowser.open, url)
+            if not opened:
+                raise RuntimeError("The default browser did not accept the search request")
+            send_response(request_id, "success", data={"response": f"Searched for {terms}."})
+        except Exception as e:
+            send_response(request_id, "error", error={"code": "WEB_SEARCH_FAILED", "message": f"Failed to search for {terms}", "details": str(e)})
+        return
 
     registry = await load_registry_async()
     
@@ -688,17 +787,12 @@ async def main():
     except Exception:
         pass
 
-    loop = asyncio.get_event_loop()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-
     tasks = []
     while True:
-        line_bytes = await reader.readline()
-        if not line_bytes:
+        line = await asyncio.to_thread(sys.stdin.readline)
+        if not line:
             break
-        line = line_bytes.decode().strip()
+        line = line.strip()
         if not line:
             continue
         t = asyncio.create_task(handle_request(line))
