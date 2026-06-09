@@ -11,6 +11,7 @@ from agent_router import (
     execute_script,
     handle_request,
     is_playwright_health_check_request,
+    repair_generated_playwright_code,
     resolve_ai_open_url_request,
     resolve_open_url_request,
     resolve_web_search_request,
@@ -90,8 +91,28 @@ class AgentRouterOpenUrlTests(unittest.TestCase):
         prompt = build_generator_prompt("find an example")
 
         self.assertIn("page.set_default_timeout", prompt)
+        self.assertIn("Do not await set_default_timeout", prompt)
+        self.assertIn("Do not pass timeout", prompt)
         self.assertIn("domcontentloaded", prompt)
         self.assertIn("Return JSON", prompt)
+
+    def test_repairs_common_generated_playwright_api_mistakes(self):
+        code = """
+async def main():
+    await page.set_default_timeout(8000)
+    results = await page.query_selector_all("h3", timeout=8000)
+    title = await result.text_content(timeout=8000)
+    link = await result.evaluate("(element) => element.closest('a').href", timeout=8000)
+"""
+
+        repaired = repair_generated_playwright_code(code)
+
+        self.assertIn("page.set_default_timeout(8000)", repaired)
+        self.assertNotIn("await page.set_default_timeout", repaired)
+        self.assertIn('query_selector_all("h3")', repaired)
+        self.assertIn("text_content()", repaired)
+        self.assertIn('evaluate("(element) => element.closest(\'a\').href")', repaired)
+        self.assertNotIn("timeout=8000", repaired)
 
     def test_audit_rejects_generated_playwright_without_bounded_waits(self):
         code = """
@@ -205,6 +226,32 @@ class AgentRouterOpenUrlRequestTests(unittest.IsolatedAsyncioTestCase):
 
         mock_open.assert_called_once_with("https://www.youtube.com/results?search_query=latest+mrbeast+video")
         mock_send.assert_any_call("abc", "success", data={"response": "Searched YouTube for latest mrbeast video."})
+
+    async def test_unknown_site_search_uses_ai_browser_plan_before_tool_generation(self):
+        plan = {
+            "match": True,
+            "action": "site_search",
+            "site": "blinkit",
+            "query": "gaming chair",
+            "confidence": 91,
+        }
+        browser_result = {
+            "response": "Opened web search for gaming chair on blinkit.",
+            "url": "https://www.google.com/search?q=site%3Ablinkit+gaming+chair",
+            "title": "gaming chair - Google Search",
+        }
+        with (
+            patch("agent_router.plan_browser_action", return_value=plan) as mock_plan,
+            patch("agent_router.run_browser_plan", return_value=browser_result) as mock_run,
+            patch("agent_router.load_registry_async", side_effect=AssertionError("Tool router should not be called")),
+            patch("agent_router.execute_script", side_effect=AssertionError("Generated scripts should not run")),
+            patch("agent_router.send_response") as mock_send,
+        ):
+            await handle_request('{"requestId":"abc","query":"give me gaming chair from blinkit"}')
+
+        mock_plan.assert_called_once_with("give me gaming chair from blinkit")
+        mock_run.assert_awaited_once_with(plan)
+        mock_send.assert_any_call("abc", "success", data=browser_result)
 
 
 if __name__ == "__main__":
