@@ -10,6 +10,7 @@ This guide walks you through setting up **Blinky** on a Linux workstation. It co
 - **Node.js** (>=18) and **bun**
 - **Python 3.11** with `venv` support
 - **curl**, **jq**, and **git** installed
+- **Docker** and **Docker Compose** installed (To run searxng in a Docker container)
 - For Wayland users: ensure `xwayland` is installed (needed for some X11‑only tools)
 
 ## Install & Pull the Model
@@ -59,15 +60,20 @@ bun run linux:check:groq
 ## Run the Application
 
 ```bash
-bun run dev   # Starts the development server (http://localhost:3000)
+# Then start Blinky
+bun run dev   # Starts the dev server (http://localhost:3000)
 ```
 
-On Wayland, if you encounter issues with Electron‑based tools, prepend `export ELECTRON_ENABLE_LOGGING=1` before the command.
+```bash
+# Run SearXNG via Docker Compose
+docker compose up -d searxng
+```
 
 ## Troubleshooting
 
 - **Wayland display errors**: Install `xwayland` (`sudo apt install xwayland`) and restart your session.
 - **Ollama not reachable**: Ensure the daemon is running (`ps aux | grep ollama`). Use `./scripts/check-ollama.sh` for a quick health check.
 - **Groq API failures**: Verify `GROQ_API_KEY` and network connectivity. Run `./scripts/groq-check.sh` for detailed diagnostics.
+- On Wayland, if you encounter issues with Electron‑based tools, prepend `export ELECTRON_ENABLE_LOGGING=1` before the command.
 
 Happy hacking! 🎉

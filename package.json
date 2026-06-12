@@ -12,7 +12,10 @@
     "preview": "vite preview --config frontend/vite.config.ts",
     "typecheck": "tsc -p frontend/tsconfig.json --noEmit",
     "setup:python": "powershell -ExecutionPolicy Bypass -File scripts/setup-python.ps1",
-    "check:ollama": "powershell -ExecutionPolicy Bypass -File scripts/check-ollama.ps1"
+    "check:ollama": "powershell -ExecutionPolicy Bypass -File scripts/check-ollama.ps1",
+    "linux:setup:python": "chmod +x ./scripts/setup-python.sh && ./scripts/setup-python.sh",
+    "linux:check:ollama": "chmod +x ./scripts/check-ollama.sh && ./scripts/check-ollama.sh",
+    "linux:check:groq": "chmod +x ./scripts/check-groq.sh && ./scripts/check-groq.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
