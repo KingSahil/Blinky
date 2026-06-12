@@ -83,6 +83,9 @@ export function isSafeAutopilotStep(step: TutorStep): boolean {
 function isConfidentAutopilotMatch(step: TutorStep): boolean {
   const match = step.match;
   if (!match) return false;
+  if (match.ref && step.target_ref === match.ref) {
+    return true;
+  }
   if (match.match_method === 'ref' && match.ref && (!step.target_ref || step.target_ref === match.ref)) {
     return true;
   }

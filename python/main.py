@@ -11,7 +11,7 @@ from ai.client import ask_model, ask_text_model, get_provider_label
 from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
 from app_context import get_app_context
 from capture.screen import capture_screen
-from computer_use import try_run_agent_action
+from computer_use import try_run_agent_action, looks_like_app_name
 from ocr.extract import extract_visible_text
 from utils.logging import get_logger
 from utils.matching import attach_matches, find_best_match_with_score
@@ -86,7 +86,12 @@ def _fill_empty_search_targets(steps: list[dict], visible_items: list[dict]) -> 
             )
             step["target_text"] = best_input.get("text", "")
             step["target_ref"] = best_input.get("ref", "")
-            step["match"] = best_input
+            step["match"] = {
+                **best_input,
+                "match_method": "ref",
+                "is_exact_text": True,
+                "ambiguous_candidate_count": 1,
+            }
 
     return steps
 
@@ -137,16 +142,27 @@ def run(
         elif intent == "OPEN_APP":
             app = extracted_params.get("app_name")
             if app:
-                from computer_use.tools import open_app_tool
-                direct_agent_result = open_app_tool(app)
+                if is_in_app_action(app) or not looks_like_app_name(app):
+                    LOGGER.info("Overriding OPEN_APP intent in main.py for app '%s' to DESKTOP_AUTOMATION", app)
+                    intent = "DESKTOP_AUTOMATION"
+                else:
+                    from computer_use.tools import open_app_tool
+                    direct_agent_result = open_app_tool(app)
         elif intent == "SYSTEM_SHORTCUT":
             shortcut = extracted_params.get("shortcut")
             if shortcut:
                 from computer_use.tools import shortcut_tool
                 direct_agent_result = shortcut_tool(shortcut)
 
+        if direct_agent_result is not None and not direct_agent_result.success:
+            LOGGER.info("Direct agent tool execution failed (success=False), falling back to screen mode.")
+            direct_agent_result = None
+
         if direct_agent_result is None:
             direct_agent_result = try_run_agent_action(question)
+            if direct_agent_result is not None and not direct_agent_result.success:
+                LOGGER.info("try_run_agent_action tool execution failed (success=False), falling back to screen mode.")
+                direct_agent_result = None
 
         if direct_agent_result is not None:
             return build_agent_tool_result(direct_agent_result.to_dict(), started, warnings)
@@ -398,10 +414,10 @@ def classify_request(
     intent = payload.get("intent")
     extracted_params = payload.get("extracted_params", {}) or {}
     
-    # Safety check: if intent is OPEN_APP but targets an in-app feature/action, override to DESKTOP_AUTOMATION
+    # Safety check: if intent is OPEN_APP but targets an in-app feature/action or looks like a query, override to DESKTOP_AUTOMATION
     if intent == "OPEN_APP":
         app_name = extracted_params.get("app_name", "")
-        if app_name and is_in_app_action(app_name):
+        if app_name and (is_in_app_action(app_name) or not looks_like_app_name(app_name)):
             LOGGER.info("Overriding OPEN_APP intent with app_name '%s' to DESKTOP_AUTOMATION", app_name)
             intent = "DESKTOP_AUTOMATION"
 
@@ -620,11 +636,32 @@ def build_locator_result(
     started: float,
     match_result: dict | None = None,
 ) -> dict:
+    match_with_metadata = {**match}
+    if match_result:
+        match_with_metadata.update({
+            "score": match_result.get("score", 1.0),
+            "text_similarity": match_result.get("text_similarity", 1.0),
+            "is_exact_text": match_result.get("is_exact_text", True),
+            "match_method": "text" if match_result.get("match_method") != "ref" else "ref",
+            "candidate_count": match_result.get("candidate_count", 1),
+            "ambiguous_candidate_count": match_result.get("ambiguous_candidate_count", 1),
+        })
+    else:
+        match_with_metadata.update({
+            "score": 1.0,
+            "text_similarity": 1.0,
+            "is_exact_text": True,
+            "match_method": "ref" if match.get("ref") else "text",
+            "candidate_count": 1,
+            "ambiguous_candidate_count": 1,
+        })
+
     step = {
         "step": 1,
         "instruction": f"Here is the {target}.",
         "target_text": str(match.get("text") or target),
-        "match": match,
+        "target_ref": str(match.get("ref", "")),
+        "match": match_with_metadata,
     }
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     if match_result:

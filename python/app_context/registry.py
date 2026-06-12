@@ -23,6 +23,8 @@ APP_CONTEXT_FILES = {
     "explorer.exe": "file_explorer.md",
     "spotify": "windows_apps.md",
     "spotify.exe": "windows_apps.md",
+    "systemsettings": "systemsettings.md",
+    "systemsettings.exe": "systemsettings.md",
 }
 
 

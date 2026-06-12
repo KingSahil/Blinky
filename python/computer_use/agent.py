@@ -27,6 +27,27 @@ def is_in_app_action(app_name: str) -> bool:
     return any(re.search(rf"\b{re.escape(word)}\b", app_lower) for word in in_app_keywords)
 
 
+def looks_like_app_name(app_name: str) -> bool:
+    name_lower = app_name.lower().strip()
+    words = name_lower.split()
+    if not words:
+        return False
+    # If it's too long, it's likely a description or query
+    if len(words) > 3:
+        # Allow known long apps
+        known_long_apps = {"visual studio code", "windows media player", "mail and calendar"}
+        if name_lower not in known_long_apps:
+            return False
+    # Check for prepositions or action-oriented words if it has multiple words
+    if len(words) > 1:
+        invalid_words = {"and", "or", "to", "in", "on", "at", "for", "with", "about", "from", "by", "search", "find", "how"}
+        if any(w in invalid_words for w in words):
+            # Exception for "mail and calendar"
+            if name_lower != "mail and calendar":
+                return False
+    return True
+
+
 def try_run_agent_action(question: str, observation: dict[str, Any] | None = None) -> ToolResult | None:
     # Clean trailing punctuation for robust matching of voice input/dictation
     question_cleaned = question.strip().rstrip("?.!,;:")
@@ -46,7 +67,7 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
     if match:
         app = cleanup_app_name(match.group("app"))
         if app and app not in {"help", "settings", "menu"}:
-            if not is_in_app_action(app):
+            if not is_in_app_action(app) and looks_like_app_name(app):
                 return open_app_tool(app)
 
     return None
