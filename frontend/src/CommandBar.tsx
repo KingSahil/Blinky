@@ -1,6 +1,6 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe } from 'lucide-react';
+import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { runAutopilotLoop } from './lib/autopilot';
@@ -144,6 +144,8 @@ export function CommandBar() {
   const currentGuideStepsRef = useRef<any[]>([]);
   const workflowStartedWithReadbackRef = useRef(false);
   const conversationHistoryRef = useRef<TutorConversationMessage[]>([]);
+  const runIdRef = useRef(0);
+  const cancelledRunIdsRef = useRef<Set<number>>(new Set());
 
   const rememberCompletedStep = (targetText?: string, instruction?: string) => {
     const cleanTarget = targetText?.trim();
@@ -370,6 +372,8 @@ export function CommandBar() {
     options: TutorRunOptions = {},
   ) {
     if (isRunning) return;
+    const runId = runIdRef.current + 1;
+    runIdRef.current = runId;
 
     if (options.resetProgress) {
       completedTargetsRef.current = [];
@@ -402,10 +406,10 @@ export function CommandBar() {
           observeAfterAction: false,
           observe: async () => {
             if (!firstObservation) {
-              firstObservation = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, false);
+              firstObservation = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, false, true);
               return firstObservation;
             }
-            return runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, false);
+            return runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, false, true);
           },
           act: async (point, step) => {
             setStatus(`Autopilot clicking (${point.x}, ${point.y})...`);
@@ -426,6 +430,9 @@ export function CommandBar() {
         }
       } else {
         result = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, webSearchEnabled);
+      }
+      if (cancelledRunIdsRef.current.has(runId)) {
+        return;
       }
       const isContinuation = !!result.is_continuation;
 
@@ -478,12 +485,29 @@ export function CommandBar() {
         }
       }
     } catch (error) {
+      if (cancelledRunIdsRef.current.has(runId)) {
+        return;
+      }
       await currentWindow.setFocus();
       setStatus(error instanceof Error ? error.message : String(error));
       setSteps([]);
     } finally {
-      setIsRunning(false);
+      cancelledRunIdsRef.current.delete(runId);
+      if (runIdRef.current === runId) {
+        setIsRunning(false);
+      }
     }
+  }
+
+  function stopCurrentRun() {
+    const runId = runIdRef.current;
+    if (!isRunning || runId === 0) return;
+    cancelledRunIdsRef.current.add(runId);
+    setIsRunning(false);
+    setStatus('Stopped.');
+    setSteps([]);
+    void hideOverlay();
+    stopSpeaking();
   }
 
   // Load settings on mount
@@ -921,8 +945,19 @@ export function CommandBar() {
                 <Mic size={16} />
               )}
             </button>
-            <button className="command-send" type="submit" disabled={isRunning || isTranscribing || question.trim().length === 0}>
-              {isRunning ? <Loader2 className="spin" size={18} /> : <ArrowUp size={18} />}
+            <button
+              className={`command-send ${isRunning ? 'stopping' : ''}`}
+              type={isRunning ? 'button' : 'submit'}
+              disabled={isTranscribing || (!isRunning && question.trim().length === 0)}
+              onClick={(event) => {
+                if (!isRunning) return;
+                event.preventDefault();
+                event.stopPropagation();
+                stopCurrentRun();
+              }}
+              title={isRunning ? 'Stop thinking' : 'Send'}
+            >
+              {isRunning ? <Square size={14} fill="currentColor" /> : <ArrowUp size={18} />}
             </button>
           </div>
 

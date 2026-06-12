@@ -1011,6 +1011,16 @@ h3 {
   transform: scale(1.05);
 }
 
+.command-send.stopping {
+  background: rgba(255, 83, 112, 0.28);
+  border-color: rgba(255, 83, 112, 0.55);
+  color: #ffd1da;
+}
+
+.command-send.stopping:hover:not(:disabled) {
+  background: rgba(255, 83, 112, 0.42);
+}
+
 .command-send:disabled {
   opacity: 0.5;
   cursor: not-allowed;

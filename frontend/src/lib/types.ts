@@ -50,6 +50,13 @@ export interface TutorResult {
   provider?: string;
   warnings: string[];
   is_continuation?: boolean;
+  app_context?: string;
+  agent_action?: {
+    success: boolean;
+    tool: string;
+    message: string;
+    details?: Record<string, unknown>;
+  };
 }
 
 export interface TutorProgress {

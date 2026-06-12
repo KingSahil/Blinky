@@ -9,7 +9,9 @@ from pathlib import Path
 
 from ai.client import ask_model, ask_text_model, get_provider_label
 from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
+from app_context import get_app_context
 from capture.screen import capture_screen
+from computer_use import try_run_agent_action
 from ocr.extract import extract_visible_text
 from utils.logging import get_logger
 from utils.matching import attach_matches, find_best_match_with_score
@@ -95,12 +97,18 @@ def run(
     progress: dict | None = None,
     conversation_history: list[dict] | None = None,
     web_search_enabled: bool = False,
+    agent_mode: bool = False,
 ) -> dict:
     started = time.perf_counter()
     warnings: list[str] = []
 
     if web_search_enabled:
         return run_web_intelligence(question, conversation_history, started, warnings)
+
+    if agent_mode:
+        direct_agent_result = try_run_agent_action(question)
+        if direct_agent_result is not None:
+            return build_agent_tool_result(direct_agent_result.to_dict(), started, warnings)
 
     locator_target = extract_locator_target(question)
     force_screen = should_force_screen_context(question, previous_question)
@@ -176,20 +184,24 @@ def run(
     if locator_target:
         LOGGER.info("Locator deferred to screen AI for '%s'", locator_target)
 
-    # 3. Read active app, OCR text, and UIA controls
-    active_started = time.perf_counter()
-    active_app = get_active_window(target_pid=target_pid)
-    log_stage_timing("active_window", active_started)
-    visible_items = get_or_build_visible_ui_map(active_app, screenshot, target_pid)
+    observation = observe_app_state(screenshot, target_pid)
+    active_app = observation["active_app"]
+    visible_items = observation["visible_items"]
 
     if not visible_items:
         warnings.append("No OCR text was detected. Try zooming in or opening a supported app.")
+
+    if agent_mode:
+        agent_result = try_run_agent_action(question, observation)
+        if agent_result is not None:
+            return build_agent_tool_result(agent_result.to_dict(), started, warnings, observation)
 
     prompt_started = time.perf_counter()
     prompt = build_prompt(
         question=effective_question,
         active_app=active_app,
         ocr_items=visible_items,
+        app_context=observation.get("app_context", ""),
         progress=progress,
         latest_update=latest_update,
         conversation_history=conversation_history,
@@ -214,6 +226,7 @@ def run(
         "summary": ai_result.get("summary", "I found a short path using the visible controls."),
         "steps": steps,
         "active_app": active_app,
+        "app_context": observation.get("app_context", ""),
         "ocr": {"count": len(visible_items), "items": visible_items[:200]},
         "screenshot": {
             "path": str(screenshot.path),
@@ -227,6 +240,71 @@ def run(
         "warnings": warnings + ai_result.get("warnings", []),
         "is_continuation": is_continuation,
     }
+
+
+def observe_app_state(screenshot, target_pid: int | None = None) -> dict:
+    active_started = time.perf_counter()
+    active_app = get_active_window(target_pid=target_pid)
+    log_stage_timing("active_window", active_started)
+    visible_items = get_or_build_visible_ui_map(active_app, screenshot, target_pid)
+    app_context = get_app_context(active_app)
+    return {
+        "active_app": active_app,
+        "visible_items": visible_items,
+        "app_context": app_context,
+        "screenshot": screenshot,
+    }
+
+
+def build_agent_tool_result(
+    agent_action: dict,
+    started: float,
+    warnings: list[str],
+    observation: dict | None = None,
+) -> dict:
+    active_app = {"title": "", "process": "", "supported": False}
+    visible_items: list[dict] = []
+    screenshot_payload = None
+    app_context = ""
+
+    if observation:
+        active_app = observation.get("active_app", active_app)
+        visible_items = observation.get("visible_items", [])
+        app_context = observation.get("app_context", "")
+        screenshot = observation.get("screenshot")
+        if screenshot:
+            screenshot_payload = {
+                "path": str(screenshot.path),
+                "width": screenshot.width,
+                "height": screenshot.height,
+                "screen_width": screenshot.screen_width,
+                "screen_height": screenshot.screen_height,
+            }
+    else:
+        try:
+            time.sleep(0.5)
+            active_app = get_active_window()
+            app_context = get_app_context(active_app)
+        except Exception:
+            pass
+
+    summary = str(agent_action.get("message") or "Agent action completed.").strip()
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    result = {
+        "summary": summary,
+        "steps": [],
+        "active_app": active_app,
+        "app_context": app_context,
+        "ocr": {"count": len(visible_items), "items": visible_items[:200]},
+        "elapsed_ms": elapsed_ms,
+        "provider": "local",
+        "warnings": warnings,
+        "is_continuation": False,
+        "agent_action": agent_action,
+    }
+    if screenshot_payload:
+        result["screenshot"] = screenshot_payload
+    return result
 
 
 def get_or_build_visible_ui_map(active_app: dict, screenshot, target_pid: int | None = None) -> list[dict]:
@@ -815,10 +893,11 @@ def main() -> None:
             progress = {}
         conversation_history = normalize_conversation_history(payload.get("conversation_history"))
         web_search_enabled = bool(payload.get("web_search_enabled", False))
+        agent_mode = bool(payload.get("agent_mode", False))
         if not question:
             raise ValueError("Question is required.")
 
-        result = run(question, previous_question, progress, conversation_history, web_search_enabled)
+        result = run(question, previous_question, progress, conversation_history, web_search_enabled, agent_mode)
         print(json.dumps(result, ensure_ascii=True))
     except Exception as exc:
         LOGGER.exception("Worker failed")

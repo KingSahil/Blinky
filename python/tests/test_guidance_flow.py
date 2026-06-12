@@ -8,6 +8,7 @@ from unittest.mock import patch
 from ai.groq_client import _validate_response as validate_groq_response
 from ai.ollama_client import _validate_response as validate_ollama_response
 from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
+from computer_use.tools import ToolResult
 from main import (
     assign_screen_element_refs,
     extract_locator_target,
@@ -615,6 +616,17 @@ class GuidanceFlowTests(unittest.TestCase):
         self.assertIn("do not assume completion just because a previous step was clicked", prompt_lower)
         self.assertIn('"steps": []', prompt)
 
+    def test_screen_prompt_includes_app_context(self) -> None:
+        prompt = build_prompt(
+            question="how do I open Help?",
+            active_app={"title": "VS Code", "process": "Code.exe", "supported": True},
+            ocr_items=[],
+            app_context="Help is in the top menu bar after Terminal. Shortcut: Alt+H.",
+        )
+
+        self.assertIn("Active app knowledge", prompt)
+        self.assertIn("Help is in the top menu bar after Terminal", prompt)
+
     def test_preflight_prompt_with_previous_question_classifies_continuation(self) -> None:
         prompt = build_preflight_prompt("what to do", "install the code runner extension")
         prompt_lower = prompt.lower()
@@ -647,6 +659,43 @@ class GuidanceFlowTests(unittest.TestCase):
         self.assertEqual(result["summary"], "Here is the next step to install.")
         self.assertTrue(result["is_continuation"])
         mock_capture.assert_called_once()
+
+    def test_normal_mode_does_not_execute_agent_tools(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1280,
+            height=720,
+            screen_width=1280,
+            screen_height=720,
+        )
+        ai_response = {"summary": "Use Agent mode to open desktop apps.", "steps": []}
+
+        with (
+            patch("main.capture_screen", return_value=screenshot),
+            patch("utils.window.get_target_window_element", return_value=None),
+            patch("main.resolve_locator_fast_path", return_value=None),
+            patch("main.get_active_window", return_value={"title": "VS Code", "process": "Code.exe", "supported": True}),
+            patch("main.extract_visible_text", return_value=[]),
+            patch("main.get_visible_ui_text", return_value=[]),
+            patch("main.ask_model", return_value=ai_response),
+            patch("main.try_run_agent_action", side_effect=AssertionError("agent tool should not run")),
+        ):
+            result = run("open Spotify", agent_mode=False)
+
+        self.assertEqual(result["summary"], "Use Agent mode to open desktop apps.")
+        self.assertNotIn("agent_action", result)
+
+    def test_agent_mode_can_execute_open_app_tool_before_screen_capture(self) -> None:
+        action = ToolResult(True, "open_app", "Opened Spotify.", {"app_name": "Spotify"})
+        with (
+            patch("main.try_run_agent_action", return_value=action),
+            patch("main.capture_screen", side_effect=AssertionError("app launch should not require screen capture")),
+            patch("main.get_active_window", return_value={"title": "Spotify", "process": "Spotify.exe", "supported": False}),
+        ):
+            result = run("open Spotify", agent_mode=True)
+
+        self.assertEqual(result["summary"], "Opened Spotify.")
+        self.assertEqual(result["agent_action"]["tool"], "open_app")
 
     def test_run_reuses_fresh_ui_map_cache_without_ocr_or_uia(self) -> None:
         screenshot = SimpleNamespace(

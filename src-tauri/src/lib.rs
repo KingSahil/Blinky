@@ -22,6 +22,7 @@ struct TutorRequest {
     progress: Option<serde_json::Value>,
     conversation_history: Option<serde_json::Value>,
     web_search_enabled: Option<bool>,
+    agent_mode: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,6 +69,7 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
         request.progress.as_ref(),
         request.conversation_history.as_ref(),
         request.web_search_enabled.unwrap_or(false),
+        request.agent_mode.unwrap_or(false),
         command.clone(),
         overlay.clone(),
     );
@@ -296,6 +298,7 @@ fn run_python_worker(
     progress: Option<&serde_json::Value>,
     conversation_history: Option<&serde_json::Value>,
     web_search_enabled: bool,
+    agent_mode: bool,
     command_window: Option<WebviewWindow>,
     overlay_window: Option<WebviewWindow>,
 ) -> Result<String, String> {
@@ -321,6 +324,7 @@ fn run_python_worker(
         "progress": progress.unwrap_or(&serde_json::Value::Null),
         "conversation_history": conversation_history.unwrap_or(&serde_json::Value::Null),
         "web_search_enabled": web_search_enabled,
+        "agent_mode": agent_mode,
     });
 
     if let Some(mut stdin) = child.stdin.take() {

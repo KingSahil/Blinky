@@ -7,6 +7,7 @@ export async function runTutor(
   progress?: TutorProgress,
   conversationHistory?: TutorConversationMessage[],
   webSearchEnabled?: boolean,
+  agentMode?: boolean,
 ): Promise<TutorResult> {
   return invoke<TutorResult>('run_tutor', {
     request: {
@@ -15,6 +16,7 @@ export async function runTutor(
       progress,
       conversation_history: conversationHistory,
       web_search_enabled: webSearchEnabled,
+      agent_mode: agentMode,
     },
   });
 }

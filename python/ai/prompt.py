@@ -101,6 +101,7 @@ def build_prompt(
     question: str,
     active_app: dict,
     ocr_items: list[dict],
+    app_context: str = "",
     progress: dict | None = None,
     latest_update: str | None = None,
     conversation_history: list[dict] | None = None,
@@ -167,6 +168,9 @@ You are Blinky, a free offline AI desktop tutor for students.
 Active app:
 {active_app}
 
+Active app knowledge:
+{app_context or "No app-specific guidance is available for this app."}
+
 Visible UI/OCR items format: @ref role=<control_type> name="<visible label>" box=(x,y,width,height) source=<uia|ocr> clickable=<true|false> input=<true|false>
 Visible UI/OCR items:
 {compact_items_str}
@@ -179,6 +183,7 @@ Rules:
 - CRITICAL: Prefer target_ref over target_text. If the next action targets a visible item, set target_ref to that item's exact @ref and set target_text to its exact name. If the target is not visible, set target_ref and target_text to empty strings.
 - CRITICAL: Look at the list of visible UI/OCR items. If you see a placeholder text or label containing "Search" or "Filter" or "Find" for a search box (for example, "Search Extensions in Marketplace", "Search files", or a similar text input box), this means the corresponding view or panel is ALREADY open and visible. You MUST NOT output any step instructing the user to click a tab, button, or menu to open that panel (e.g. clicking "Extensions" or "Explorer"). Skip the "open" step completely and make the very first step of the Action Guide be the step to type/search in that input box. You MUST set target_ref to the input's @ref and target_text to the EXACT visible search placeholder text (e.g. "Search Extensions in Marketplace") so the search bar gets highlighted.
 - Use the Active app title/process to identify which app the student is working in. Mention the active app in the summary when it matters.
+- Use Active app knowledge as contextual guidance, especially for common menus, shortcuts, and locations. Prefer a visible @ref when the target appears in the visible items; otherwise give a location or shortcut in the summary without inventing a highlight.
 - Stay in the active app unless the student explicitly asks to switch apps or open a different app. Do not switch to another app, browser, search engine, or website to complete a workflow that belongs inside the active app.
 - For install/add/search/configure workflows, use the active app's built-in UI (such as its extension, add-on, plugin, marketplace, settings, or package panel) when that workflow belongs to the active app.
 - For target_ref in steps, ONLY use @refs from the visible UI/OCR items. For target_text, ONLY reference visible UI element names from the UI/OCR items. If a step's target is not currently visible, keep the step but set "target_ref": "" and "target_text": "" so it is shown as guidance without a highlight.
