@@ -21,7 +21,7 @@ struct AgentDaemon {
 impl AgentDaemon {
     async fn start() -> Result<Self, std::io::Error> {
         let root = project_root();
-        let script_path = root.join("python").join("agent_router.py");
+        let script_path = root.join("common").join("python").join("agent_router.py");
         let python = python_executable(&root);
 
         let mut cmd = TokioCommand::new(python);
@@ -80,17 +80,17 @@ impl AgentDaemon {
 
 fn project_root() -> PathBuf {
     if let Ok(cwd) = std::env::current_dir() {
-        if cwd.join("python").exists() {
+        if cwd.join("common").join("python").exists() {
             return cwd;
         }
-        if cwd.join("_up_").join("python").exists() {
+        if cwd.join("_up_").join("common").join("python").exists() {
             return cwd.join("_up_");
         }
         if let Some(parent) = cwd.parent() {
-            if parent.join("python").exists() {
+            if parent.join("common").join("python").exists() {
                 return parent.to_path_buf();
             }
-            if parent.join("_up_").join("python").exists() {
+            if parent.join("_up_").join("common").join("python").exists() {
                 return parent.join("_up_");
             }
         }
@@ -98,10 +98,10 @@ fn project_root() -> PathBuf {
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            if exe_dir.join("python").exists() {
+            if exe_dir.join("common").join("python").exists() {
                 return exe_dir.to_path_buf();
             }
-            if exe_dir.join("_up_").join("python").exists() {
+            if exe_dir.join("_up_").join("common").join("python").exists() {
                 return exe_dir.join("_up_");
             }
         }
