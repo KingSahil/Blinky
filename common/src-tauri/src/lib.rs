@@ -455,13 +455,26 @@ fn parse_worker_error(stdout: &str) -> Option<String> {
 }
 
 fn project_root(app: &AppHandle) -> Result<PathBuf, String> {
+    // Walk up from CWD to find the project root (directory containing common/python/)
     if let Ok(cwd) = std::env::current_dir() {
-        if cwd.join("common").join("python").exists() {
-            return Ok(cwd);
+        let mut dir = Some(cwd.as_path());
+        while let Some(path) = dir {
+            if path.join("common").join("python").is_dir() {
+                return Ok(path.to_path_buf());
+            }
+            dir = path.parent();
         }
-        if let Some(parent) = cwd.parent() {
-            if parent.join("common").join("python").exists() {
-                return Ok(parent.to_path_buf());
+    }
+
+    // Also try from the executable path (useful in bundled/tests)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let mut dir = Some(exe_dir);
+            while let Some(path) = dir {
+                if path.join("common").join("python").is_dir() {
+                    return Ok(path.to_path_buf());
+                }
+                dir = path.parent();
             }
         }
     }

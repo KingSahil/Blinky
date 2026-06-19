@@ -79,30 +79,32 @@ impl AgentDaemon {
 }
 
 fn project_root() -> PathBuf {
+    // Walk up from CWD to find the project root (directory containing common/python/)
     if let Ok(cwd) = std::env::current_dir() {
-        if cwd.join("common").join("python").exists() {
-            return cwd;
-        }
-        if cwd.join("_up_").join("common").join("python").exists() {
-            return cwd.join("_up_");
-        }
-        if let Some(parent) = cwd.parent() {
-            if parent.join("common").join("python").exists() {
-                return parent.to_path_buf();
+        let mut dir = Some(cwd.as_path());
+        while let Some(path) = dir {
+            if path.join("common").join("python").is_dir() {
+                return path.to_path_buf();
             }
-            if parent.join("_up_").join("common").join("python").exists() {
-                return parent.join("_up_");
+            if path.join("_up_").join("common").join("python").is_dir() {
+                return path.join("_up_");
             }
+            dir = path.parent();
         }
     }
 
+    // Also try from the executable path
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
-            if exe_dir.join("common").join("python").exists() {
-                return exe_dir.to_path_buf();
-            }
-            if exe_dir.join("_up_").join("common").join("python").exists() {
-                return exe_dir.join("_up_");
+            let mut dir = Some(exe_dir);
+            while let Some(path) = dir {
+                if path.join("common").join("python").is_dir() {
+                    return path.to_path_buf();
+                }
+                if path.join("_up_").join("common").join("python").is_dir() {
+                    return path.join("_up_");
+                }
+                dir = path.parent();
             }
         }
     }
