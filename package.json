@@ -11,11 +11,11 @@
     "tauri:build": "bun tauri build",
     "preview": "vite preview --config common/frontend/vite.config.ts",
     "typecheck": "tsc -p common/frontend/tsconfig.json --noEmit",
-    "setup:python": "powershell -ExecutionPolicy Bypass -File scripts/setup-python.ps1",
-    "check:ollama": "powershell -ExecutionPolicy Bypass -File scripts/check-ollama.ps1",
-    "linux:setup:python": "chmod +x ./scripts/setup-python.sh && ./scripts/setup-python.sh",
-    "linux:check:ollama": "chmod +x ./scripts/check-ollama.sh && ./scripts/check-ollama.sh",
-    "linux:check:groq": "chmod +x ./scripts/check-groq.sh && ./scripts/check-groq.sh"
+    "setup:python": "powershell -ExecutionPolicy Bypass -File windows/scripts/setup-python.ps1",
+    "check:ollama": "powershell -ExecutionPolicy Bypass -File windows/scripts/check-ollama.ps1",
+    "linux:setup:python": "chmod +x ./linux/scripts/setup-python.sh && ./linux/scripts/setup-python.sh",
+    "linux:check:ollama": "chmod +x ./linux/scripts/check-ollama.sh && ./linux/scripts/check-ollama.sh",
+    "linux:check:groq": "chmod +x ./linux/scripts/groq-check.sh && ./linux/scripts/groq-check.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",

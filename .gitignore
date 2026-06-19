@@ -1,4 +1,5 @@
 # Root-level ignore patterns (common/.gitignore handles per-directory patterns)
+/searxng/
 .brain
 .env
 .env.local
