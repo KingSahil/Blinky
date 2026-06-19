@@ -1,57 +1,37 @@
-# Dependency Directories
-node_modules/
+# Root-level ignore patterns (common/.gitignore handles per-directory patterns)
+.brain
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 .venv/
 env/
 venv/
-.brain
-
-# Build & Output Directories
+node_modules/
+__pycache__/
+*.pyc
 tmp/
-frontend/dist/
+.agent/
+.agents/
 src-tauri/target/
 screenshots/
 python/cache/
-
-# Log Files
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 bun-debug.log*
-
-# Python Caches & Compiled Files
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
 .pytest_cache/
 .mypy_cache/
 .ipynb_checkpoints/
-
-# OS-specific files
 .DS_Store
-.DS_Store?
-._*
 Thumbs.db
 desktop.ini
-
-# IDEs and Editors
 .vscode/
-.agent/
 .idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.swp
-
-# Local Environment Variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# agents
-
-.agents/

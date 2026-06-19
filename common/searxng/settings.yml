@@ -1,0 +1,9 @@
+use_default_settings: true
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  secret_key: "blinky_secret_key_change_me"
+search:
+  formats:
+    - html
+    - json
