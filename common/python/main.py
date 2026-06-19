@@ -7,17 +7,31 @@ import sys
 import time
 from pathlib import Path
 
+# ── sys.path setup: must run before any platform-specific imports ──
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_COMMON_PY = str(_SCRIPT_DIR)
+if _COMMON_PY not in sys.path:
+    sys.path.insert(0, _COMMON_PY)
+
+# Add platform-specific python directory with higher priority
+if sys.platform == "win32":
+    _PLATFORM_PY = str(_SCRIPT_DIR.parent.parent / "windows" / "python")
+else:
+    _PLATFORM_PY = str(_SCRIPT_DIR.parent.parent / "linux" / "python")
+if os.path.isdir(_PLATFORM_PY) and _PLATFORM_PY not in sys.path:
+    sys.path.insert(0, _PLATFORM_PY)
+
 from ai.client import ask_model, ask_text_model, get_provider_label
 from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
 from app_context import get_app_context
-from capture.screen import capture_screen
+from capture import capture_screen
 from computer_use import try_run_agent_action, looks_like_app_name
-from ocr.extract import extract_visible_text
+from ocr import extract_visible_text
 from utils.logging import get_logger
 from utils.matching import attach_matches, find_best_match_with_score
 from utils.screen_elements import assign_screen_element_refs
 from utils.ui_map_cache import UiMapCache, window_signature
-from utils.uia import get_visible_ui_text
+from uia import get_visible_ui_text
 from utils.window import get_active_window, get_ignored_overlay_rects
 
 LOGGER = get_logger("blinky.main")
@@ -996,7 +1010,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    ROOT = Path(__file__).resolve().parent
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
     main()

@@ -4,7 +4,6 @@ import os
 import subprocess
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from pathlib import Path
 from PIL import Image, ImageGrab
 
@@ -13,27 +12,15 @@ from utils.logging import get_logger
 LOGGER = get_logger("blinky.capture")
 
 
-@dataclass
-class Screenshot:
-    path: Path
-    width: int        # screenshot pixel width (after thumbnail scaling)
-    height: int       # screenshot pixel height (after thumbnail scaling)
-    screen_width: int   # actual capture width before scaling (≈ physical screen width)
-    screen_height: int  # actual capture height before scaling (≈ physical screen height)
-
-
 class CaptureError(Exception):
-    """Base exception for capture errors."""
     pass
 
 
 class PermissionDeniedError(CaptureError):
-    """Raised when screen capture permission is denied by the user or OS."""
     pass
 
 
 class TimeoutError(CaptureError):
-    """Raised when a capture operation times out."""
     pass
 
 
@@ -43,26 +30,14 @@ class CaptureStrategy(ABC):
         pass
 
 
-class DXCamCaptureStrategy(CaptureStrategy):
-    def capture(self) -> Image.Image:
-        import dxcam
-        camera = dxcam.create(output_color="RGB")
-        frame = camera.grab()
-        if frame is None:
-            raise CaptureError("dxcam returned no frame")
-        return Image.fromarray(frame)
-
-
 class LinuxCaptureStrategy(CaptureStrategy):
     def capture(self) -> Image.Image:
         session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
         LOGGER.info("Linux session detected: %s", session_type)
 
-        # 1. Try gnome-screenshot if Wayland or if we just want a reliable fallback
         try:
             temp_path = Path("tmp") / "gnome-screenshot-temp.png"
             temp_path.parent.mkdir(parents=True, exist_ok=True)
-            # Use subprocess to run gnome-screenshot -f with clean background environment
             env_copy = {}
             for key in ["DBUS_SESSION_BUS_ADDRESS", "PATH", "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "USER", "HOME", "XDG_SESSION_TYPE"]:
                 if key in os.environ:
@@ -76,14 +51,13 @@ class LinuxCaptureStrategy(CaptureStrategy):
             )
             if temp_path.exists():
                 img = Image.open(temp_path)
-                img.load()  # Load image data into memory
-                temp_path.unlink()  # Remove temp file
+                img.load()
+                temp_path.unlink()
                 LOGGER.info("Captured screen via gnome-screenshot")
                 return img
         except Exception as exc:
             LOGGER.debug("gnome-screenshot capture failed: %s", exc)
 
-        # 2. Try maim / scrot if X11/Wayland and they are available
         for tool in ["maim", "scrot"]:
             try:
                 temp_path = Path("tmp") / f"{tool}-temp.png"
@@ -98,7 +72,6 @@ class LinuxCaptureStrategy(CaptureStrategy):
             except Exception as exc:
                 LOGGER.debug("%s capture failed: %s", tool, exc)
 
-        # 3. Fallback to PIL ImageGrab
         LOGGER.info("Falling back to standard PIL ImageGrab")
         return ImageGrab.grab(all_screens=False)
 
@@ -108,14 +81,6 @@ class WaylandPortalIPCOrchestrator:
         self.timeout_seconds = timeout_seconds
 
     def capture_via_portal(self) -> Path:
-        """
-        Coordinates with the XDG Desktop Portal to take a screenshot.
-        Returns the Path to the captured image file.
-        Raises:
-            PermissionDeniedError: If the user denies permission.
-            TimeoutError: If the portal or user takes too long.
-            CaptureError: For any other DBus or capture failure.
-        """
         try:
             return self._capture_via_python_dbus()
         except ImportError:
@@ -200,7 +165,6 @@ class WaylandPortalIPCOrchestrator:
 
             return True, str(results['uri'])
 
-        # Try non-interactive first
         success, res_val = try_capture(False)
         if not success:
             if res_val == "PermissionDenied":
@@ -220,11 +184,6 @@ class WaylandPortalIPCOrchestrator:
         return Path(urllib.parse.unquote(parsed.path))
 
     def _capture_via_cli_dbus(self) -> Path:
-        """
-        CLI fallback that executes the capture inside the system's /usr/bin/python3
-        interpreter. Since the system python has dbus-python globally installed,
-        this bypasses virtual environment limitations and executes instantly and reliably.
-        """
         import urllib.parse
 
         inline_code = f"""
@@ -301,7 +260,6 @@ try:
             print("ERROR: PermissionDenied", file=sys.stderr)
             sys.exit(3)
         else:
-            # Fall back to interactive prompt
             success, res_val = try_capture(True)
             if not success:
                 if res_val == "PermissionDenied":
@@ -325,8 +283,6 @@ except Exception as e:
 """
 
         try:
-            # Completely sanitize the environment to decouple the DBus screenshot request from Tauri's GUI window context.
-            # This prevents GNOME from recognizing the subprocess as part of a windowed app and forcing the manual area-selection UI.
             env_copy = {}
             for key in ["DBUS_SESSION_BUS_ADDRESS", "PATH", "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "USER", "HOME", "XDG_SESSION_TYPE"]:
                 if key in os.environ:
@@ -353,25 +309,20 @@ except Exception as e:
                 raise CaptureError(f"System python capture helper failed: {err_msg}")
 
 
-
-class WaylandPortalCaptureStrategy(CaptureStrategy):
+class WaylandPortalCaptureStrategy:
     def __init__(self, orchestrator: WaylandPortalIPCOrchestrator = None):
         self.orchestrator = orchestrator or WaylandPortalIPCOrchestrator()
 
     def capture(self) -> Image.Image:
-        """
-        Takes screenshot via the XDG Desktop Portal and loads it as PIL Image.
-        """
         temp_path = None
         try:
             temp_path = self.orchestrator.capture_via_portal()
             if not temp_path or not temp_path.exists():
                 raise CaptureError("Portal captured file does not exist or was not returned.")
-            
-            # Low-latency file ingestion & buffer disposal
+
             with open(temp_path, "rb") as f:
                 img_data = f.read()
-            
+
             from io import BytesIO
             with Image.open(BytesIO(img_data)) as img:
                 img.load()
@@ -426,75 +377,17 @@ class LinuxCaptureStrategyFactory:
         return cls._cached_portal_available
 
     @classmethod
-    def get_strategy(cls) -> CaptureStrategy:
+    def get_strategy(cls):
         session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
         wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
-        
+
         is_wayland = (session_type == "wayland" or bool(wayland_display))
-        
+
         if is_wayland:
             if cls.is_portal_available():
                 LOGGER.info("Wayland session detected and Desktop Portal is available. Using WaylandPortalCaptureStrategy.")
                 return WaylandPortalCaptureStrategy()
             else:
                 LOGGER.warning("Wayland session detected but Desktop Portal is NOT available. Falling back to default Linux stack.")
-        
+
         return LinuxCaptureStrategy()
-
-
-def capture_screen() -> Screenshot:
-    """Capture the primary display dynamically using active platform strategy."""
-    captures_dir = Path("screenshots")
-    captures_dir.mkdir(parents=True, exist_ok=True)
-    path = captures_dir / f"screen-{int(time.time() * 1000)}.jpg"
-
-    try:
-        resample_filter = Image.Resampling.LANCZOS
-    except AttributeError:
-        resample_filter = Image.LANCZOS
-
-    image = None
-    # Strategy Resolution
-    if os.name == "nt":
-        try:
-            strategy = DXCamCaptureStrategy()
-            image = strategy.capture()
-            LOGGER.info("Captured screen with DXCamCaptureStrategy")
-        except Exception as exc:
-            LOGGER.warning("DXCamCaptureStrategy failed, falling back to PIL ImageGrab: %s", exc)
-            image = ImageGrab.grab(all_screens=False)
-    else:
-        try:
-            strategy = LinuxCaptureStrategyFactory.get_strategy()
-            image = strategy.capture()
-            LOGGER.info("Captured screen with %s", strategy.__class__.__name__)
-        except Exception as exc:
-            LOGGER.warning("Linux strategy failed, falling back to PIL ImageGrab: %s", exc)
-            image = ImageGrab.grab(all_screens=False)
-
-    screen_w, screen_h = image.width, image.height
-
-    # Check if the image is completely black to warn the user about Wayland security limitations
-    if os.name != "nt" and not image.getbbox():
-        LOGGER.warning(
-            "Captured screen is completely black! This typically occurs on Linux under a Wayland session "
-            "because Wayland restricts background/third-party screen capture. "
-            "Action: Please log out, click the gear icon in the bottom-right corner of the login screen, "
-            "select 'GNOME on Xorg' (X11 session), and log back in to enable visual telemetry and screen capturing."
-        )
-
-    image.thumbnail((1920, 1080), resample=resample_filter)
-    image = image.convert("RGB")
-    image.save(path, format="JPEG", quality=75, optimize=True)
-    LOGGER.info(
-        "Saved optimized screenshot: %s (size: %dx%d, screen: %dx%d)",
-        path, image.width, image.height, screen_w, screen_h,
-    )
-
-    return Screenshot(
-        path=path,
-        width=image.width,
-        height=image.height,
-        screen_width=screen_w,
-        screen_height=screen_h,
-    )

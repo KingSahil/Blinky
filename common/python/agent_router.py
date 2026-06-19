@@ -8,6 +8,19 @@ import subprocess
 import webbrowser
 import requests
 from pathlib import Path
+
+# ── sys.path setup: must run before any platform-specific imports ──
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_COMMON_PY = str(_SCRIPT_DIR)
+if _COMMON_PY not in sys.path:
+    sys.path.insert(0, _COMMON_PY)
+
+if sys.platform == "win32":
+    _PLATFORM_PY = str(_SCRIPT_DIR.parent.parent / "windows" / "python")
+else:
+    _PLATFORM_PY = str(_SCRIPT_DIR.parent.parent / "linux" / "python")
+if os.path.isdir(_PLATFORM_PY) and _PLATFORM_PY not in sys.path:
+    sys.path.insert(0, _PLATFORM_PY)
 from urllib.parse import quote_plus
 from ai.client import ask_text_model
 from browser_agent import plan_browser_action, run_browser_plan
@@ -905,7 +918,7 @@ Respond ONLY with valid JSON.
             registry[new_tool_name] = {
                 "name": new_tool_name,
                 "description": new_description,
-                "filepath": f"python/tools/{new_tool_name}.py",
+                "filepath": f"common/python/tools/{new_tool_name}.py",
                 "arguments": new_arguments
             }
             await save_registry_async(registry)

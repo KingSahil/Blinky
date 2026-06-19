@@ -203,7 +203,7 @@ Respond ONLY with valid JSON.
             registry[gen_name] = {
                 "name": gen_name,
                 "description": gen_desc,
-                "filepath": f"python/tools/{gen_name}.py",
+                "filepath": f"common/python/tools/{gen_name}.py",
                 "arguments": gen_args,
                 "status": "generalized",
                 "verification_args": test_args

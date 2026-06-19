@@ -67,155 +67,50 @@ APP_NAME_ALIASES = {
 
 
 def open_app_tool(app_name: str) -> ToolResult:
-    app = normalize_app_name(app_name)
-    if not app:
-        return ToolResult(False, "open_app", "I need an app name to open.", {})
+    try:
+        from tools_win import open_app_tool_impl
+        return open_app_tool_impl(app_name)
+    except ImportError:
+        return ToolResult(False, "open_app", "Opening desktop apps is currently supported on Windows only.", {"app_name": app_name})
 
-    if os.name != "nt":
-        return ToolResult(False, "open_app", "Opening desktop apps is currently supported on Windows only.", {"app_name": app})
 
-    protocol = APP_PROTOCOLS.get(app)
-    if protocol:
-        try:
-            os.startfile(protocol)  # type: ignore[attr-defined]
-            time.sleep(1.0)
-            return ToolResult(True, "open_app", f"Opened {display_app_name(app_name, app)}.", {"app_name": app, "method": "app_protocol", "protocol": protocol})
-        except Exception as exc:
-            LOGGER.warning("Protocol launch failed for %s: %s", app, exc)
+def shortcut_tool(shortcut: str) -> ToolResult:
+    try:
+        from tools_win import shortcut_tool_impl
+        return shortcut_tool_impl(shortcut)
+    except ImportError:
+        return ToolResult(False, "shortcut", "Keyboard shortcuts are currently supported on Windows only.", {"shortcut": shortcut})
 
-    for path in KNOWN_EXECUTABLE_PATHS.get(app, []):
-        if not os.path.exists(path):
-            continue
-        try:
-            subprocess.Popen([path])
-            time.sleep(0.8)
-            return ToolResult(True, "open_app", f"Opened {display_app_name(app_name, app)}.", {"app_name": app, "method": "known_path", "path": path})
-        except Exception as exc:
-            LOGGER.warning("Known path launch failed for %s via %s: %s", app, path, exc)
 
-    start_app = find_start_app(app)
-    if start_app:
-        app_id = str(start_app.get("AppID", "")).strip()
-        name = str(start_app.get("Name", app)).strip() or app
-        try:
-            subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{app_id}"])
-            time.sleep(1.0)
-            return ToolResult(True, "open_app", f"Opened {name}.", {"app_name": name, "method": "start_apps_appid", "app_id": app_id})
-        except Exception as exc:
-            LOGGER.warning("StartApps launch failed for %s: %s", app, exc)
-
-    alias = SAFE_PROCESS_ALIASES.get(app)
-    if alias:
-        try:
-            subprocess.Popen([alias])
-            time.sleep(0.8)
-            return ToolResult(True, "open_app", f"Opened {app_name.strip()}.", {"app_name": app, "method": "process_alias", "alias": alias})
-        except Exception as exc:
-            LOGGER.warning("Process alias launch failed for %s: %s", app, exc)
-
-    search_result = open_app_via_windows_search(app)
-    if search_result.success:
-        return search_result
-
-    return ToolResult(False, "open_app", f"I couldn't find {display_app_name(app_name, app)} installed.", {"app_name": app, "attempts": ["protocol", "known_path", "start_apps", "process_alias", "windows_search"]})
+def find_start_app(app_name: str) -> dict[str, Any] | None:
+    try:
+        from tools_win import find_start_app_impl
+        return find_start_app_impl(app_name)
+    except ImportError:
+        return None
 
 
 def open_app_via_windows_search(app_name: str) -> ToolResult:
-    if os.name != "nt":
-        return ToolResult(False, "open_app", "Windows Search fallback is only available on Windows.", {"app_name": app_name})
-
     try:
-        from pywinauto.keyboard import send_keys
-
-        send_keys("{VK_LWIN down}s{VK_LWIN up}")
-        time.sleep(0.4)
-        send_keys(app_name, with_spaces=True)
-        time.sleep(0.8)
-        match = find_windows_search_result(app_name)
-        if match:
-            click_item_center(match)
-            time.sleep(1.0)
-            return ToolResult(
-                True,
-                "open_app",
-                f"Found {display_app_name(app_name, app_name)} in Windows Search and opened it.",
-                {"app_name": app_name, "method": "windows_search_screen_match", "matched_text": match.get("text", "")},
-            )
-        send_keys("{ENTER}")
-        time.sleep(1.2)
-        return ToolResult(True, "open_app", f"Searched Windows and opened {display_app_name(app_name, app_name)}.", {"app_name": app_name, "method": "windows_search_enter"})
-    except Exception as exc:
-        LOGGER.warning("Windows Search launch failed for %s: %s", app_name, exc)
-        return ToolResult(False, "open_app", f"I could not open {display_app_name(app_name, app_name)} from Windows Search.", {"app_name": app_name, "method": "windows_search_enter", "error": str(exc)})
+        from tools_win import open_app_via_windows_search_impl
+        return open_app_via_windows_search_impl(app_name)
+    except ImportError:
+        return ToolResult(False, "open_app", "Windows Search fallback is only available on Windows.", {"app_name": app_name})
 
 
 def find_windows_search_result(app_name: str) -> dict[str, Any] | None:
     try:
-        from utils.matching import find_best_match
-        from utils.uia import get_visible_ui_text
-
-        items = get_visible_ui_text(include_unlabeled=False)
-        return find_best_match(app_name, items, f"Open {app_name} from the Windows Search results.")
-    except Exception as exc:
-        LOGGER.warning("Could not inspect Windows Search results for %s: %s", app_name, exc)
+        from tools_win import find_windows_search_result_impl
+        return find_windows_search_result_impl(app_name)
+    except ImportError:
         return None
 
 
 def click_item_center(item: dict[str, Any]) -> None:
     from pywinauto.mouse import click
-
     x = int(float(item.get("x") or 0) + float(item.get("width") or 0) / 2)
     y = int(float(item.get("y") or 0) + float(item.get("height") or 0) / 2)
     click(button="left", coords=(x, y))
-
-
-def shortcut_tool(shortcut: str) -> ToolResult:
-    normalized = normalize_shortcut(shortcut)
-    if not normalized:
-        return ToolResult(False, "shortcut", "I could not understand that shortcut.", {"shortcut": shortcut})
-    if os.name != "nt":
-        return ToolResult(False, "shortcut", "Keyboard shortcuts are currently supported on Windows only.", {"shortcut": shortcut})
-
-    try:
-        from pywinauto.keyboard import send_keys
-
-        send_keys(normalized)
-        time.sleep(0.5)
-        return ToolResult(True, "shortcut", f"Pressed {shortcut}.", {"shortcut": shortcut, "pywinauto_keys": normalized})
-    except Exception as exc:
-        return ToolResult(False, "shortcut", f"I couldn't press {shortcut}: {exc}", {"shortcut": shortcut})
-
-
-def find_start_app(app_name: str) -> dict[str, Any] | None:
-    safe_query = normalize_app_name(app_name)
-    if not safe_query:
-        return None
-
-    command = "\n".join(
-        [
-            "$query = $args[0]",
-            "$apps = Get-StartApps | Where-Object { $_.Name -like \"*$query*\" } | Select-Object -First 1 Name,AppID",
-            "if ($apps) { $apps | ConvertTo-Json -Compress }",
-        ]
-    )
-    try:
-        completed = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command, safe_query],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except Exception as exc:
-        LOGGER.warning("Get-StartApps lookup failed: %s", exc)
-        return None
-
-    if completed.returncode != 0 or not completed.stdout.strip():
-        return None
-    try:
-        parsed = json.loads(completed.stdout)
-    except Exception:
-        return None
-    return parsed if isinstance(parsed, dict) and parsed.get("AppID") else None
 
 
 def normalize_app_name(value: str) -> str:
@@ -319,7 +214,7 @@ def play_spotify_track_tool(song_name: str) -> ToolResult:
                 {"song_name": song_name},
             )
 
-        os.startfile(track_uri)  # type: ignore[attr-defined]
+        os.startfile(track_uri)
         return ToolResult(
             True,
             "play_spotify",
@@ -337,10 +232,8 @@ def play_spotify_track_tool(song_name: str) -> ToolResult:
 
 
 def clean_song_query(query: str) -> str:
-    # Normalize spaces
     query = " ".join(query.strip().split())
 
-    # Words to strip from start or end (case-insensitive)
     strip_words = {
         "any", "latest", "new", "newest", "some", "a", "the", "recent", "trending",
         "popular", "song", "track", "music", "artist", "singer", "playlist", "by"
@@ -350,11 +243,9 @@ def clean_song_query(query: str) -> str:
     changed = True
     while changed and words:
         changed = False
-        # Check start word
         if words[0].lower() in strip_words:
             words.pop(0)
             changed = True
-        # Check end word
         elif words and words[-1].lower() in strip_words:
             words.pop()
             changed = True
@@ -371,15 +262,11 @@ async def resolve_spotify_track_uri(song_name: str) -> str | None:
     cleaned_query = clean_song_query(song_name)
     LOGGER.info(f"Resolving Spotify URI for '{song_name}' (cleaned: '{cleaned_query}')")
 
-    # List of queries to try sequentially
     queries = [
-        # Query 1: Specific track page search
         f"site:open.spotify.com/track {cleaned_query}",
-        # Query 2: Broader search to find track links in top results
         f"{cleaned_query} spotify track"
     ]
 
-    # 1. Try SearXNG client first
     try:
         client = SearXNGClient()
         for q in queries:
@@ -393,7 +280,6 @@ async def resolve_spotify_track_uri(song_name: str) -> str | None:
     except Exception as e:
         LOGGER.warning(f"SearXNG Spotify search failed: {e}")
 
-    # 2. Fallback to DuckDuckGo HTML Search
     for q in queries:
         try:
             query_encoded = urllib.parse.quote(q)
@@ -408,5 +294,3 @@ async def resolve_spotify_track_uri(song_name: str) -> str | None:
             LOGGER.warning(f"DuckDuckGo fallback search for '{q}' failed: {e}")
 
     return None
-
-
