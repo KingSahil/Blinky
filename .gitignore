@@ -15,6 +15,7 @@ tmp/
 .agent/
 .agents/
 src-tauri/target/
+common/src-tauri/target/
 screenshots/
 python/cache/
 *.log

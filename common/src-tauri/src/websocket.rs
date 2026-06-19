@@ -1,7 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::process::Command as StdCommand;
 use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -246,11 +245,11 @@ async fn handle_connection(
             let trimmed = text.trim();
 
             if trimmed == "power_off" {
-                execute_power_off();
+                crate::platform::execute_power_off();
             } else if trimmed == "restart" {
-                execute_restart();
+                crate::platform::execute_restart();
             } else if trimmed == "sleep" {
-                execute_sleep();
+                crate::platform::execute_sleep();
             } else if trimmed.starts_with("query:") || trimmed.starts_with("{") {
                 let request_id = if trimmed.starts_with("query:") {
                     let parts: Vec<&str> = trimmed.splitn(3, ':').collect();
@@ -591,57 +590,6 @@ pub(crate) fn agent_responses_to_tutor_result(
         "warnings": [],
         "is_continuation": false
     }))
-}
-
-fn execute_power_off() {
-    println!("Executing power_off command...");
-    #[cfg(target_os = "windows")]
-    {
-        if let Err(e) = StdCommand::new("shutdown").args(&["/s", "/t", "0"]).spawn() {
-            eprintln!("Failed to execute Windows shutdown: {:?}", e);
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        if let Err(e) = StdCommand::new("systemctl").arg("poweroff").spawn() {
-            eprintln!("Failed to execute Linux/Unix poweroff: {:?}", e);
-        }
-    }
-}
-
-fn execute_restart() {
-    println!("Executing restart command...");
-    #[cfg(target_os = "windows")]
-    {
-        if let Err(e) = StdCommand::new("shutdown").args(&["/r", "/t", "0"]).spawn() {
-            eprintln!("Failed to execute Windows restart: {:?}", e);
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        if let Err(e) = StdCommand::new("systemctl").arg("reboot").spawn() {
-            eprintln!("Failed to execute Linux/Unix reboot: {:?}", e);
-        }
-    }
-}
-
-fn execute_sleep() {
-    println!("Executing sleep command...");
-    #[cfg(target_os = "windows")]
-    {
-        if let Err(e) = StdCommand::new("rundll32.exe")
-            .args(&["powrprof.dll,SetSuspendState", "0", "1", "0"])
-            .spawn()
-        {
-            eprintln!("Failed to execute Windows sleep: {:?}", e);
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        if let Err(e) = StdCommand::new("systemctl").arg("suspend").spawn() {
-            eprintln!("Failed to execute Linux/Unix suspend: {:?}", e);
-        }
-    }
 }
 
 #[cfg(test)]

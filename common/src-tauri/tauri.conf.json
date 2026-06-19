@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "app.blinky.tutor",
   "build": {
-    "beforeDevCommand": "vite --config frontend/vite.config.ts",
-    "beforeBuildCommand": "vite build --config frontend/vite.config.ts",
+    "beforeDevCommand": "vite --config common/frontend/vite.config.ts",
+    "beforeBuildCommand": "vite build --config common/frontend/vite.config.ts",
     "devUrl": "http://localhost:5173",
-    "frontendDist": "../frontend/dist"
+    "frontendDist": "../common/frontend/dist"
   },
   "app": {
     "windows": [
@@ -54,7 +54,7 @@
     ],
     "resources": [
       "../python",
-      "../requirements.txt"
+      "../../windows/requirements.txt"
     ]
   }
 }

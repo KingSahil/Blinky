@@ -1,4 +1,5 @@
 mod websocket;
+mod platform;
 
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
@@ -15,6 +16,12 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
+use platform::{
+    click_screen_point_impl, scroll_at_point_impl, type_text_impl,
+    start_global_click_listener, configure_overlay_passthrough, set_window_capture_exclusion,
+    open_url_impl,
+};
+
 #[derive(Debug, Deserialize)]
 struct TutorRequest {
     question: String,
@@ -30,16 +37,6 @@ struct AgentQueryRequest {
     query: String,
 }
 
-#[cfg(target_os = "windows")]
-#[derive(Clone, Serialize)]
-struct GlobalClick {
-    x: i32,
-    y: i32,
-    overlay_x: i32,
-    overlay_y: i32,
-    scale_factor: f64,
-}
-
 #[tauri::command]
 async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::Value, String> {
     let overlay = app.get_webview_window("overlay");
@@ -50,8 +47,6 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
         .map(|w| w.is_visible().unwrap_or(false))
         .unwrap_or(false);
 
-    // Exclude windows from captures programmatically so they are not captured by the system,
-    // while remaining fully visible and active for the user.
     if let Some(ref w) = overlay {
         set_window_capture_exclusion(w, true);
     }
@@ -59,7 +54,6 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
         set_window_capture_exclusion(w, true);
     }
 
-    // Give DWM a tiny moment to apply display affinity before screenshot
     thread::sleep(Duration::from_millis(40));
 
     let output_res = run_python_worker(
@@ -74,7 +68,6 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
         overlay.clone(),
     );
 
-    // Fallback: restore capture visibility in case of errors or if not restored by worker
     if let Some(ref w) = command {
         set_window_capture_exclusion(w, false);
     }
@@ -87,7 +80,6 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
     let parsed: serde_json::Value = serde_json::from_str(&output)
         .map_err(|err| format!("Python worker returned invalid JSON: {err}. Raw: {output}"))?;
 
-    // Now restore/show overlay with highlights if applicable
     if let Some(ref w) = overlay {
         if overlay_was_visible
             || parsed
@@ -242,10 +234,8 @@ async fn save_settings(
     ensure_env_file(&root);
     let env_path = root.join(".env");
 
-    // Read the current contents of .env
     let contents = std::fs::read_to_string(&env_path).unwrap_or_default();
 
-    // Parse lines, update values, and rebuild
     let mut lines: Vec<String> = contents.lines().map(|s| s.to_string()).collect();
     let mut provider_found = false;
     let mut shortcut_found = false;
@@ -313,7 +303,7 @@ fn run_python_worker(
     overlay_window: Option<WebviewWindow>,
 ) -> Result<String, String> {
     let root = project_root(app)?;
-    let script = root.join("python").join("main.py");
+    let script = root.join("common").join("python").join("main.py");
     let python = python_executable(&root);
     let env_file_vars = read_env_file(&root);
 
@@ -356,7 +346,6 @@ fn run_python_worker(
         let trimmed = line.trim();
         if trimmed == "__BLINKY_CAPTURED__" {
             if !restored {
-                // Restore capture visibility immediately after screenshot is captured
                 if let Some(ref w) = command_window {
                     set_window_capture_exclusion(w, false);
                 }
@@ -408,7 +397,7 @@ fn run_python_worker(
 fn ensure_env_file(root: &PathBuf) {
     let env_path = root.join(".env");
     if !env_path.exists() {
-        let example_path = root.join(".envexample");
+        let example_path = root.join("common").join(".envexample");
         if example_path.exists() {
             let _ = std::fs::copy(&example_path, &env_path);
         } else {
@@ -467,11 +456,11 @@ fn parse_worker_error(stdout: &str) -> Option<String> {
 
 fn project_root(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(cwd) = std::env::current_dir() {
-        if cwd.join("python").exists() {
+        if cwd.join("common").join("python").exists() {
             return Ok(cwd);
         }
         if let Some(parent) = cwd.parent() {
-            if parent.join("python").exists() {
+            if parent.join("common").join("python").exists() {
                 return Ok(parent.to_path_buf());
             }
         }
@@ -516,7 +505,7 @@ fn start_ui_observer(app: &AppHandle) {
             return;
         }
     };
-    let script = root.join("python").join("ui_observer.py");
+    let script = root.join("common").join("python").join("ui_observer.py");
     if !script.exists() {
         eprintln!("Warning: UI observer script was not found: {}", script.display());
         return;
@@ -541,128 +530,6 @@ fn start_ui_observer(app: &AppHandle) {
 
     if let Err(err) = command.spawn() {
         eprintln!("Warning: Failed to start UI observer: {err}");
-    }
-}
-
-fn open_url_impl(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("rundll32");
-        command.arg("url.dll,FileProtocolHandler").arg(url);
-        command
-    };
-
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-
-    command
-        .spawn()
-        .map_err(|err| format!("Failed to open link in default browser: {err}"))?;
-
-    Ok(())
-}
-
-fn configure_overlay_passthrough(window: &WebviewWindow) {
-    let _ = window.set_ignore_cursor_events(true);
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        if let Ok(Some(monitor)) = window.current_monitor() {
-            let scale_factor = monitor.scale_factor();
-
-            // Query the desktop environment to only apply panel offsets on GNOME
-            let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
-                .map(|val| val.to_uppercase().contains("GNOME"))
-                .unwrap_or(false);
-
-            let bar_height = if is_gnome {
-                (32.0 * scale_factor) as i32
-            } else {
-                0
-            };
-
-            let size = monitor.size();
-            let physical_width = size.width;
-            let physical_height = size.height.saturating_sub(bar_height as u32);
-
-            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: physical_width,
-                height: physical_height,
-            }));
-            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: 0,
-                y: bar_height,
-            }));
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        use windows_sys::Win32::Foundation::HWND;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-            WS_EX_TRANSPARENT,
-        };
-
-        let monitor = window
-            .current_monitor()
-            .ok()
-            .flatten()
-            .or_else(|| window.primary_monitor().ok().flatten());
-        if let Some(monitor) = monitor {
-            let size = monitor.size();
-            let position = monitor.position();
-            let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: size.width,
-                height: size.height,
-            }));
-            let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: position.x,
-                y: position.y,
-            }));
-        }
-
-        if let Ok(hwnd) = window.hwnd() {
-            unsafe {
-                let hwnd = hwnd.0 as HWND;
-                let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
-                SetWindowLongW(
-                    hwnd,
-                    GWL_EXSTYLE,
-                    style
-                        | WS_EX_TRANSPARENT as i32
-                        | WS_EX_LAYERED as i32
-                        | WS_EX_TOOLWINDOW as i32,
-                );
-            }
-        }
-    }
-}
-
-fn set_window_capture_exclusion(window: &WebviewWindow, exclude: bool) {
-    #[cfg(target_os = "windows")]
-    {
-        use windows_sys::Win32::Foundation::HWND;
-        use windows_sys::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity;
-
-        if let Ok(hwnd) = window.hwnd() {
-            unsafe {
-                let hwnd = hwnd.0 as HWND;
-                let affinity = if exclude { 0x00000011 } else { 0x00000000 };
-                let _ = SetWindowDisplayAffinity(hwnd, affinity);
-            }
-        }
     }
 }
 
@@ -700,7 +567,6 @@ pub fn run() {
             setup_tray(app)?;
             start_ui_observer(&app.handle());
 
-            // Start background WebSocket server for remote control
             tauri::async_runtime::spawn(async move {
                 websocket::start_websocket_server().await;
             });
@@ -788,342 +654,6 @@ fn show_command_window(app: &AppHandle) {
         let _ = command.show();
         let _ = command.set_focus();
     }
-}
-
-#[cfg(target_os = "windows")]
-fn start_global_click_listener(app: AppHandle) {
-    thread::spawn(move || {
-        let mut was_left_down = false;
-        let mut was_right_down = false;
-        let mut was_enter_down = false;
-
-        loop {
-            if let Some(click) = read_mouse_click(&mut was_left_down, &mut was_right_down) {
-                if let Some(overlay) = app.get_webview_window("overlay") {
-                    if overlay.is_visible().unwrap_or(false) {
-                        let click = click.with_overlay_metrics(&overlay);
-                        let _ = overlay.emit("blinky://global-click", click);
-                    }
-                }
-            }
-
-            if let Some(()) = read_enter_key(&mut was_enter_down) {
-                let _ = app.emit("blinky://global-enter", ());
-            }
-
-            thread::sleep(Duration::from_millis(16));
-        }
-    });
-}
-
-#[cfg(not(target_os = "windows"))]
-fn start_global_click_listener(_app: AppHandle) {
-    // No-op on Linux/macOS to avoid CPU spinning or panic
-}
-
-#[cfg(target_os = "windows")]
-fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
-        MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_ABSOLUTE,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-        SM_YVIRTUALSCREEN,
-    };
-
-    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
-    let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
-    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
-    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
-    if width <= 1 || height <= 1 {
-        return Err("Cannot determine virtual screen size".to_string());
-    }
-
-    let absolute_x = ((x - left) as i64 * 65535 / (width - 1) as i64) as i32;
-    let absolute_y = ((y - top) as i64 * 65535 / (height - 1) as i64) as i32;
-    let flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-    let mut inputs = [
-        mouse_input(absolute_x, absolute_y, flags | MOUSEEVENTF_MOVE),
-        mouse_input(absolute_x, absolute_y, flags | MOUSEEVENTF_LEFTDOWN),
-        mouse_input(absolute_x, absolute_y, flags | MOUSEEVENTF_LEFTUP),
-    ];
-
-    let sent = unsafe {
-        SendInput(
-            inputs.len() as u32,
-            inputs.as_mut_ptr(),
-            std::mem::size_of::<INPUT>() as i32,
-        )
-    };
-    if sent != inputs.len() as u32 {
-        return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn mouse_input(dx: i32, dy: i32, flags: u32) -> windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT,
-    };
-
-    INPUT {
-        r#type: INPUT_MOUSE,
-        Anonymous: INPUT_0 {
-            mi: MOUSEINPUT {
-                dx,
-                dy,
-                mouseData: 0,
-                dwFlags: flags,
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn scroll_at_point_impl(x: i32, y: i32, direction: &str, amount: i32) -> Result<(), String> {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE,
-        MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, INPUT_0,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-        SM_YVIRTUALSCREEN,
-    };
-
-    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
-    let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
-    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
-    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
-    if width <= 1 || height <= 1 {
-        return Err("Cannot determine virtual screen size".to_string());
-    }
-
-    let absolute_x = ((x - left) as i64 * 65535 / (width - 1) as i64) as i32;
-    let absolute_y = ((y - top) as i64 * 65535 / (height - 1) as i64) as i32;
-    let flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-
-    let wheel_delta = 120;
-    let scroll_amount = if direction.eq_ignore_ascii_case("down") {
-        -wheel_delta * amount
-    } else {
-        wheel_delta * amount
-    };
-
-    let mut inputs = [
-        INPUT {
-            r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 {
-                mi: MOUSEINPUT {
-                    dx: absolute_x,
-                    dy: absolute_y,
-                    mouseData: 0,
-                    dwFlags: flags | MOUSEEVENTF_MOVE,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        },
-        INPUT {
-            r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 {
-                mi: MOUSEINPUT {
-                    dx: 0,
-                    dy: 0,
-                    mouseData: scroll_amount as u32,
-                    dwFlags: MOUSEEVENTF_WHEEL,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        },
-    ];
-
-    let sent = unsafe {
-        SendInput(
-            inputs.len() as u32,
-            inputs.as_mut_ptr(),
-            std::mem::size_of::<INPUT>() as i32,
-        )
-    };
-    if sent != inputs.len() as u32 {
-        return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn click_screen_point_impl(_x: i32, _y: i32) -> Result<(), String> {
-    Err("Autopilot clicking is only implemented on Windows".to_string())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn scroll_at_point_impl(_x: i32, _y: i32, _direction: &str, _amount: i32) -> Result<(), String> {
-    Err("Autopilot scrolling is only implemented on Windows".to_string())
-}
-
-#[cfg(target_os = "windows")]
-impl GlobalClick {
-    fn with_overlay_metrics(mut self, overlay: &WebviewWindow) -> Self {
-        if let Ok(position) = overlay.outer_position() {
-            self.overlay_x = position.x;
-            self.overlay_y = position.y;
-        }
-        self.scale_factor = overlay.scale_factor().unwrap_or(1.0);
-        self
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn read_mouse_click(was_left_down: &mut bool, was_right_down: &mut bool) -> Option<GlobalClick> {
-    use windows_sys::Win32::Foundation::POINT;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
-
-    let is_left_down = unsafe { (GetAsyncKeyState(VK_LBUTTON as i32) & 0x8000u16 as i16) != 0 };
-    let is_right_down = unsafe { (GetAsyncKeyState(VK_RBUTTON as i32) & 0x8000u16 as i16) != 0 };
-    let clicked = (is_left_down && !*was_left_down) || (is_right_down && !*was_right_down);
-    *was_left_down = is_left_down;
-    *was_right_down = is_right_down;
-
-    if !clicked {
-        return None;
-    }
-
-    let mut point = POINT { x: 0, y: 0 };
-    let ok = unsafe { GetCursorPos(&mut point) };
-    if ok == 0 {
-        return None;
-    }
-
-    Some(GlobalClick {
-        x: point.x,
-        y: point.y,
-        overlay_x: 0,
-        overlay_y: 0,
-        scale_factor: 1.0,
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn read_enter_key(was_enter_down: &mut bool) -> Option<()> {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_RETURN};
-
-    let is_enter_down = unsafe { (GetAsyncKeyState(VK_RETURN as i32) & 0x8000u16 as i16) != 0 };
-    let pressed = is_enter_down && !*was_enter_down;
-    *was_enter_down = is_enter_down;
-
-    if pressed {
-        Some(())
-    } else {
-        None
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn type_text_impl(text: &str, press_enter: bool) -> Result<(), String> {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
-    };
-
-    let mut inputs = Vec::new();
-    for c in text.encode_utf16() {
-        inputs.push(keyboard_input_unicode(c, KEYEVENTF_UNICODE));
-        inputs.push(keyboard_input_unicode(c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
-    }
-
-    if !inputs.is_empty() {
-        let sent = unsafe {
-            SendInput(
-                inputs.len() as u32,
-                inputs.as_mut_ptr(),
-                std::mem::size_of::<INPUT>() as i32,
-            )
-        };
-        if sent != inputs.len() as u32 {
-            return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
-        }
-    }
-
-    if press_enter {
-        thread::sleep(Duration::from_millis(100));
-        send_keypress(0x0D)?; // VK_RETURN
-    }
-
-    Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn keyboard_input_unicode(wscan: u16, flags: u32) -> windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-    };
-    INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 {
-            ki: KEYBDINPUT {
-                wVk: 0,
-                wScan: wscan,
-                dwFlags: flags,
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn send_keypress(vk: u16) -> Result<(), String> {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-    };
-    let mut inputs = [
-        INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: vk,
-                    wScan: 0,
-                    dwFlags: 0,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        },
-        INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: vk,
-                    wScan: 0,
-                    dwFlags: KEYEVENTF_KEYUP,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        },
-    ];
-    let sent = unsafe {
-        SendInput(
-            inputs.len() as u32,
-            inputs.as_mut_ptr(),
-            std::mem::size_of::<INPUT>() as i32,
-        )
-    };
-    if sent != inputs.len() as u32 {
-        return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "windows"))]
-fn type_text_impl(_text: &str, _press_enter: bool) -> Result<(), String> {
-    Err("Autopilot typing is only implemented on Windows".to_string())
 }
 
 #[cfg(test)]
