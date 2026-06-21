@@ -388,7 +388,6 @@ export function CommandBar() {
           const data = await res.json();
           const base64Audio = data.audios[0];
           ttsAudioQueueRef.current.push(base64Audio); // push base64 directly
-          setStatus(`Debug: TTS fetched ${base64Audio.length} bytes`);
           void processTtsPlayQueue();
         } else {
           console.error('TTS Fetch failed with status:', res.status);
@@ -467,7 +466,6 @@ export function CommandBar() {
           const startTime = Math.max(ctx.currentTime, nextPlayTimeRef.current);
           source.start(startTime);
           nextPlayTimeRef.current = startTime + audioBuffer.duration;
-          setStatus(`Playing audio: ${audioBuffer.duration.toFixed(2)}s`);
         });
       } catch (e) {
         console.error('Error decoding/playing TTS chunk:', e);
