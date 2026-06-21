@@ -165,6 +165,7 @@ export function CommandBar() {
   const ttsAudioQueueRef = useRef<string[]>([]);
   const isFetchingTtsRef = useRef<boolean>(false);
   const isPlayingTtsRef = useRef<boolean>(false);
+  const hasStreamedTtsRef = useRef<boolean>(false);
 
   const rememberCompletedStep = (targetText?: string, instruction?: string) => {
     const cleanTarget = targetText?.trim();
@@ -200,6 +201,7 @@ export function CommandBar() {
     isFetchingTtsRef.current = false;
     isPlayingTtsRef.current = false;
     speechBufferRef.current = '';
+    nextPlayTimeRef.current = 0;
 
     setIsSpeaking(false);
   };
@@ -274,6 +276,7 @@ export function CommandBar() {
 
       if (workflowStartedWithReadbackRef.current) {
         speechBufferRef.current += msg;
+        hasStreamedTtsRef.current = true;
         const match = speechBufferRef.current.match(/([^.!?\n]+[.!?\n]+)(\s*|$)/);
         if (match) {
           const sentence = match[1].trim();
@@ -322,8 +325,16 @@ export function CommandBar() {
       let audioBuffer: AudioBuffer;
       try {
         audioBuffer = await audioCtxRef.current.decodeAudioData(bytes.buffer.slice(0));
-      } catch {
-        const int16Array = new Int16Array(bytes.buffer);
+      } catch (decodeErr) {
+        const isMp3 = bytes.length >= 3 && (
+          (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) ||
+          (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0)
+        );
+        if (isMp3) {
+          throw new Error('Failed to decode MP3 data: ' + (decodeErr instanceof Error ? decodeErr.message : String(decodeErr)));
+        }
+        const validByteLength = bytes.buffer.byteLength - (bytes.buffer.byteLength % 2);
+        const int16Array = new Int16Array(bytes.buffer, 0, validByteLength / 2);
         const float32Array = new Float32Array(int16Array.length);
         for (let i = 0; i < int16Array.length; i++) {
           float32Array[i] = int16Array[i] / 32768.0;
@@ -377,12 +388,15 @@ export function CommandBar() {
           const data = await res.json();
           const base64Audio = data.audios[0];
           ttsAudioQueueRef.current.push(base64Audio); // push base64 directly
+          setStatus(`Debug: TTS fetched ${base64Audio.length} bytes`);
           void processTtsPlayQueue();
         } else {
           console.error('TTS Fetch failed with status:', res.status);
+          setStatus(`TTS API Error: Status ${res.status}`);
         }
       } catch (err) {
         console.error('Failed to fetch TTS for sentence:', err);
+        setStatus(`TTS Fetch Error: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
     isFetchingTtsRef.current = false;
@@ -419,6 +433,15 @@ export function CommandBar() {
         try {
           audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
         } catch (decodeErr) {
+          const isMp3 = bytes.length >= 3 && (
+            (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) ||
+            (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0)
+          );
+          if (isMp3) {
+            console.error('Failed to decode MP3 audio chunk:', decodeErr);
+            setStatus(`MP3 Decode Error: ${decodeErr instanceof Error ? decodeErr.message : String(decodeErr)}`);
+            continue;
+          }
           console.warn('decodeAudioData failed, falling back to PCM:', decodeErr);
           const validByteLength = bytes.buffer.byteLength - (bytes.buffer.byteLength % 2);
           const int16Array = new Int16Array(bytes.buffer, 0, validByteLength / 2);
@@ -440,10 +463,15 @@ export function CommandBar() {
             activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== source);
             resolve();
           };
-          source.start(0);
+          
+          const startTime = Math.max(ctx.currentTime, nextPlayTimeRef.current);
+          source.start(startTime);
+          nextPlayTimeRef.current = startTime + audioBuffer.duration;
+          setStatus(`Playing audio: ${audioBuffer.duration.toFixed(2)}s`);
         });
       } catch (e) {
         console.error('Error decoding/playing TTS chunk:', e);
+        setStatus(`TTS Play Error: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
     
@@ -657,6 +685,7 @@ export function CommandBar() {
 
     // Immediately enable streaming TTS if requested
     workflowStartedWithReadbackRef.current = shouldSpeakAfter;
+    hasStreamedTtsRef.current = false;
 
     if (options.resetProgress) {
       completedTargetsRef.current = [];
@@ -795,17 +824,21 @@ export function CommandBar() {
         inputRef.current.style.height = 'auto';
       }
       if (shouldSpeakAfter) {
-        if (speechBufferRef.current.trim()) {
-          ttsTextQueueRef.current.push(speechBufferRef.current.trim());
-          speechBufferRef.current = '';
-        }
-        
-        if (currentGuideSteps.length > 0) {
-          const stepText = currentGuideSteps.map((s, i) => `Step ${i + 1}. ${s.instruction}`).join('. ');
-          ttsTextQueueRef.current.push(`Steps: ${stepText}`);
-        }
+        if (!hasStreamedTtsRef.current && result.summary) {
+          void speakText(result.summary, currentGuideSteps, { includeSteps: !showGuideCompletionSummary });
+        } else {
+          if (speechBufferRef.current.trim()) {
+            ttsTextQueueRef.current.push(speechBufferRef.current.trim());
+            speechBufferRef.current = '';
+          }
+          
+          if (currentGuideSteps.length > 0) {
+            const stepText = currentGuideSteps.map((s, i) => `Step ${i + 1}. ${s.instruction}`).join('. ');
+            ttsTextQueueRef.current.push(`Steps: ${stepText}`);
+          }
 
-        void processTtsFetchQueueRef.current();
+          void processTtsFetchQueueRef.current();
+        }
       }
     } catch (error) {
       if (cancelledRunIdsRef.current.has(runId)) {
@@ -1060,7 +1093,7 @@ export function CommandBar() {
       void audioCtxRef.current.resume();
     }
 
-    void executeTutor(trimmed, false);
+    void executeTutor(trimmed, true);
   }
 
   async function startDrag() {

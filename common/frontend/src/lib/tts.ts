@@ -16,7 +16,7 @@ export function buildSarvamTtsPayload(text: string): SarvamTtsPayload {
     speaker: 'ratan',
     pace: 1.05,
     speech_sample_rate: 16000,
-    output_audio_codec: 'pcm',
+    output_audio_codec: 'mp3',
   };
 }
 
