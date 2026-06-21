@@ -126,6 +126,8 @@ export function CommandBar() {
     resizeRef.current = null;
   };
   const [status, setStatus] = useState(defaultStatus);
+  const [spokenStatus, setSpokenStatus] = useState<string>('');
+  const [isTtsActive, setIsTtsActive] = useState<boolean>(false);
   const [steps, setSteps] = useState<any[]>([]);
   const [showGuideCompletionSummary, setShowGuideCompletionSummary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -161,12 +163,11 @@ export function CommandBar() {
 
   // TTS Streaming state
   const speechBufferRef = useRef<string>('');
-  const ttsTextQueueRef = useRef<string[]>([]);
+  const ttsTextQueueRef = useRef<{ text: string, isHidden?: boolean }[]>([]);
   const ttsAudioQueueRef = useRef<string[]>([]);
   const isFetchingTtsRef = useRef<boolean>(false);
   const isPlayingTtsRef = useRef<boolean>(false);
   const hasStreamedTtsRef = useRef<boolean>(false);
-  const [activeSpeechSentence, setActiveSpeechSentence] = useState<string | null>(null);
 
   const rememberCompletedStep = (targetText?: string, instruction?: string) => {
     const cleanTarget = targetText?.trim();
@@ -203,9 +204,9 @@ export function CommandBar() {
     isPlayingTtsRef.current = false;
     speechBufferRef.current = '';
     nextPlayTimeRef.current = 0;
-    setActiveSpeechSentence(null);
 
     setIsSpeaking(false);
+    setIsTtsActive(false);
   };
 
   // Initialize Adaptive Transport Manager when API key is loaded
@@ -284,7 +285,7 @@ export function CommandBar() {
           const sentence = match[1].trim();
           speechBufferRef.current = speechBufferRef.current.substring(match[0].length);
           if (sentence) {
-            ttsTextQueueRef.current.push(sentence);
+            ttsTextQueueRef.current.push({ text: sentence });
             void processTtsFetchQueueRef.current();
           }
         }
@@ -370,11 +371,11 @@ export function CommandBar() {
     isFetchingTtsRef.current = true;
 
     while (ttsTextQueueRef.current.length > 0) {
-      const text = ttsTextQueueRef.current.shift();
-      if (!text) continue;
+      const item = ttsTextQueueRef.current.shift();
+      if (!item || !item.text) continue;
 
       try {
-        const payload = buildSarvamTtsPayload(text);
+        const payload = buildSarvamTtsPayload(item.text);
         payload.output_audio_codec = 'mp3';
 
         const res = await fetch('https://api.sarvam.ai/text-to-speech', {
@@ -389,7 +390,7 @@ export function CommandBar() {
         if (res.ok) {
           const data = await res.json();
           const base64Audio = data.audios[0];
-          ttsAudioQueueRef.current.push(JSON.stringify({ text, audio: base64Audio }));
+          ttsAudioQueueRef.current.push(JSON.stringify({ text: item.text, audio: base64Audio, isHidden: item.isHidden }));
           void processTtsPlayQueue();
         } else {
           console.error('TTS Fetch failed with status:', res.status);
@@ -415,7 +416,7 @@ export function CommandBar() {
       const payloadStr = ttsAudioQueueRef.current.shift();
       if (!payloadStr) continue;
       
-      const { text, audio: base64Audio } = JSON.parse(payloadStr);
+      const { text, audio: base64Audio, isHidden } = JSON.parse(payloadStr);
 
       try {
         if (!audioCtxRef.current) {
@@ -467,16 +468,19 @@ export function CommandBar() {
           nextPlayTimeRef.current = startTime + audioBuffer.duration;
           
           const delayMs = Math.max(0, (startTime - ctx.currentTime) * 1000);
-          if (text) {
+          if (text && !isHidden) {
             setTimeout(() => {
-              setActiveSpeechSentence(text);
+              setSpokenStatus((prev) => {
+                if (prev === 'Thinking...') return text;
+                return prev + (prev.endsWith(' ') || prev.endsWith('\n') ? '' : ' ') + text;
+              });
             }, delayMs);
           }
 
           source.onended = () => {
             activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== source);
-            if (activeSourcesRef.current.length === 0) {
-              setActiveSpeechSentence(null);
+            if (activeSourcesRef.current.length === 0 && ttsTextQueueRef.current.length === 0 && !isFetchingTtsRef.current) {
+              setIsTtsActive(false);
             }
             resolve();
           };
@@ -510,8 +514,10 @@ export function CommandBar() {
       .filter(Boolean);
 
     for (const sentence of sentences) {
-      ttsTextQueueRef.current.push(sentence);
+      ttsTextQueueRef.current.push({ text: sentence });
     }
+    setIsTtsActive(true);
+    setSpokenStatus('Thinking...');
     void processTtsFetchQueue();
   };
 
@@ -698,6 +704,8 @@ export function CommandBar() {
     // Immediately enable streaming TTS if requested
     workflowStartedWithReadbackRef.current = shouldSpeakAfter;
     hasStreamedTtsRef.current = false;
+    setIsTtsActive(shouldSpeakAfter);
+    setSpokenStatus('Thinking...');
 
     if (options.resetProgress) {
       completedTargetsRef.current = [];
@@ -840,13 +848,13 @@ export function CommandBar() {
           void speakText(result.summary, currentGuideSteps, { includeSteps: !showGuideCompletionSummary });
         } else {
           if (speechBufferRef.current.trim()) {
-            ttsTextQueueRef.current.push(speechBufferRef.current.trim());
+            ttsTextQueueRef.current.push({ text: speechBufferRef.current.trim() });
             speechBufferRef.current = '';
           }
           
           if (currentGuideSteps.length > 0) {
             const stepText = currentGuideSteps.map((s, i) => `Step ${i + 1}. ${s.instruction}`).join('. ');
-            ttsTextQueueRef.current.push(`Steps: ${stepText}`);
+            ttsTextQueueRef.current.push({ text: `Steps: ${stepText}`, isHidden: true });
           }
 
           void processTtsFetchQueueRef.current();
@@ -1353,7 +1361,7 @@ export function CommandBar() {
                   <Sparkles size={14} className="summary-sparkle" />
                   <div className="command-summary-text-container">
                     <span className="command-status">
-                      <ReactMarkdown components={{ a: ExternalMarkdownLink }}>{linkCitationMarkers(status)}</ReactMarkdown>
+                      <ReactMarkdown components={{ a: ExternalMarkdownLink }}>{linkCitationMarkers(isTtsActive ? spokenStatus : status)}</ReactMarkdown>
                     </span>
                     {steps.length > 0 && sarvamApiKey && (
                       <button
@@ -1369,13 +1377,6 @@ export function CommandBar() {
                       </button>
                     )}
                   </div>
-                </div>
-              )}
-              
-              {activeSpeechSentence && isSpeaking && (
-                <div className="command-subtitle-bar">
-                  <Volume2 size={16} className="subtitle-icon" />
-                  <span className="subtitle-text">{activeSpeechSentence}</span>
                 </div>
               )}
 
