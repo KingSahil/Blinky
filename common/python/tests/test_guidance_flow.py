@@ -11,6 +11,8 @@ from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
 from computer_use.tools import ToolResult
 from main import (
     assign_screen_element_refs,
+    extract_click_target,
+    classify_request,
     extract_locator_target,
     merge_visible_items,
     resolve_locator_fast_path,
@@ -665,6 +667,20 @@ class GuidanceFlowTests(unittest.TestCase):
         self.assertTrue(result["is_continuation"])
         mock_capture.assert_called_once()
 
+    def test_classifier_overrides_open_app_for_web_destinations(self) -> None:
+        with patch(
+            "main.ask_text_model",
+            return_value={
+                "intent": "OPEN_APP",
+                "needs_screen": False,
+                "extracted_params": {"app_name": "YouTube"},
+            },
+        ):
+            result = classify_request("open YouTube", None, [])
+
+        self.assertEqual(result["intent"], "DESKTOP_AUTOMATION")
+        self.assertTrue(result["needs_screen"])
+
     def test_normal_mode_does_not_execute_agent_tools(self) -> None:
         screenshot = SimpleNamespace(
             path="screenshots/test.jpg",
@@ -701,6 +717,40 @@ class GuidanceFlowTests(unittest.TestCase):
 
         self.assertEqual(result["summary"], "Opened Spotify.")
         self.assertEqual(result["agent_action"]["tool"], "open_app")
+
+    def test_agent_mode_opens_web_destination_before_screen_capture(self) -> None:
+        preflight_response = {
+            "intent": "OPEN_APP",
+            "needs_screen": False,
+            "extracted_params": {"app_name": "YouTube"},
+        }
+        action = ToolResult(
+            True,
+            "open_web_destination",
+            "Opened YouTube.",
+            {"destination": "YouTube", "url": "https://www.youtube.com/"},
+        )
+
+        with (
+            patch("main.ask_text_model", return_value=preflight_response),
+            patch(
+                "computer_use.tools.open_app_tool",
+                side_effect=AssertionError("web destination should not open as a desktop app"),
+            ),
+            patch("main.try_run_agent_action", return_value=action),
+            patch(
+                "main.capture_screen",
+                side_effect=AssertionError("web destination agent action should not require screen capture"),
+            ),
+            patch(
+                "main.get_active_window",
+                return_value={"title": "Microsoft Edge", "process": "msedge.exe", "supported": True},
+            ),
+        ):
+            result = run("open YouTube", agent_mode=True)
+
+        self.assertEqual(result["summary"], "Opened YouTube.")
+        self.assertEqual(result["agent_action"]["tool"], "open_web_destination")
 
     def test_run_reuses_fresh_ui_map_cache_without_ocr_or_uia(self) -> None:
         screenshot = SimpleNamespace(
@@ -763,6 +813,47 @@ class GuidanceFlowTests(unittest.TestCase):
         self.assertEqual(extract_locator_target("where is the extension button?"), "extension")
         self.assertEqual(extract_locator_target("show me where the frontend folder is"), "frontend")
         self.assertIsNone(extract_locator_target("how to install code runner extension"))
+
+    def test_click_target_extraction_removes_generic_words(self) -> None:
+        self.assertEqual(extract_click_target("click YouTube"), "YouTube")
+        self.assertEqual(extract_click_target("click the YouTube button"), "YouTube")
+        self.assertIsNone(extract_click_target("how to install code runner extension"))
+
+    def test_click_question_uses_local_uia_match_without_ai(self) -> None:
+        screenshot = SimpleNamespace(
+            path="screenshots/test.jpg",
+            width=1728,
+            height=1080,
+            screen_width=2560,
+            screen_height=1600,
+        )
+        items = [
+            {
+                "text": "You Tube",
+                "x": 80,
+                "y": 140,
+                "width": 110,
+                "height": 40,
+                "confidence": 0.98,
+                "source": "uia",
+                "control_type": "Button",
+            }
+        ]
+
+        with (
+            patch("main.capture_screen", return_value=screenshot),
+            patch("utils.window.get_target_window_element", return_value=None),
+            patch("main.get_active_window", return_value={"title": "Microsoft Edge", "process": "msedge.exe"}),
+            patch("main.get_visible_ui_text", return_value=items),
+            patch("main.extract_visible_text", side_effect=AssertionError("OCR should be skipped")),
+            patch("main.ask_text_model", side_effect=AssertionError("preflight AI should be skipped")),
+            patch("main.ask_model", side_effect=AssertionError("guidance AI should be skipped")),
+        ):
+            result = run("click YouTube")
+
+        self.assertEqual(result["provider"], "local")
+        self.assertEqual(result["steps"][0]["instruction"], "Click YouTube.")
+        self.assertEqual(result["steps"][0]["match"]["text"], "You Tube")
 
     def test_locator_question_uses_local_uia_match_without_ocr_or_ai(self) -> None:
         screenshot = SimpleNamespace(

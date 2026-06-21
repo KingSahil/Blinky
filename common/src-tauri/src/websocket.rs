@@ -220,18 +220,25 @@ async fn handle_connection(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let path = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let path_clone = path.clone();
-    let mut ws_stream = tokio_tungstenite::accept_hdr_async(stream, move |req: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
-        if let Ok(mut p) = path_clone.lock() {
-            *p = req.uri().path().to_string();
-        }
-        Ok(response)
-    }).await?;
+    let mut ws_stream = tokio_tungstenite::accept_hdr_async(
+        stream,
+        move |req: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+            if let Ok(mut p) = path_clone.lock() {
+                *p = req.uri().path().to_string();
+            }
+            Ok(response)
+        },
+    )
+    .await?;
 
     let active_path = {
         let p = path.lock().unwrap();
         p.clone()
     };
-    println!("WebSocket handshake succeeded with {} for path {}", peer_addr, active_path);
+    println!(
+        "WebSocket handshake succeeded with {} for path {}",
+        peer_addr, active_path
+    );
 
     if active_path == "/sarvam-stt" {
         return handle_sarvam_stt_proxy(ws_stream).await;
@@ -657,7 +664,9 @@ async fn handle_sarvam_stt_proxy(
 
     let url = "wss://api.sarvam.ai/speech-to-text/ws?model=saaras:v3&language-code=en-IN";
     let mut request = url.into_client_request()?;
-    request.headers_mut().insert("api-subscription-key", api_key.parse()?);
+    request
+        .headers_mut()
+        .insert("api-subscription-key", api_key.parse()?);
 
     let (sarvam_ws, _) = connect_async(request).await?;
     println!("Successfully connected proxy to Sarvam STT WebSocket");
@@ -674,7 +683,10 @@ async fn handle_sarvam_stt_proxy(
                 break;
             }
             if msg.is_text() {
-                println!("STT: Client -> Sarvam text: {:?}", msg.to_text().unwrap_or(""));
+                println!(
+                    "STT: Client -> Sarvam text: {:?}",
+                    msg.to_text().unwrap_or("")
+                );
             } else if msg.is_binary() {
                 println!("STT: Client -> Sarvam binary ({} bytes)", msg.len());
             }
@@ -696,7 +708,10 @@ async fn handle_sarvam_stt_proxy(
                 break;
             }
             if msg.is_text() {
-                println!("STT: Sarvam -> Client text: {:?}", msg.to_text().unwrap_or(""));
+                println!(
+                    "STT: Sarvam -> Client text: {:?}",
+                    msg.to_text().unwrap_or("")
+                );
             } else if msg.is_binary() {
                 println!("STT: Sarvam -> Client binary ({} bytes)", msg.len());
             }
@@ -716,7 +731,8 @@ async fn handle_sarvam_stt_proxy(
 
     if let Err(e) = res {
         let err_str = e.to_string();
-        if !err_str.contains("closed") && !err_str.contains("Closing") && !err_str.contains("reset") {
+        if !err_str.contains("closed") && !err_str.contains("Closing") && !err_str.contains("reset")
+        {
             eprintln!("STT Proxy error: {}", err_str);
         }
     }
@@ -733,7 +749,9 @@ async fn handle_sarvam_tts_proxy(
 
     let url = "wss://api.sarvam.ai/text-to-speech/ws?model=bulbul:v3";
     let mut request = url.into_client_request()?;
-    request.headers_mut().insert("api-subscription-key", api_key.parse()?);
+    request
+        .headers_mut()
+        .insert("api-subscription-key", api_key.parse()?);
 
     let (sarvam_ws, _) = connect_async(request).await?;
     println!("Successfully connected proxy to Sarvam TTS WebSocket");
@@ -750,7 +768,10 @@ async fn handle_sarvam_tts_proxy(
                 break;
             }
             if msg.is_text() {
-                println!("TTS: Client -> Sarvam text: {:?}", msg.to_text().unwrap_or(""));
+                println!(
+                    "TTS: Client -> Sarvam text: {:?}",
+                    msg.to_text().unwrap_or("")
+                );
             } else if msg.is_binary() {
                 println!("TTS: Client -> Sarvam binary ({} bytes)", msg.len());
             }
@@ -772,7 +793,10 @@ async fn handle_sarvam_tts_proxy(
                 break;
             }
             if msg.is_text() {
-                println!("TTS: Sarvam -> Client text: {:?}", msg.to_text().unwrap_or(""));
+                println!(
+                    "TTS: Sarvam -> Client text: {:?}",
+                    msg.to_text().unwrap_or("")
+                );
             } else if msg.is_binary() {
                 println!("TTS: Sarvam -> Client binary ({} bytes)", msg.len());
             }
@@ -792,7 +816,8 @@ async fn handle_sarvam_tts_proxy(
 
     if let Err(e) = res {
         let err_str = e.to_string();
-        if !err_str.contains("closed") && !err_str.contains("Closing") && !err_str.contains("reset") {
+        if !err_str.contains("closed") && !err_str.contains("Closing") && !err_str.contains("reset")
+        {
             eprintln!("TTS Proxy error: {}", err_str);
         }
     }

@@ -1,4 +1,4 @@
-import { listen } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
@@ -265,6 +265,7 @@ export function App() {
     const currentWindow = getCurrentWindow();
     try {
       const result = await runTutor(trimmed);
+      await emit('blinky://guidance', result);
       await showOverlay();
       await currentWindow.setFocus();
       setStatus(result.summary);

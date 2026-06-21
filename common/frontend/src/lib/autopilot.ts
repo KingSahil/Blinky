@@ -90,9 +90,36 @@ function isConfidentAutopilotMatch(step: TutorStep): boolean {
     return true;
   }
   if (match.match_method === 'text') {
+    if (isTextEntryStep(step) && isInputLikeMatch(step)) {
+      const candidateCount = match.ambiguous_candidate_count ?? 1;
+      const score = match.score ?? 0;
+      const textSimilarity = match.text_similarity ?? 0;
+      return candidateCount <= 2 && (score >= 0.62 || textSimilarity >= 0.62);
+    }
     return match.is_exact_text === true && (match.ambiguous_candidate_count ?? 1) <= 1;
   }
   return match.is_exact_text === true && (match.ambiguous_candidate_count ?? 1) <= 1;
+}
+
+function isTextEntryStep(step: TutorStep): boolean {
+  const instruction = normalize(step.instruction);
+  return ['type', 'enter', 'input', 'search for'].some((hint) => instruction.includes(hint));
+}
+
+function isInputLikeMatch(step: TutorStep): boolean {
+  const match = step.match;
+  if (!match) return false;
+
+  const controlType = normalize(match.control_type);
+  const targetText = normalize(step.target_text);
+  const matchText = normalize(match.text);
+  const instruction = normalize(step.instruction);
+  const searchable = `${targetText} ${matchText} ${instruction}`;
+
+  return (
+    ['edit', 'textbox', 'combobox'].includes(controlType) ||
+    ['search', 'filter', 'find', 'input', 'text field', 'search bar'].some((hint) => searchable.includes(hint))
+  );
 }
 
 export function getClickablePoint(step: TutorStep): ScreenPoint {
@@ -144,7 +171,7 @@ export function extractTextToType(instruction: string): string | null {
   const normalized = instruction.trim();
   
   // Try matching quotes first
-  const quoteMatch = normalized.match(/(?:type|enter|input|search\s+for)\s+['"]([^'"]+)['"]/i);
+  const quoteMatch = normalized.match(/(?:type|enter|input|search\s+for)\s+['"‘’“”]([^'"‘’“”]+)['"‘’“”]/i);
   if (quoteMatch && quoteMatch[1]) {
     return quoteMatch[1];
   }
@@ -152,7 +179,7 @@ export function extractTextToType(instruction: string): string | null {
   // Fallback to matching until prepositions or "and press"
   const fallbackMatch = normalized.match(/(?:type|enter|input|search\s+for)\s+(.+?)(?:\s+(?:into|in|on|to|and\s+press)\b|$)/i);
   if (fallbackMatch && fallbackMatch[1]) {
-    return fallbackMatch[1].trim();
+    return fallbackMatch[1].trim().replace(/^['"‘’“”]+|['"‘’“”]+$/g, '');
   }
   
   return null;

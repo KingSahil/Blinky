@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+import webbrowser
 from dataclasses import dataclass
 from typing import Any
 
@@ -65,6 +66,30 @@ APP_NAME_ALIASES = {
     "spotify desktop": "spotify",
 }
 
+WEB_DESTINATION_URLS = {
+    "youtube": "https://www.youtube.com/",
+    "you tube": "https://www.youtube.com/",
+    "youtube music": "https://music.youtube.com/",
+    "you tube music": "https://music.youtube.com/",
+    "gmail": "https://mail.google.com/",
+    "google": "https://www.google.com/",
+    "google search": "https://www.google.com/",
+    "google drive": "https://drive.google.com/",
+    "google docs": "https://docs.google.com/document/",
+    "google sheets": "https://docs.google.com/spreadsheets/",
+    "google slides": "https://docs.google.com/presentation/",
+    "whatsapp web": "https://web.whatsapp.com/",
+    "facebook": "https://www.facebook.com/",
+    "instagram": "https://www.instagram.com/",
+    "x": "https://x.com/",
+    "twitter": "https://x.com/",
+    "linkedin": "https://www.linkedin.com/",
+    "reddit": "https://www.reddit.com/",
+    "github": "https://github.com/",
+    "chatgpt": "https://chatgpt.com/",
+    "chat gpt": "https://chatgpt.com/",
+}
+
 
 def open_app_tool(app_name: str) -> ToolResult:
     try:
@@ -72,6 +97,37 @@ def open_app_tool(app_name: str) -> ToolResult:
         return open_app_tool_impl(app_name)
     except ImportError:
         return ToolResult(False, "open_app", "Opening desktop apps is currently supported on Windows only.", {"app_name": app_name})
+
+
+def open_web_destination_tool(destination: str) -> ToolResult:
+    normalized = normalize_web_destination(destination)
+    url = WEB_DESTINATION_URLS.get(normalized)
+    if not url and is_domain_like_destination(normalized):
+        url = normalized if re.match(r"^https?://", normalized) else f"https://{normalized}"
+
+    if not url:
+        return ToolResult(
+            False,
+            "open_web_destination",
+            f"I do not know a safe URL for '{destination}'.",
+            {"destination": destination},
+        )
+
+    opened = webbrowser.open(url)
+    if not opened:
+        return ToolResult(
+            False,
+            "open_web_destination",
+            f"Could not open {url} in the default browser.",
+            {"destination": destination, "url": url},
+        )
+
+    return ToolResult(
+        True,
+        "open_web_destination",
+        f"Opened {display_web_destination(destination)}.",
+        {"destination": destination, "url": url},
+    )
 
 
 def shortcut_tool(shortcut: str) -> ToolResult:
@@ -123,6 +179,22 @@ def normalize_app_name(value: str) -> str:
     text = re.sub(r"[^a-z0-9 .+_-]", "", text)
     text = " ".join(text.split()).strip(" ._-")
     return APP_NAME_ALIASES.get(text, text)
+
+
+def normalize_web_destination(value: str) -> str:
+    text = " ".join(str(value).strip().lower().split())
+    text = re.sub(r"\b(app|application|website|site|page|please|for me)\b", " ", text)
+    text = re.sub(r"[^a-z0-9 .:/_-]", "", text)
+    return " ".join(text.split()).strip(" ._-")
+
+
+def is_domain_like_destination(value: str) -> bool:
+    return bool(re.match(r"^(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+/?$", value))
+
+
+def display_web_destination(value: str) -> str:
+    cleaned = " ".join(str(value).strip().split()).strip()
+    return cleaned or "the website"
 
 
 def display_app_name(original: str, normalized: str) -> str:

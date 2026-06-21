@@ -5,7 +5,12 @@ pub fn click_screen_point_impl(_x: i32, _y: i32) -> Result<(), String> {
     Err("Autopilot clicking is only implemented on Windows".to_string())
 }
 
-pub fn scroll_at_point_impl(_x: i32, _y: i32, _direction: &str, _amount: i32) -> Result<(), String> {
+pub fn scroll_at_point_impl(
+    _x: i32,
+    _y: i32,
+    _direction: &str,
+    _amount: i32,
+) -> Result<(), String> {
     Err("Autopilot scrolling is only implemented on Windows".to_string())
 }
 

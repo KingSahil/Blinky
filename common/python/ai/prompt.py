@@ -32,6 +32,11 @@ such as clicking, opening, selecting, locating, highlighting, installing,
 configuring, or navigating something in an app, file tree, menu, button, tab,
 or window.
 
+If the request is to open or navigate to a website or web destination such as
+YouTube, YouTube Music, Gmail, GitHub, ChatGPT, or a domain/URL, do not classify
+it as OPEN_APP. Treat it as visible desktop/browser automation that needs the
+screen so Blinky can inspect the current UI and target visible controls by refs.
+
 Use needs_screen=false for normal conversation, identity questions, greetings,
 concept explanations, writing help, general knowledge questions, or requests
 that are not about the currently visible app UI.

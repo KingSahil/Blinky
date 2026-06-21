@@ -33,38 +33,29 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
         timeout_val = 90
 
     image_payload = _image_to_data_url(screenshot_path)
-    
-    try:
-        response = requests.post(
-            groq_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "temperature": 0.1,
-                "max_tokens": 350,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": image_payload}},
-                        ],
-                    }
+
+    payload = {
+        "model": model,
+        "temperature": 0.1,
+        "max_tokens": 350,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_payload}},
                 ],
-            },
-            timeout=timeout_val,
-        )
-    except requests.exceptions.Timeout:
-        raise RuntimeError(
-            f"Groq API request timed out after {timeout_val} seconds. Please check your network connection "
-            f"or switch BLINKY_AI_PROVIDER to local 'ollama' under your Settings for offline offline guidance."
-        )
-    except requests.exceptions.RequestException as exc:
-        raise RuntimeError(f"Groq API connection error: {exc}")
+            }
+        ],
+    }
+
+    response = _post_groq(groq_url, api_key, payload, timeout_val)
+    if _is_json_validate_error(response):
+        LOGGER.warning("Groq JSON-mode generation failed; retrying vision request without response_format.")
+        retry_payload = _without_response_format(payload)
+        retry_payload["messages"][0]["content"][0]["text"] = _json_recovery_prompt(prompt)
+        response = _post_groq(groq_url, api_key, retry_payload, timeout_val)
 
     if not response.ok:
         raise RuntimeError(_format_groq_error(response))
@@ -86,31 +77,76 @@ def ask_groq_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
     except ValueError:
         timeout_val = 90
 
-    try:
-        response = requests.post(
-            groq_url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "temperature": 0.1,
-                "max_tokens": max_tokens,
-                "response_format": {"type": "json_object"},
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            timeout=timeout_val,
-        )
-    except requests.exceptions.Timeout:
-        raise RuntimeError(f"Groq API request timed out after {timeout_val} seconds.")
-    except requests.exceptions.RequestException as exc:
-        raise RuntimeError(f"Groq API connection error: {exc}")
+    payload = {
+        "model": model,
+        "temperature": 0.1,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+        "messages": [{"role": "user", "content": prompt}],
+    }
+
+    response = _post_groq(groq_url, api_key, payload, timeout_val)
+    if _is_json_validate_error(response):
+        LOGGER.warning("Groq JSON-mode generation failed; retrying text request without response_format.")
+        retry_payload = _without_response_format(payload)
+        retry_payload["messages"][0]["content"] = _json_recovery_prompt(prompt)
+        response = _post_groq(groq_url, api_key, retry_payload, timeout_val)
 
     if not response.ok:
         raise RuntimeError(_format_groq_error(response))
     body = response.json()
     return _parse_json(_extract_content(body))
+
+
+def _post_groq(groq_url: str, api_key: str, payload: dict[str, Any], timeout_val: int) -> requests.Response:
+    try:
+        return requests.post(
+            groq_url,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=timeout_val,
+        )
+    except requests.exceptions.Timeout:
+        raise RuntimeError(
+            f"Groq API request timed out after {timeout_val} seconds. Please check your network connection "
+            f"or switch BLINKY_AI_PROVIDER to local 'ollama' under your Settings for offline guidance."
+        )
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(f"Groq API connection error: {exc}")
+
+
+def _without_response_format(payload: dict[str, Any]) -> dict[str, Any]:
+    retry_payload = json.loads(json.dumps(payload))
+    retry_payload.pop("response_format", None)
+    retry_payload["temperature"] = 0
+    return retry_payload
+
+
+def _json_recovery_prompt(prompt: str) -> str:
+    return (
+        f"{prompt}\n\n"
+        "The previous attempt failed Groq JSON validation. Return only one raw JSON object, "
+        "with no markdown, no code fences, no commentary, and no trailing text. "
+        "The object must have this shape: {\"summary\":\"...\",\"steps\":[]}."
+    )
+
+
+def _is_json_validate_error(response: requests.Response) -> bool:
+    if response.ok:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    error = payload.get("error", {})
+    if not isinstance(error, dict):
+        return False
+    code = str(error.get("code", "")).strip().lower()
+    message = str(error.get("message", "")).strip().lower()
+    return code == "json_validate_failed" or "json validation" in message or "failed to generate json" in message
 
 
 
