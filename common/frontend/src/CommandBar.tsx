@@ -166,6 +166,7 @@ export function CommandBar() {
   const isFetchingTtsRef = useRef<boolean>(false);
   const isPlayingTtsRef = useRef<boolean>(false);
   const hasStreamedTtsRef = useRef<boolean>(false);
+  const [activeSpeechSentence, setActiveSpeechSentence] = useState<string | null>(null);
 
   const rememberCompletedStep = (targetText?: string, instruction?: string) => {
     const cleanTarget = targetText?.trim();
@@ -202,6 +203,7 @@ export function CommandBar() {
     isPlayingTtsRef.current = false;
     speechBufferRef.current = '';
     nextPlayTimeRef.current = 0;
+    setActiveSpeechSentence(null);
 
     setIsSpeaking(false);
   };
@@ -387,7 +389,7 @@ export function CommandBar() {
         if (res.ok) {
           const data = await res.json();
           const base64Audio = data.audios[0];
-          ttsAudioQueueRef.current.push(base64Audio); // push base64 directly
+          ttsAudioQueueRef.current.push(JSON.stringify({ text, audio: base64Audio }));
           void processTtsPlayQueue();
         } else {
           console.error('TTS Fetch failed with status:', res.status);
@@ -410,8 +412,10 @@ export function CommandBar() {
     setIsSpeaking(true);
 
     while (ttsAudioQueueRef.current.length > 0) {
-      const base64Audio = ttsAudioQueueRef.current.shift();
-      if (!base64Audio) continue;
+      const payloadStr = ttsAudioQueueRef.current.shift();
+      if (!payloadStr) continue;
+      
+      const { text, audio: base64Audio } = JSON.parse(payloadStr);
 
       try {
         if (!audioCtxRef.current) {
@@ -458,14 +462,24 @@ export function CommandBar() {
           source.connect(ctx.destination);
           activeSourcesRef.current.push(source);
           
-          source.onended = () => {
-            activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== source);
-            resolve();
-          };
-          
           const startTime = Math.max(ctx.currentTime, nextPlayTimeRef.current);
           source.start(startTime);
           nextPlayTimeRef.current = startTime + audioBuffer.duration;
+          
+          const delayMs = Math.max(0, (startTime - ctx.currentTime) * 1000);
+          if (text) {
+            setTimeout(() => {
+              setActiveSpeechSentence(text);
+            }, delayMs);
+          }
+
+          source.onended = () => {
+            activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== source);
+            if (activeSourcesRef.current.length === 0) {
+              setActiveSpeechSentence(null);
+            }
+            resolve();
+          };
         });
       } catch (e) {
         console.error('Error decoding/playing TTS chunk:', e);
@@ -1355,6 +1369,13 @@ export function CommandBar() {
                       </button>
                     )}
                   </div>
+                </div>
+              )}
+              
+              {activeSpeechSentence && isSpeaking && (
+                <div className="command-subtitle-bar">
+                  <Volume2 size={16} className="subtitle-icon" />
+                  <span className="subtitle-text">{activeSpeechSentence}</span>
                 </div>
               )}
 
