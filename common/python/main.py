@@ -25,7 +25,7 @@ from ai.client import ask_model, ask_text_model, get_provider_label
 from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
 from app_context import get_app_context
 from capture import capture_screen
-from computer_use import try_run_agent_action, looks_like_app_name
+from computer_use import try_run_agent_action, is_web_destination, looks_like_app_name
 from ocr import extract_visible_text
 from utils.logging import get_logger
 from utils.matching import attach_matches, find_best_match_with_score
@@ -160,7 +160,7 @@ def run(
         elif intent == "OPEN_APP":
             app = extracted_params.get("app_name")
             if app:
-                if is_in_app_action(app) or not looks_like_app_name(app):
+                if is_web_destination(app) or is_in_app_action(app) or not looks_like_app_name(app):
                     LOGGER.info("Overriding OPEN_APP intent in main.py for app '%s' to DESKTOP_AUTOMATION", app)
                     intent = "DESKTOP_AUTOMATION"
                 else:
@@ -432,10 +432,11 @@ def classify_request(
     intent = payload.get("intent")
     extracted_params = payload.get("extracted_params", {}) or {}
     
-    # Safety check: if intent is OPEN_APP but targets an in-app feature/action or looks like a query, override to DESKTOP_AUTOMATION
+    # Safety check: if intent is OPEN_APP but targets web UI, an in-app
+    # feature/action, or a query, override to DESKTOP_AUTOMATION.
     if intent == "OPEN_APP":
         app_name = extracted_params.get("app_name", "")
-        if app_name and (is_in_app_action(app_name) or not looks_like_app_name(app_name)):
+        if app_name and (is_web_destination(app_name) or is_in_app_action(app_name) or not looks_like_app_name(app_name)):
             LOGGER.info("Overriding OPEN_APP intent with app_name '%s' to DESKTOP_AUTOMATION", app_name)
             intent = "DESKTOP_AUTOMATION"
 
@@ -507,7 +508,7 @@ def run_web_intelligence(
 
 
 def resolve_locator_fast_path(question: str, screenshot, target_pid: int | None, warnings: list[str], started: float) -> dict | None:
-    target = extract_locator_target(question)
+    target = extract_locator_target(question) or extract_click_target(question)
     if not target:
         return None
 
@@ -529,7 +530,17 @@ def resolve_locator_fast_path(question: str, screenshot, target_pid: int | None,
         match_result = find_best_match_with_score(target, match_items, instruction)
         if match_result:
             if should_accept_locator_match(question, match_result):
-                return build_locator_result(target, match_result["item"], uia_items, active_app, screenshot, warnings, started, match_result)
+                return build_locator_result(
+                    question,
+                    target,
+                    match_result["item"],
+                    uia_items,
+                    active_app,
+                    screenshot,
+                    warnings,
+                    started,
+                    match_result,
+                )
             LOGGER.info(
                 "Locator deferred to AI for '%s' reason=low_control_confidence score=%.3f text_similarity=%.3f candidate_count=%d",
                 target,
@@ -552,7 +563,17 @@ def resolve_locator_fast_path(question: str, screenshot, target_pid: int | None,
     match_result = find_best_match_with_score(target, locator_match_items(question, visible_items), instruction)
     if match_result:
         if should_accept_locator_match(question, match_result):
-            return build_locator_result(target, match_result["item"], visible_items, active_app, screenshot, warnings, started, match_result)
+            return build_locator_result(
+                question,
+                target,
+                match_result["item"],
+                visible_items,
+                active_app,
+                screenshot,
+                warnings,
+                started,
+                match_result,
+            )
         LOGGER.info(
             "Locator deferred to AI for '%s' reason=low_control_confidence score=%.3f text_similarity=%.3f candidate_count=%d",
             target,
@@ -645,6 +666,7 @@ def icon_like_control_candidates(items: list[dict]) -> list[dict]:
 
 
 def build_locator_result(
+    question: str,
     target: str,
     match: dict,
     visible_items: list[dict],
@@ -676,7 +698,7 @@ def build_locator_result(
 
     step = {
         "step": 1,
-        "instruction": f"Here is the {target}.",
+        "instruction": local_target_instruction(question, target),
         "target_text": str(match.get("text") or target),
         "target_ref": str(match.get("ref", "")),
         "match": match_with_metadata,
@@ -732,6 +754,32 @@ def extract_locator_target(question: str) -> str | None:
         if match:
             return clean_locator_target(match.group(1))
     return None
+
+
+def extract_click_target(question: str) -> str | None:
+    text = " ".join(question.strip().split())
+    if not text:
+        return None
+
+    patterns = [
+        r"^(?:click|select|choose|press)\s+(?:on\s+)?(?:the\s+)?(.+?)(?:\?|$)",
+        r"^(?:tap)\s+(?:on\s+)?(?:the\s+)?(.+?)(?:\?|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return clean_locator_target(match.group(1))
+    return None
+
+
+def is_click_target_question(question: str) -> bool:
+    return extract_click_target(question) is not None
+
+
+def local_target_instruction(question: str, target: str) -> str:
+    if is_click_target_question(question):
+        return f"Click {target}."
+    return f"Here is the {target}."
 
 
 def should_force_screen_context(question: str, previous_question: str | None = None) -> bool:

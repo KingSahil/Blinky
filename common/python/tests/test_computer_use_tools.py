@@ -1,7 +1,7 @@
 from unittest.mock import Mock, patch
 
 from computer_use.agent import cleanup_app_name, try_run_agent_action
-from computer_use.tools import ToolResult, find_start_app, normalize_app_name, normalize_shortcut, open_app_tool, open_app_via_windows_search
+from computer_use.tools import ToolResult, find_start_app, normalize_app_name, normalize_shortcut, open_app_tool, open_app_via_windows_search, open_web_destination_tool
 
 
 def test_cleanup_app_name_removes_trailing_app_word() -> None:
@@ -15,6 +15,28 @@ def test_agent_routes_open_app_request() -> None:
 
     assert result is open_app.return_value
     open_app.assert_called_once_with("Spotify")
+
+
+def test_agent_routes_web_destination_to_browser_tool() -> None:
+    with (
+        patch("computer_use.agent.open_app_tool", side_effect=AssertionError("web destination should not open as a desktop app")),
+        patch("computer_use.agent.open_web_destination_tool") as open_web,
+    ):
+        open_web.return_value = Mock()
+        result = try_run_agent_action("open YouTube")
+
+    assert result is open_web.return_value
+    open_web.assert_called_once_with("YouTube")
+
+
+def test_open_web_destination_uses_known_url() -> None:
+    with patch("computer_use.tools.webbrowser.open", return_value=True) as open_url:
+        result = open_web_destination_tool("YouTube")
+
+    assert result.success is True
+    assert result.tool == "open_web_destination"
+    assert result.details["url"] == "https://www.youtube.com/"
+    open_url.assert_called_once_with("https://www.youtube.com/")
 
 
 def test_agent_routes_help_menu_to_shortcut_when_context_matches() -> None:

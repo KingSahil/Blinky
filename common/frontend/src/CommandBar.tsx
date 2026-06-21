@@ -716,7 +716,7 @@ export function CommandBar() {
             }
           },
         });
-        if (autopilot.stopReason === 'complete') {
+        if (autopilot.stopReason === 'complete' && autopilot.attempts > 0) {
           result = {
             ...autopilot.finalResult,
             summary: `Autopilot successfully completed the task!`,

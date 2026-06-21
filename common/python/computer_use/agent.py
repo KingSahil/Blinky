@@ -3,7 +3,32 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .tools import ToolResult, open_app_tool, shortcut_tool
+from .tools import ToolResult, open_app_tool, open_web_destination_tool, shortcut_tool
+
+
+WEB_DESTINATION_NAMES = {
+    "youtube",
+    "you tube",
+    "youtube music",
+    "you tube music",
+    "gmail",
+    "google",
+    "google search",
+    "google drive",
+    "google docs",
+    "google sheets",
+    "google slides",
+    "whatsapp web",
+    "facebook",
+    "instagram",
+    "x",
+    "twitter",
+    "linkedin",
+    "reddit",
+    "github",
+    "chatgpt",
+    "chat gpt",
+}
 
 
 OPEN_APP_RE = re.compile(
@@ -25,6 +50,15 @@ def is_in_app_action(app_name: str) -> bool:
         "file", "files", "history", "recent", "preferences", "terminal", "console"
     }
     return any(re.search(rf"\b{re.escape(word)}\b", app_lower) for word in in_app_keywords)
+
+
+def is_web_destination(app_name: str) -> bool:
+    name_lower = " ".join(app_name.lower().strip().split())
+    if not name_lower:
+        return False
+    if re.search(r"\b(?:https?://|www\.|[a-z0-9-]+\.[a-z]{2,})(?:\b|/)", name_lower):
+        return True
+    return name_lower in WEB_DESTINATION_NAMES
 
 
 def looks_like_app_name(app_name: str) -> bool:
@@ -67,6 +101,8 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
     if match:
         app = cleanup_app_name(match.group("app"))
         if app and app not in {"help", "settings", "menu"}:
+            if is_web_destination(app):
+                return open_web_destination_tool(app)
             if not is_in_app_action(app) and looks_like_app_name(app):
                 return open_app_tool(app)
 

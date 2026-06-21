@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
 #[derive(Clone, Serialize)]
 pub struct GlobalClick {
@@ -14,8 +14,8 @@ pub struct GlobalClick {
 
 pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
-        MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_ABSOLUTE,
+        SendInput, INPUT, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+        MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
@@ -52,7 +52,11 @@ pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
     Ok(())
 }
 
-fn mouse_input(dx: i32, dy: i32, flags: u32) -> windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT {
+fn mouse_input(
+    dx: i32,
+    dy: i32,
+    flags: u32,
+) -> windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT,
     };
@@ -74,8 +78,8 @@ fn mouse_input(dx: i32, dy: i32, flags: u32) -> windows_sys::Win32::UI::Input::K
 
 pub fn scroll_at_point_impl(x: i32, y: i32, direction: &str, amount: i32) -> Result<(), String> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_MOUSE, MOUSEEVENTF_MOVE, MOUSEEVENTF_ABSOLUTE,
-        MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT, INPUT_0,
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_MOVE,
+        MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
@@ -211,7 +215,10 @@ pub fn type_text_impl(text: &str, press_enter: bool) -> Result<(), String> {
     let mut inputs = Vec::new();
     for c in text.encode_utf16() {
         inputs.push(keyboard_input_unicode(c, KEYEVENTF_UNICODE));
-        inputs.push(keyboard_input_unicode(c, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP));
+        inputs.push(keyboard_input_unicode(
+            c,
+            KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+        ));
     }
 
     if !inputs.is_empty() {
@@ -356,10 +363,7 @@ pub fn configure_overlay_passthrough(window: &WebviewWindow) {
             SetWindowLongW(
                 hwnd,
                 GWL_EXSTYLE,
-                style
-                    | WS_EX_TRANSPARENT as i32
-                    | WS_EX_LAYERED as i32
-                    | WS_EX_TOOLWINDOW as i32,
+                style | WS_EX_TRANSPARENT as i32 | WS_EX_LAYERED as i32 | WS_EX_TOOLWINDOW as i32,
             );
         }
     }

@@ -1,11 +1,16 @@
 $ErrorActionPreference = "Stop"
 
-if (-not (Test-Path ".venv")) {
-  py -3.11 -m venv .venv
+$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+$VenvPath = Join-Path $RepoRoot ".venv"
+$PythonPath = Join-Path $VenvPath "Scripts\python.exe"
+$RequirementsPath = Join-Path $PSScriptRoot "..\requirements.txt"
+
+if (-not (Test-Path $VenvPath)) {
+  py -3.11 -m venv $VenvPath
 }
 
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m playwright install chromium
+& $PythonPath -m pip install --upgrade pip
+& $PythonPath -m pip install -r $RequirementsPath
+& $PythonPath -m playwright install chromium
 
-Write-Host "Python environment ready at .venv"
+Write-Host "Python environment ready at $VenvPath"

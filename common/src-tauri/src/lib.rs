@@ -1,5 +1,5 @@
-mod websocket;
 mod platform;
+mod websocket;
 
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
@@ -17,9 +17,8 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 use platform::{
-    click_screen_point_impl, scroll_at_point_impl, type_text_impl,
-    start_global_click_listener, configure_overlay_passthrough, set_window_capture_exclusion,
-    open_url_impl,
+    click_screen_point_impl, configure_overlay_passthrough, open_url_impl, scroll_at_point_impl,
+    set_window_capture_exclusion, start_global_click_listener, type_text_impl,
 };
 
 #[derive(Debug, Deserialize)]
@@ -41,11 +40,6 @@ struct AgentQueryRequest {
 async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::Value, String> {
     let overlay = app.get_webview_window("overlay");
     let command = app.get_webview_window("command");
-
-    let overlay_was_visible = overlay
-        .as_ref()
-        .map(|w| w.is_visible().unwrap_or(false))
-        .unwrap_or(false);
 
     if let Some(ref w) = overlay {
         set_window_capture_exclusion(w, true);
@@ -80,20 +74,6 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
     let parsed: serde_json::Value = serde_json::from_str(&output)
         .map_err(|err| format!("Python worker returned invalid JSON: {err}. Raw: {output}"))?;
 
-    if let Some(ref w) = overlay {
-        if overlay_was_visible
-            || parsed
-                .get("steps")
-                .and_then(|s| s.as_array())
-                .map(|a| !a.is_empty())
-                .unwrap_or(false)
-        {
-            let _ = w.emit("blinky://guidance", parsed.clone());
-            let _ = w.show();
-            configure_overlay_passthrough(w);
-        }
-    }
-
     Ok(parsed)
 }
 
@@ -117,7 +97,7 @@ fn show_overlay(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn hide_overlay(app: AppHandle) -> Result<(), String> {
     if let Some(overlay) = app.get_webview_window("overlay") {
-        overlay.hide().map_err(|err| err.to_string())?;
+        let _ = overlay.emit("blinky://guidance", serde_json::json!({ "steps": [] }));
     }
     Ok(())
 }
@@ -520,7 +500,10 @@ fn start_ui_observer(app: &AppHandle) {
     };
     let script = root.join("common").join("python").join("ui_observer.py");
     if !script.exists() {
-        eprintln!("Warning: UI observer script was not found: {}", script.display());
+        eprintln!(
+            "Warning: UI observer script was not found: {}",
+            script.display()
+        );
         return;
     }
 
@@ -586,6 +569,9 @@ pub fn run() {
 
             #[cfg(target_os = "windows")]
             if let Some(overlay) = app.get_webview_window("overlay") {
+                configure_overlay_passthrough(&overlay);
+                let _ = overlay.emit("blinky://guidance", serde_json::json!({ "steps": [] }));
+                let _ = overlay.show();
                 configure_overlay_passthrough(&overlay);
             }
 
