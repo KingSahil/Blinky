@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Blinky",
+  "version": "0.1.0",
+  "identifier": "app.blinky.tutor",
+  "build": {
+    "beforeDevCommand": "vite --config common/frontend/vite.config.ts",
+    "beforeBuildCommand": "vite build --config common/frontend/vite.config.ts",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "command",
+        "title": "Blinky Command",
+        "url": "/command",
+        "width": 760,
+        "height": 580,
+        "minWidth": 560,
+        "minHeight": 120,
+        "resizable": false,
+        "center": true,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": false,
+        "shadow": false
+      },
+      {
+        "label": "overlay",
+        "title": "Blinky Overlay",
+        "url": "/overlay",
+        "fullscreen": false,
+        "alwaysOnTop": true,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "resizable": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "resources": [
+      "../python",
+      "../../windows/requirements.txt"
+    ]
+  }
+}
