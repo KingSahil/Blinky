@@ -12,7 +12,7 @@ $$\text{Max Width} = 1920 \text{ px}, \quad \text{Max Height} = 1080 \text{ px}$
 
 The aspect ratio is strictly preserved.
 * **Example**: A physical screen of $2560 \times 1600$ (16:10 aspect ratio) downsamples to a screenshot of $1728 \times 1080$ pixels.
-* **Dataclass Representation**: The [Screenshot](file:///c:/projects/Jarvis/python/capture/screen.py) dataclass maintains both:
+* **Dataclass Representation**: The [Screenshot](file:///c:/projects/Jarvis/common/python/capture/screen.py) dataclass maintains both:
   * `width` / `height`: Downsampled screenshot dimensions.
   * `screen_width` / `screen_height`: Original physical desktop dimensions.
 
@@ -22,7 +22,7 @@ The aspect ratio is strictly preserved.
 
 Windows UI Automation (UIA) returns control bounding rectangles in physical desktop coordinates (relative to the full display). WinRT OCR and pytesseract OCR results are extracted directly from the downsampled screenshot buffer, meaning they are already in downsampled screenshot-space.
 
-To align both coordinate systems in the same space, [main.py](file:///c:/projects/Jarvis/python/main.py) maps UIA bounds to screenshot-space bounds:
+To align both coordinate systems in the same space, [main.py](file:///c:/projects/Jarvis/common/python/main.py) maps UIA bounds to screenshot-space bounds:
 
 ### Scale Factors
 $$s_x = \frac{\text{screenshot.width}}{\text{screenshot.screen\_width}}$$
@@ -42,7 +42,7 @@ This scaling ensures that fuzzy matching and text calibration operate on identic
 
 ## 3. Overlay Viewport Display Scaling
 
-When the React frontend renders [Overlay.tsx](file:///c:/projects/Jarvis/frontend/src/Overlay.tsx), it must map screenshot-space coordinates back to CSS pixels matching the browser's viewport.
+When the React frontend renders [Overlay.tsx](file:///c:/projects/Jarvis/common/frontend/src/Overlay.tsx), it must map screenshot-space coordinates back to CSS pixels matching the browser's viewport.
 
 ### Viewport Ratios
 $$\text{scale}_x = \frac{\text{window.innerWidth}}{\text{screenshot.width}}$$
@@ -101,7 +101,7 @@ The screen tutor and matcher always return `step.match` boxes in downsampled scr
 }
 ```
 
-`frontend/src/lib/autopilot.ts` first takes the center of the matched screenshot-space box:
+`common/frontend/src/lib/autopilot.ts` first takes the center of the matched screenshot-space box:
 
 $$x_{\text{center}} = x_{\text{ss}} + \frac{w_{\text{ss}}}{2}$$
 
@@ -119,7 +119,7 @@ $$y_{\text{physical}} = \text{round}\left(y_{\text{center}} \times \frac{\text{s
 
 ## 5. Highlight Box Sizing & Capping
 
-To prevent large highlight boxes from cluttering the screen or looking unpolished, [Overlay.tsx](file:///c:/projects/Jarvis/frontend/src/Overlay.tsx) applies custom sizing restrictions based on the control type:
+To prevent large highlight boxes from cluttering the screen or looking unpolished, [Overlay.tsx](file:///c:/projects/Jarvis/common/frontend/src/Overlay.tsx) applies custom sizing restrictions based on the control type:
 
 ### Standard / Non-Input Controls
 For text, buttons, and icons, bounds are capped:
@@ -145,6 +145,6 @@ if (isInput) {
 ---
 
 ## Related Guides & Files
-- [01 System Architecture](file:///c:/projects/Jarvis/ai/01_architecture.md)
-- [Overlay Frontend Component](file:///c:/projects/Jarvis/frontend/src/Overlay.tsx)
-- [Screen Capture Engine](file:///c:/projects/Jarvis/python/capture/screen.py)
+- [01 System Architecture](file:///c:/projects/Jarvis/common/ai/01_architecture.md)
+- [Overlay Frontend Component](file:///c:/projects/Jarvis/common/frontend/src/Overlay.tsx)
+- [Screen Capture Engine](file:///c:/projects/Jarvis/common/python/capture/screen.py)

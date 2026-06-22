@@ -31,13 +31,15 @@ Blinky has four major interaction modes:
 
 ```text
 c:\projects\Jarvis
-├── ai/                  Documentation hub
-├── frontend/src/        React/Tauri command bar and overlay views
-├── mobile/              Expo remote controller
-├── python/              Screen tutor worker, AI clients, OCR/capture, browser agent, router tools
-├── scripts/             Setup and Ollama checks
-├── shared/              Result schema examples
-└── src-tauri/           Rust host, WebSocket server, tray, shortcuts, windows
+├── common/
+│   ├── ai/              Documentation hub
+│   ├── frontend/src/    React/Tauri command bar and overlay views
+│   ├── mobile/          Expo remote controller
+│   ├── python/          Screen tutor worker, AI clients, OCR/capture, browser agent, router tools
+│   ├── shared/          Result schema examples
+│   └── src-tauri/       Rust host, WebSocket server, tray, shortcuts, windows
+├── windows/scripts/     Windows setup and check scripts
+└── linux/scripts/       Linux setup and check scripts
 ```
 
 ## Common Commands
@@ -59,7 +61,7 @@ docker compose up -d searxng
 Mobile app:
 
 ```powershell
-cd mobile
+cd common/mobile
 npm install
 npm run start
 ```

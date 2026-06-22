@@ -1,14 +1,14 @@
 # Blinky Remote Agent Router
 
-The agent router is separate from the desktop screen-tutor worker. It powers mobile queries sent over WebSocket and command-bar globe/web requests that need browser intelligence. It lives in `python/agent_router.py`.
+The agent router is separate from the desktop screen-tutor worker. It powers mobile queries sent over WebSocket and command-bar globe/web requests that need browser intelligence. It lives in `common/python/agent_router.py`.
 
 ## 1. Transport
 
 ```text
-mobile/usePCWebSocket.ts
+common/mobile/usePCWebSocket.ts
   -> ws://<pc-host>:9001
-  -> src-tauri/src/websocket.rs
-  -> python -u python/agent_router.py
+  -> common/src-tauri/src/websocket.rs
+  -> python -u common/python/agent_router.py
   -> line-delimited JSON responses
 ```
 
@@ -75,17 +75,17 @@ Before registered tool routing and code generation, `agent_router.py` handles br
 - AI-resolved open/navigation intents such as `open whatsapp`, `open notion`, or `launch spotify` (web URL resolution)
 
 These fast paths avoid generated Playwright tools for common navigation. The browser planner described below is preferred for web tasks that need visible Edge automation.
-These resolvers are browser-oriented (`webbrowser.open`) and do not call desktop computer-use tools in `python/computer_use/`.
+These resolvers are browser-oriented (`webbrowser.open`) and do not call desktop computer-use tools in `common/python/computer_use/`.
 
 ## 5. Safe Browser Planner
 
-`python/browser_agent.py` asks the LLM for a small JSON plan instead of arbitrary code. Supported actions are intentionally narrow:
+`common/python/browser_agent.py` asks the LLM for a small JSON plan instead of arbitrary code. Supported actions are intentionally narrow:
 
 - `open_url`
 - `web_search`
 - `site_search`
 
-Accepted plans run through `python/browser_controller.py`, which launches visible Microsoft Edge through Playwright by default:
+Accepted plans run through `common/python/browser_controller.py`, which launches visible Microsoft Edge through Playwright by default:
 
 ```text
 chromium.launch(channel="msedge", headless=false)
@@ -95,7 +95,7 @@ This path is faster and safer than generating a one-off script for prompts like 
 
 ## 6. Registered Tools
 
-The router loads `python/tools/registry.json` asynchronously. Current registered tools include:
+The router loads `common/python/tools/registry.json` asynchronously. Current registered tools include:
 
 - `lookup_youtube_stats`
 - `find_crypto_price`
@@ -131,7 +131,7 @@ For unmatched/insufficient requests:
 2. It parses `TOOL_NAME`, `DESCRIPTION`, `ARGUMENTS`, and a Python code block.
 3. `repair_generated_playwright_code()` fixes common bad API usage, such as awaiting `set_default_timeout` or putting timeouts on ElementHandle methods.
 4. `audit_code()` rejects forbidden imports/calls such as `exec`, `eval`, `os.system`, `subprocess`, `shutil`, and `pty`.
-5. The script is written as `python/tools/temp_candidate_<requestId>.py`.
+5. The script is written as `common/python/tools/temp_candidate_<requestId>.py`.
 6. The router executes it once for verification.
 7. On success, it renames the file to the final tool name and updates `registry.json`.
 8. A background generalization task may run through `utils.generalizer.generalize_tool()`.
@@ -149,12 +149,12 @@ Each chunk is forwarded to the WebSocket client using the `is_chunk` processing 
 
 - Prefer the safe browser planner for open/search/site-search tasks.
 - Generated tools are audited, but the audit is intentionally simple. Treat router-generated files as untrusted until reviewed.
-- The router writes to `python/tools/` and `python/tools/registry.json`.
+- The router writes to `common/python/tools/` and `common/python/tools/registry.json`.
 - Power commands are immediate OS commands from Rust and should only be exposed on trusted local networks.
 - WebSocket binding is `0.0.0.0:9001`; firewall/network policy matters.
 
 ## 11. Boundary with Desktop Computer-Use Mode
 
 - The router serves mobile and WebSocket-driven browser intelligence requests.
-- Desktop direct actions (`open app`, `press shortcut`, `play <song> on Spotify`) are handled by `python/main.py` agent mode through `python/computer_use/agent.py` and `python/computer_use/tools.py`.
+- Desktop direct actions (`open app`, `press shortcut`, `play <song> on Spotify`) are handled by `common/python/main.py` agent mode through `common/python/computer_use/agent.py` and `common/python/computer_use/tools.py`.
 - Keep this boundary explicit: router for browser/web flows, computer-use for local OS/app actions.

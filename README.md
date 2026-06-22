@@ -82,8 +82,8 @@ Blinky serves students, developers, and general users learning to navigate deskt
 ### Team Members:  
 - **Sparsh Khanna** (GitHub: [KhannaSparsh0001](https://github.com/KhannaSparsh0001) / Role: Voice & UI-UX Architect)
 - **Sahil** (GitHub: [KingSahil](https://github.com/KingSahil) / Role: Backend & Tauri Developer)
-- **FeV-06** (GitHub: [FeV-06](https://github.com/FeV-06) / Role: Developer)
-- **meharwanfr** (GitHub: [meharwanfr](https://github.com/meharwanfr) / Role: Developer)
+- **FeV-06** (GitHub: [FeV-06](https://github.com/FeV-06) / Role: Mobile and Linux Developer)
+- **meharwanfr** (GitHub: [meharwanfr](https://github.com/meharwanfr) / Role: Linux Developer)
 
 ### Your Approach:
 - **Why we chose this problem**: Traditional training methods fail because they are separated from the workspace. We wanted a tool that feels like a teacher looking over your shoulder.

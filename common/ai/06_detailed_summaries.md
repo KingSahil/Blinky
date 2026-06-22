@@ -4,12 +4,12 @@ This reference summarizes the files that most often matter when changing Blinky.
 
 ## 1. Desktop Host
 
-### `src-tauri/src/lib.rs`
+### `common/src-tauri/src/lib.rs`
 
 Rust Tauri app core.
 
 - Exposes frontend commands: `run_tutor`, `click_screen_point`, `show_overlay`, `hide_overlay`, `show_command_bar`, `resize_command_window`, `resize_and_move_command_window`, `get_settings`, `save_settings`.
-- Spawns `python/main.py` for screen-tutor requests.
+- Spawns `common/python/main.py` for screen-tutor requests.
 - Sends `question`, `previous_question`, `progress`, and `conversation_history` over stdin.
 - Watches stdout for `__BLINKY_CAPTURED__` and restores capture visibility immediately.
 - Emits `blinky://guidance`, `blinky://open-command`, `blinky://global-click`, and `blinky://global-enter`.
@@ -17,17 +17,17 @@ Rust Tauri app core.
 - Registers Ctrl+Shift+Enter and Ctrl+Shift+Space, with the active shortcut selected by `.env`.
 - Starts the WebSocket server from `websocket.rs`.
 
-### `src-tauri/src/websocket.rs`
+### `common/src-tauri/src/websocket.rs`
 
 Remote-control WebSocket server.
 
 - Binds `0.0.0.0:9001`.
 - Accepts raw power commands and JSON query messages.
-- Starts/reuses a persistent `python -u python/agent_router.py` daemon.
+- Starts/reuses a persistent `python -u common/python/agent_router.py` daemon.
 - Streams daemon response lines back to the WebSocket client.
 - Restarts the daemon once if it exits or its pipe breaks.
 
-### `src-tauri/tauri.conf.json`
+### `common/src-tauri/tauri.conf.json`
 
 Defines the two main windows:
 
@@ -36,7 +36,7 @@ Defines the two main windows:
 
 ## 2. Frontend
 
-### `frontend/src/main.tsx`
+### `common/frontend/src/main.tsx`
 
 Route switch:
 
@@ -44,7 +44,7 @@ Route switch:
 - `/overlay` -> `Overlay`
 - `/` -> `App`
 
-### `frontend/src/CommandBar.tsx`
+### `common/frontend/src/CommandBar.tsx`
 
 Primary command UI.
 
@@ -56,11 +56,11 @@ Primary command UI.
 - Emits `blinky://guidance` directly after a `runTutor` result and shows/hides overlay based on highlightable steps.
 - Saves provider, shortcut, Groq key, and Sarvam key through Tauri settings commands.
 
-### `frontend/src/App.tsx`
+### `common/frontend/src/App.tsx`
 
 Fallback/default command route. It has prompt input, settings, and basic result display, but it does not include the richer continuation and voice workflow in `CommandBar.tsx`.
 
-### `frontend/src/Overlay.tsx`
+### `common/frontend/src/Overlay.tsx`
 
 Transparent highlight renderer.
 
@@ -70,7 +70,7 @@ Transparent highlight renderer.
 - Handles Windows device-pixel-ratio and Linux overlay y-offset.
 - Emits `blinky://target-clicked` when a global click lands in a highlighted frame.
 
-### `frontend/src/lib/guidance.ts`
+### `common/frontend/src/lib/guidance.ts`
 
 Pure step-state helpers.
 
@@ -81,7 +81,7 @@ Pure step-state helpers.
 - Merges completed history with the current pending step.
 - Decides whether the summary bubble should be visible.
 
-### `frontend/src/lib/autopilot.ts`
+### `common/frontend/src/lib/autopilot.ts`
 
 Bounded observe-act loop for command-bar globe/web mode.
 
@@ -91,7 +91,7 @@ Bounded observe-act loop for command-bar globe/web mode.
 - Converts matched screenshot-space centers into physical screen coordinates using `screenshot.screen_width` and `screenshot.screen_height`.
 - Stops on completion, unsafe/missing targets, unchanged repeated targets, or the max-attempt limit.
 
-### `frontend/src/lib/webGuidance.ts`
+### `common/frontend/src/lib/webGuidance.ts`
 
 Bridge between browser intelligence and screen guidance.
 
@@ -99,17 +99,17 @@ Bridge between browser intelligence and screen guidance.
 - Calls `runTutor()` after the browser action to read the visible screen.
 - Falls back to the browser result if screen guidance fails.
 
-### `frontend/src/lib/tauri.ts`
+### `common/frontend/src/lib/tauri.ts`
 
 Typed wrappers around Tauri `invoke()` calls, including `clickScreenPoint()` for native autopilot clicks.
 
-### `frontend/src/lib/tts.ts`
+### `common/frontend/src/lib/tts.ts`
 
 Sarvam payload helpers and error parsing.
 
 ## 3. Screen Tutor Python Worker
 
-### `python/main.py`
+### `common/python/main.py`
 
 Stdin/stdout screen-tutor orchestrator.
 
@@ -126,7 +126,7 @@ Stdin/stdout screen-tutor orchestrator.
 - Builds prompts, calls the selected AI provider, attaches matches, fills search fallbacks, and slices to one step.
 - Returns both optimized screenshot dimensions and physical screen dimensions so frontend clicks can be scaled correctly.
 
-### `python/computer_use/agent.py`
+### `common/python/computer_use/agent.py`
 
 Regex-first routing helper for desktop agent mode.
 
@@ -135,7 +135,7 @@ Regex-first routing helper for desktop agent mode.
 - Routes contextual help-menu requests to `shortcut_tool("alt+h")` when VS Code-like context is detected.
 - Avoids treating in-app actions like “open new tab” as app-launch requests.
 
-### `python/computer_use/tools.py`
+### `common/python/computer_use/tools.py`
 
 Windows-first direct action toolset used by agent mode.
 
@@ -144,7 +144,7 @@ Windows-first direct action toolset used by agent mode.
 - `play_spotify_track_tool()`: resolves a Spotify track URI using SearXNG first, then DuckDuckGo HTML fallback, and opens it with `os.startfile("spotify:track:...")`.
 - Returns typed `ToolResult` objects so callers can safely fall back when actions fail.
 
-### `python/ai/prompt.py`
+### `common/python/ai/prompt.py`
 
 Prompt builders.
 
@@ -153,19 +153,19 @@ Prompt builders.
 - `build_prompt()`: visual-context screen tutor prompt.
 - Labels unlabeled UIA controls as `Visible Button 1`, `Visible Image 1`, etc. for vision-assisted matching.
 
-### `python/ai/client.py`
+### `common/python/ai/client.py`
 
 Provider router for `ollama` and `groq`.
 
-### `python/ai/ollama_client.py`
+### `common/python/ai/ollama_client.py`
 
 Local Ollama client using JSON output, `temperature: 0.1`, `num_predict: 350` for main guidance, and default timeout `35` seconds.
 
-### `python/ai/groq_client.py`
+### `common/python/ai/groq_client.py`
 
 Groq OpenAI-compatible client. Vision calls send the screenshot as a base64 JPEG data URL and request JSON-object output.
 
-### `python/capture/screen.py`
+### `common/python/capture/screen.py`
 
 Capture strategies and `Screenshot` dataclass.
 
@@ -174,7 +174,7 @@ Capture strategies and `Screenshot` dataclass.
 - Saves optimized JPEGs under `screenshots/`.
 - Thumbnails captures to fit `1920x1080`.
 
-### `python/ocr/extract.py`
+### `common/python/ocr/extract.py`
 
 OCR provider registry.
 
@@ -182,15 +182,15 @@ OCR provider registry.
 - Fallback/non-Windows: pytesseract if the binary and Python package are available.
 - Final fallback: mock provider returning no OCR items.
 
-### `python/utils/uia.py`
+### `common/python/utils/uia.py`
 
 Windows UI Automation extraction through pywinauto. Uses `target_pid` to re-resolve a fresh COM window after capture/OCR delays.
 
-### `python/utils/window.py`
+### `common/python/utils/window.py`
 
 Active window and overlay exclusion helpers. Supplies target PID locking and ignored overlay rectangles.
 
-### `python/utils/matching.py`
+### `common/python/utils/matching.py`
 
 Target matcher.
 
@@ -200,20 +200,20 @@ Target matcher.
 
 ## 4. Remote Agent Python
 
-### `python/agent_router.py`
+### `common/python/agent_router.py`
 
 Line-oriented sidecar daemon for WebSocket queries.
 
 - Tries the safe browser planner before registered/generated tools.
 - Directly handles known open/search commands.
-- Loads `python/tools/registry.json`.
+- Loads `common/python/tools/registry.json`.
 - Routes to registered tools by LLM decision.
 - Runs up to 3 tool calls concurrently.
 - Checks sufficiency.
 - Repairs common generated Playwright API mistakes, then audits, verifies, and registers tools when needed.
 - Streams synthesized text chunks back to Rust.
 
-### `python/browser_agent.py`
+### `common/python/browser_agent.py`
 
 Safe JSON browser planner used before the slower generated-tool path.
 
@@ -221,7 +221,7 @@ Safe JSON browser planner used before the slower generated-tool path.
 - Rejects unsupported browser actions instead of inventing brittle scripts.
 - Runs accepted plans through `BrowserController`.
 
-### `python/browser_controller.py`
+### `common/python/browser_controller.py`
 
 Persistent Playwright browser controller.
 
@@ -229,7 +229,7 @@ Persistent Playwright browser controller.
 - Uses visible browser mode by default.
 - Reuses the browser/context/page across requests when possible.
 
-### `python/wil/`
+### `common/python/wil/`
 
 SearXNG-backed Web Intelligence Layer.
 
@@ -239,28 +239,28 @@ SearXNG-backed Web Intelligence Layer.
 - `processor.py`: cleans and selects relevant source text.
 - `reasoner.py`: synthesizes the final answer with the configured AI provider, with fallback source summaries when synthesis is unavailable.
 
-### `python/tools/registry.json`
+### `common/python/tools/registry.json`
 
 Registry of known browser/data tools and their argument names.
 
-### `python/utils/sufficiency_checker.py`
+### `common/python/utils/sufficiency_checker.py`
 
 Determines whether a tool result is enough to answer the original query.
 
-### `python/utils/generalizer.py`
+### `common/python/utils/generalizer.py`
 
 Background generalization path for generated tools.
 
 ## 5. Mobile
 
-### `mobile/App.tsx`
+### `common/mobile/App.tsx`
 
 Expo remote controller UI. Saves PC host, connects over WebSocket, sends queries and power commands, and renders streaming agent status/results.
 
-### `mobile/usePCWebSocket.ts`
+### `common/mobile/usePCWebSocket.ts`
 
 WebSocket hook. Appends `:9001` when needed, tracks connection state, parses JSON messages, and exposes `sendCommand()` / `sendQuery()`.
 
-### `mobile/AGENTS.md`
+### `common/mobile/AGENTS.md`
 
 Project instruction: check the exact Expo versioned docs before editing mobile code.

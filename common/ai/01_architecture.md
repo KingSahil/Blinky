@@ -9,28 +9,28 @@ User
 ├── Desktop command bar (/command)
 │   ├── normal mode
 │   │   └── Tauri run_tutor command
-│   │       └── python/main.py screen tutor worker
+│   │       └── common/python/main.py screen tutor worker
 │   │           └── OCR + UIA + LLM + matching
 │   │               └── overlay highlight (/overlay)
 │   └── globe/web mode
 │       └── runAgentQuery -> browser_agent/browser_controller
 │           └── visible Microsoft Edge through Playwright
 │               └── runTutor observe -> click_screen_point act -> repeat max 5
-│       └── run_tutor web_search_enabled -> python/wil pipeline
+│       └── run_tutor web_search_enabled -> common/python/wil pipeline
 │           └── SearXNG on localhost:8888 -> retrieved sources -> streamed answer
 └── Expo mobile app
     └── ws://<pc>:9001
-        └── src-tauri/src/websocket.rs
-            └── persistent python/agent_router.py sidecar
+        └── common/src-tauri/src/websocket.rs
+            └── persistent common/python/agent_router.py sidecar
                 └── safe browser planner + registered/generated browser tools + streamed synthesis
 ```
 
 ## 2. Desktop Screen Tutor Flow
 
-1. `frontend/src/main.tsx` routes `/command` to `CommandBar.tsx` and `/overlay` to `Overlay.tsx`.
-2. `CommandBar.tsx` sends `run_tutor` through `frontend/src/lib/tauri.ts`.
-3. `src-tauri/src/lib.rs` excludes the command and overlay windows from Windows capture, waits briefly, and spawns `python/main.py`.
-4. `python/main.py` may classify the request as text-only, otherwise captures the screen and prints `__BLINKY_CAPTURED__`.
+1. `common/frontend/src/main.tsx` routes `/command` to `CommandBar.tsx` and `/overlay` to `Overlay.tsx`.
+2. `CommandBar.tsx` sends `run_tutor` through `common/frontend/src/lib/tauri.ts`.
+3. `common/src-tauri/src/lib.rs` excludes the command and overlay windows from Windows capture, waits briefly, and spawns `common/python/main.py`.
+4. `common/python/main.py` may classify the request as text-only, otherwise captures the screen and prints `__BLINKY_CAPTURED__`.
 5. Rust sees the marker and immediately restores capture visibility for the Blinky windows.
 6. Python resolves active app state, OCR items, UIA controls, prompt output, match attachments, and returns JSON.
 7. Rust parses the JSON and emits `blinky://guidance` to the overlay.
@@ -40,17 +40,17 @@ User
 
 In globe/web mode, `CommandBar.tsx` first runs `runAgentQuery()` so the browser planner can open/search in Edge. It then calls `runAutopilotLoop()`, which repeatedly observes the screen with `runTutor()`, clicks one safe matched target through `click_screen_point`, waits briefly, and observes again. The loop stops at completion, unsafe/missing targets, unchanged repeated targets, or 5 attempts.
 
-When `web_search_enabled` reaches `python/main.py`, the worker can run the Web Intelligence Layer in `python/wil/`. That path plans search queries, queries SearXNG at `http://localhost:8888`, fetches top sources, processes text, and streams status/chunks back through `blinky://tutor-status` and `blinky://tutor-chunk`.
+When `web_search_enabled` reaches `common/python/main.py`, the worker can run the Web Intelligence Layer in `common/python/wil/`. That path plans search queries, queries SearXNG at `http://localhost:8888`, fetches top sources, processes text, and streams status/chunks back through `blinky://tutor-status` and `blinky://tutor-chunk`.
 
 ## 3. Remote WebSocket / Agent Flow
 
-At app startup, `src-tauri/src/lib.rs` spawns `websocket::start_websocket_server()`.
+At app startup, `common/src-tauri/src/lib.rs` spawns `websocket::start_websocket_server()`.
 
 ```text
 Expo app
   -> JSON { requestId, query } or command string
   -> Rust WebSocket server on 0.0.0.0:9001
-  -> AgentDaemon starts/reuses python -u python/agent_router.py
+  -> AgentDaemon starts/reuses python -u common/python/agent_router.py
   -> line-delimited JSON responses stream back to the phone
 ```
 
@@ -85,7 +85,7 @@ Important commands:
 
 ## 5. Python Screen Worker Contract
 
-`python/main.py` reads one JSON object from stdin:
+`common/python/main.py` reads one JSON object from stdin:
 
 ```json
 {
@@ -167,4 +167,4 @@ Settings are persisted to `.env` through `get_settings` / `save_settings` in Rus
 - Windows autopilot clicking uses `SendInput` and expects physical virtual-desktop coordinates.
 - Linux overlay positioning avoids the GNOME top panel by moving the overlay below the panel when `XDG_CURRENT_DESKTOP` contains `GNOME`.
 - UIA is Windows-only. On non-Windows, screen understanding relies primarily on screenshot/OCR paths.
-- `mobile/AGENTS.md` says Expo docs must be checked before editing mobile code.
+- `common/mobile/AGENTS.md` says Expo docs must be checked before editing mobile code.

@@ -54,7 +54,13 @@ The helper function `buildSpeechContent` concatenates the overall summary and in
 * Appends numbered guide steps in format: `"Steps: Step 1. {instruction_1} Step 2. {instruction_2}"`.
 
 ### Playback Logic
-* **Voice-First Constraint**: Voice readback only triggers if the workflow was initiated using the voice input button. Typed workflows remain silent on subsequent step click-advancements.
+* **Voice-First Constraint**: Voice readback only triggers automatically if the workflow was initiated using the voice input button. Typed workflows remain silent on subsequent step click-advancements by default.
+* **Manual Read-Aloud**: A manual speak/read-aloud button is available in the bottom-right actions bar of the chatbar (Volume2 icon). Users can click this button to read the current response aloud or stop active speaking at any time.
+* **Synchronized Word-by-Word Highlighting**: Word indices are calculated dynamically for each sentence. In `processTtsPlayQueue`, the frontend schedules timeouts to update `activeWordIndex` in sync with the audio duration. Spans wrap each word in the summary bubble:
+  - Fades out unspoken text (`opacity: 0.45`).
+  - Highlights the active spoken word in orange with an underline.
+  - Returns text to full opacity once spoken.
+  - Automatically resets to normal full opacity when TTS is not active.
 * Audio is returned as a base64 string, which is converted to a Data URL:
   `data:audio/mpeg;base64,{base64_audio}`
   and played back using the HTML5 `Audio` API.
@@ -104,6 +110,6 @@ Sarvam API response structures are parsed by a custom utility `getSarvamErrorMes
 ---
 
 ## Related Guides & Files
-- [TTS Interfaces & Payload Builders](file:///c:/projects/Jarvis/frontend/src/lib/tts.ts)
-- [Command Bar Component](file:///c:/projects/Jarvis/frontend/src/CommandBar.tsx)
-- [Rust Environment Settings Handler](file:///c:/projects/Jarvis/src-tauri/src/lib.rs)
+- [TTS Interfaces & Payload Builders](file:///c:/projects/Jarvis/common/frontend/src/lib/tts.ts)
+- [Command Bar Component](file:///c:/projects/Jarvis/common/frontend/src/CommandBar.tsx)
+- [Rust Environment Settings Handler](file:///c:/projects/Jarvis/common/src-tauri/src/lib.rs)
