@@ -54,14 +54,15 @@ export interface BlinkySettings {
   shortcut: string;
   sarvam_api_key: string;
   groq_api_key: string;
+  deepseek_api_key: string;
 }
 
 export async function getSettings(): Promise<BlinkySettings> {
   return invoke<BlinkySettings>('get_settings');
 }
 
-export async function saveSettings(provider: string, shortcut: string, sarvamApiKey: string, groqApiKey: string): Promise<void> {
-  return invoke('save_settings', { provider, shortcut, sarvamApiKey, groqApiKey });
+export async function saveSettings(provider: string, shortcut: string, sarvamApiKey: string, groqApiKey: string, deepseekApiKey: string): Promise<void> {
+  return invoke('save_settings', { provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey });
 }
 
 export async function openUrl(url: string): Promise<void> {

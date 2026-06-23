@@ -23,6 +23,24 @@ if os.path.isdir(_PLATFORM_PY) and _PLATFORM_PY not in sys.path:
 
 from ai.client import ask_model, ask_text_model, get_provider_label
 from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
+
+
+def _emit_status(phase: str, message: str) -> None:
+    """Emit a progress status event to stdout for the frontend."""
+    out = sys.__stdout__ if hasattr(sys, '__stdout__') else sys.stdout
+    print(json.dumps({"type": "status", "phase": phase, "message": message}), flush=True, file=out)
+
+
+def _has_computer_use_action(question: str) -> bool:
+    """Check if a query contains action verbs beyond just opening an app."""
+    normalized = question.lower().strip()
+    action_verbs = {
+        "calculate", "compute", "type", "click", "press",
+        "search for", "find", "look up", "navigate to",
+        "scroll", "select", "choose", "fill", "enter",
+        "write", "input", "submit",
+    }
+    return any(verb in normalized for verb in action_verbs)
 from app_context import get_app_context
 from capture import capture_screen
 from computer_use import try_run_agent_action, is_web_destination, looks_like_app_name
@@ -157,6 +175,13 @@ def run(
     agent_mode: bool = False,
     ignored_rects: list[dict] | None = None,
 ) -> dict:
+    """
+    RULE: Screenshots/OCR are ONLY taken when BOTH web_search_enabled=False
+    AND agent_mode=False. The priority order is:
+      1. web_search_enabled → SearXNG pipeline (no OCR, no screenshots)
+      2. agent_mode        → MCP desktop automation (no OCR, no screenshots)
+      3. default           → vision pipeline with screenshots + OCR
+    """
     started = time.perf_counter()
     warnings: list[str] = []
 
@@ -164,16 +189,24 @@ def run(
         from utils.window import set_ignored_overlay_rects
         set_ignored_overlay_rects(ignored_rects)
 
+    # PATH 1: Web search — purely SearXNG, never touches the screen
     if web_search_enabled:
         return run_web_intelligence(question, conversation_history, started, warnings)
 
     locator_target = extract_locator_target(question)
     skip_preflight = should_skip_preflight_for_local_fast_path(question)
 
+    # RULE: agent_mode NEVER forces screen context — it goes through preflight
+    # for intent classification (COMPUTER_USE, OPEN_APP, etc.)
+    if agent_mode:
+        force_screen = False
+
     preflight = None
     if skip_preflight:
         LOGGER.info("Skipping preflight for local fast-path or continuation question")
     else:
+        if agent_mode:
+            _emit_status("analyzing", "Understanding your request...")
         preflight_started = time.perf_counter()
         preflight = classify_request(question, previous_question, warnings, conversation_history)
         log_stage_timing("preflight", preflight_started)
@@ -193,15 +226,27 @@ def run(
     if intent == "WEB_SEARCH":
         LOGGER.info("Automatically enabling web search mode for classified intent: WEB_SEARCH")
         web_search_enabled = True
-    elif intent in {"OPEN_APP", "MEDIA_PLAYBACK", "SYSTEM_SHORTCUT"}:
+    elif intent in {"COMPUTER_USE", "OPEN_APP", "MEDIA_PLAYBACK", "SYSTEM_SHORTCUT"}:
         LOGGER.info("Automatically enabling agent mode for classified intent: %s", intent)
         agent_mode = True
 
     if web_search_enabled:
         return run_web_intelligence(question, conversation_history, started, warnings)
 
+    # Agent mode: every request is a fresh task. Continuation logic is for
+    # vision-guided workflows only (screenshot-based step tracking).
+    if agent_mode:
+        is_continuation = False
+
     if agent_mode:
         direct_agent_result = None
+
+        # Reroute: if the query contains action verbs beyond just "open",
+        # treat it as COMPUTER_USE so the full tool loop runs.
+        if intent == "OPEN_APP" and _has_computer_use_action(question):
+            LOGGER.info("Rerouting OPEN_APP → COMPUTER_USE (query contains action verbs)")
+            intent = "COMPUTER_USE"
+
         if intent == "MEDIA_PLAYBACK":
             song = extracted_params.get("song_name")
             if song:
@@ -222,19 +267,59 @@ def run(
             if shortcut:
                 from computer_use.tools import shortcut_tool
                 direct_agent_result = shortcut_tool(shortcut)
+        elif intent == "COMPUTER_USE":
+            from computer_use.loop import run_computer_use_loop
+            loop_result = run_computer_use_loop(question)
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            # Normalize agent steps to include frontend-safe fields
+            safe_steps = []
+            for i, s in enumerate(loop_result.get("steps", [])):
+                safe_steps.append({
+                    "step": i + 1,
+                    "instruction": s.get("message", ""),
+                    "target_text": "",
+                    "target_ref": "",
+                    "tool": s.get("tool", ""),
+                    "args": s.get("args", {}),
+                    "success": s.get("success", False),
+                })
+            return {
+                "summary": loop_result.get("answer", "Task completed." if loop_result.get("success") else "Agent automation could not complete the task."),
+                "steps": safe_steps,
+                "active_app": {"title": "", "process": "", "supported": False},
+                "ocr": {"count": 0, "items": []},
+                "elapsed_ms": elapsed_ms,
+                "provider": get_provider_label(),
+                "warnings": warnings,
+                "is_continuation": False,
+                "computer_use": True,
+            }
 
         if direct_agent_result is not None and not direct_agent_result.success:
-            LOGGER.info("Direct agent tool execution failed (success=False), falling back to screen mode.")
             direct_agent_result = None
 
         if direct_agent_result is None:
             direct_agent_result = try_run_agent_action(question)
             if direct_agent_result is not None and not direct_agent_result.success:
-                LOGGER.info("try_run_agent_action tool execution failed (success=False), falling back to screen mode.")
                 direct_agent_result = None
 
         if direct_agent_result is not None:
             return build_agent_tool_result(direct_agent_result.to_dict(), started, warnings)
+
+        # AGENT MODE RULE: when agent automation is enabled, NEVER fall through
+        # to screenshots/OCR. Report failure cleanly.
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return {
+            "summary": "I wasn't able to handle that request with desktop automation. Try rephrasing your request, or disable agent mode for screen-based guidance.",
+            "steps": [],
+            "active_app": {"title": "", "process": "", "supported": False},
+            "ocr": {"count": 0, "items": []},
+            "elapsed_ms": elapsed_ms,
+            "provider": get_provider_label(),
+            "warnings": warnings,
+            "is_continuation": False,
+            "agent_fallback": True,
+        }
 
     effective_question = question
     latest_update = None

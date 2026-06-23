@@ -339,6 +339,46 @@ class WaylandPortalCaptureStrategy:
                     LOGGER.warning(f"Failed to delete temporary portal capture file {temp_path}: {ex}")
 
 
+class KWinGrimCaptureStrategy(CaptureStrategy):
+    """Capture only the active window's bounding box using grim on Wayland KDE.
+    No portal permission prompts needed — grim captures directly via wlroots."""
+
+    def capture(self) -> Image.Image:
+        try:
+            from window_linux import _kwin_active_window
+            win = _kwin_active_window()
+        except ImportError:
+            win = None
+
+        if not win or not win.get("width"):
+            raise CaptureError("KWin active window not available for grim capture")
+
+        x, y, w, h = win["x"], win["y"], win["width"], win["height"]
+        temp_path = Path("tmp") / "wayland_crop.png"
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            subprocess.run(
+                ["grim", "-g", f"{x},{y} {w}x{h}", str(temp_path)],
+                check=True, capture_output=True, timeout=10,
+            )
+        except FileNotFoundError:
+            raise CaptureError(
+                "grim not installed. Install with: sudo dnf install grim"
+            )
+        except subprocess.CalledProcessError as e:
+            raise CaptureError(f"grim capture failed: {e.stderr.decode()}")
+
+        if not temp_path.exists():
+            raise CaptureError("grim did not produce output file")
+
+        img = Image.open(temp_path)
+        img.load()
+        temp_path.unlink()
+        LOGGER.info("Captured active window via grim: (%d,%d %dx%d)", x, y, w, h)
+        return img
+
+
 class LinuxCaptureStrategyFactory:
     _cached_portal_available = None
 
@@ -380,10 +420,17 @@ class LinuxCaptureStrategyFactory:
     def get_strategy(cls):
         session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
         wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
-
         is_wayland = (session_type == "wayland" or bool(wayland_display))
 
         if is_wayland:
+            # Try grim-based cropped capture first (no portal prompts)
+            try:
+                subprocess.run(["which", "grim"], capture_output=True, check=True, timeout=2)
+                LOGGER.info("Wayland detected, grim available. Using KWinGrimCaptureStrategy.")
+                return KWinGrimCaptureStrategy()
+            except Exception:
+                LOGGER.debug("grim not available on Wayland")
+
             if cls.is_portal_available():
                 LOGGER.info("Wayland session detected and Desktop Portal is available. Using WaylandPortalCaptureStrategy.")
                 return WaylandPortalCaptureStrategy()

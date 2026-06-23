@@ -57,6 +57,8 @@ export interface TutorResult {
     message: string;
     details?: Record<string, unknown>;
   };
+  computer_use?: boolean;
+  agent_fallback?: boolean;
 }
 
 export interface TutorProgress {

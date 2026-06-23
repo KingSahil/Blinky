@@ -1,5 +1,6 @@
 mod platform;
 mod websocket;
+mod mcp_bridge;
 
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
@@ -180,6 +181,7 @@ struct BlinkySettings {
     shortcut: String,
     sarvam_api_key: String,
     groq_api_key: String,
+    deepseek_api_key: String,
 }
 
 #[tauri::command]
@@ -191,6 +193,7 @@ async fn get_settings(app: AppHandle) -> Result<BlinkySettings, String> {
     let mut shortcut = "Enter".to_string();
     let mut sarvam_api_key = "".to_string();
     let mut groq_api_key = "".to_string();
+    let mut deepseek_api_key = "".to_string();
 
     for (key, val) in env_vars {
         if key == "BLINKY_AI_PROVIDER" {
@@ -201,6 +204,8 @@ async fn get_settings(app: AppHandle) -> Result<BlinkySettings, String> {
             sarvam_api_key = val;
         } else if key == "GROQ_API_KEY" {
             groq_api_key = val;
+        } else if key == "DEEPSEEK_API_KEY" {
+            deepseek_api_key = val;
         }
     }
 
@@ -209,6 +214,7 @@ async fn get_settings(app: AppHandle) -> Result<BlinkySettings, String> {
         shortcut,
         sarvam_api_key,
         groq_api_key,
+        deepseek_api_key,
     })
 }
 
@@ -219,6 +225,7 @@ async fn save_settings(
     shortcut: String,
     sarvam_api_key: String,
     groq_api_key: String,
+    deepseek_api_key: String,
 ) -> Result<(), String> {
     let root = project_root(&app)?;
     ensure_env_file(&root);
@@ -231,6 +238,7 @@ async fn save_settings(
     let mut shortcut_found = false;
     let mut sarvam_api_key_found = false;
     let mut groq_api_key_found = false;
+    let mut deepseek_api_key_found = false;
 
     for line in lines.iter_mut() {
         let trimmed = line.trim();
@@ -246,6 +254,9 @@ async fn save_settings(
         } else if trimmed.starts_with("GROQ_API_KEY=") {
             *line = format!("GROQ_API_KEY={}", groq_api_key);
             groq_api_key_found = true;
+        } else if trimmed.starts_with("DEEPSEEK_API_KEY=") {
+            *line = format!("DEEPSEEK_API_KEY={}", deepseek_api_key);
+            deepseek_api_key_found = true;
         }
     }
 
@@ -260,6 +271,9 @@ async fn save_settings(
     }
     if !groq_api_key_found {
         lines.push(format!("GROQ_API_KEY={}", groq_api_key));
+    }
+    if !deepseek_api_key_found {
+        lines.push(format!("DEEPSEEK_API_KEY={}", deepseek_api_key));
     }
 
     let new_contents = lines.join("\n") + "\n";
@@ -552,6 +566,21 @@ fn start_ui_observer(app: &AppHandle) {
     }
 }
 
+fn start_ydotoold() {
+    #[cfg(target_os = "linux")]
+    std::thread::spawn(|| {
+        match std::process::Command::new("ydotoold")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => eprintln!("ydotoold auto-started"),
+            Err(_) => {}
+        }
+    });
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -586,6 +615,12 @@ pub fn run() {
         .setup(|app| {
             setup_tray(app)?;
             start_ui_observer(&app.handle());
+
+            #[cfg(target_os = "linux")]
+            {
+                mcp_bridge::start_mcp_bridge();
+                start_ydotoold();
+            }
 
             tauri::async_runtime::spawn(async move {
                 websocket::start_websocket_server().await;

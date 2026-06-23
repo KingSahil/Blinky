@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import platform
 import re
 from typing import Any
 
@@ -30,6 +31,7 @@ WEB_DESTINATION_NAMES = {
     "chat gpt",
 }
 
+IS_LINUX = platform.system() == "Linux"
 
 OPEN_APP_RE = re.compile(
     r"^\s*(?:open|launch|start)\s+(?:the\s+)?(?P<app>[a-zA-Z0-9 .+_-]{2,60})\s*(?:app|application)?\s*$",
@@ -38,6 +40,26 @@ OPEN_APP_RE = re.compile(
 
 PLAY_SPOTIFY_RE = re.compile(
     r"^\s*play\s+(?:spotify\s+(?P<song1>.+)|(?P<song2>.+?)\s+(?:in|on)\s+spotify)\s*$",
+    re.IGNORECASE,
+)
+
+LIST_WINDOWS_RE = re.compile(
+    r"^\s*(?:list|show|enumerate|what)\s+(?:windows|apps|applications|desktop apps|open windows)\s*$",
+    re.IGNORECASE,
+)
+
+GET_APP_STATE_RE = re.compile(
+    r"^\s*(?:inspect|examine|analyze|show me|what'?s (?:in|on))\s+(?:the\s+)?(?P<app>[a-zA-Z0-9 .+_-]{2,60})\s*(?:app|application|window)?\s*$",
+    re.IGNORECASE,
+)
+
+CLICK_ELEMENT_RE = re.compile(
+    r"^\s*(?:click|press|select|hit|push)\s+(?:the\s+)?(?P<element>.+?)(?:\s+(?:in|on)\s+(?:the\s+)?(?P<app>[a-zA-Z0-9 .+_-]{2,60})(?:\s*(?:app|application|window))?)?\s*$",
+    re.IGNORECASE,
+)
+
+TYPE_TEXT_RE = re.compile(
+    r"^\s*(?:type|enter|write|input)\s+(?P<text>.+?)(?:\s+(?:in|into|to)\s+(?:the\s+)?(?P<app>[a-zA-Z0-9 .+_-]{2,60}))?\s*$",
     re.IGNORECASE,
 )
 
@@ -66,36 +88,36 @@ def looks_like_app_name(app_name: str) -> bool:
     words = name_lower.split()
     if not words:
         return False
-    # If it's too long, it's likely a description or query
     if len(words) > 3:
-        # Allow known long apps
         known_long_apps = {"visual studio code", "windows media player", "mail and calendar"}
         if name_lower not in known_long_apps:
             return False
-    # Check for prepositions or action-oriented words if it has multiple words
     if len(words) > 1:
         invalid_words = {"and", "or", "to", "in", "on", "at", "for", "with", "about", "from", "by", "search", "find", "how"}
         if any(w in invalid_words for w in words):
-            # Exception for "mail and calendar"
             if name_lower != "mail and calendar":
                 return False
     return True
 
 
 def try_run_agent_action(question: str, observation: dict[str, Any] | None = None) -> ToolResult | None:
-    # Clean trailing punctuation for robust matching of voice input/dictation
     question_cleaned = question.strip().rstrip("?.!,;:")
 
     if wants_help_menu(question_cleaned, observation):
         return shortcut_tool("alt+h")
 
-    # Match play spotify request
     play_match = PLAY_SPOTIFY_RE.match(question_cleaned)
     if play_match:
         song = play_match.group("song1") or play_match.group("song2")
         if song:
             from .tools import play_spotify_track_tool
             return play_spotify_track_tool(song.strip())
+
+    # Linux desktop actions
+    if IS_LINUX:
+        result = _try_linux_action(question_cleaned)
+        if result is not None:
+            return result
 
     match = OPEN_APP_RE.match(question_cleaned)
     if match:
@@ -107,6 +129,40 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
                 return None
             if not is_in_app_action(app) and looks_like_app_name(app):
                 return open_app_tool(app)
+
+    return None
+
+def _try_linux_action(question: str) -> ToolResult | None:
+    # List windows
+    if LIST_WINDOWS_RE.match(question):
+        from .tools import list_windows_tool
+        return list_windows_tool()
+
+    # Inspect an app
+    app_match = GET_APP_STATE_RE.match(question)
+    if app_match:
+        app = app_match.group("app")
+        if app and looks_like_app_name(app):
+            from .tools import get_app_state_tool
+            return get_app_state_tool(app)
+
+    # Click an element
+    click_match = CLICK_ELEMENT_RE.match(question)
+    if click_match:
+        element = click_match.group("element")
+        app = click_match.group("app")
+        if element:
+            from .tools import click_element_tool
+            return click_element_tool(name=element.strip())
+
+    # Type text
+    type_match = TYPE_TEXT_RE.match(question)
+    if type_match:
+        text = type_match.group("text")
+        app = type_match.group("app")
+        if text:
+            from .tools import type_text_tool
+            return type_text_tool(text.strip(), target_app=app.strip() if app else None)
 
     return None
 

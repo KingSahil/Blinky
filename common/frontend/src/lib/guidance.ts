@@ -29,8 +29,8 @@ export function getCurrentGuideSteps(steps: TutorStep[], progress: CompletedGuid
 
 export function getHighlightSteps(steps: TutorStep[]): TutorStep[] {
   const nextStep = steps.find((step) => {
-    const hasTargetHandle = Boolean(step.target_text.trim() || step.target_ref?.trim());
-    if (!step.instruction.trim() || !hasTargetHandle) return false;
+    const hasTargetHandle = Boolean(step.target_text?.trim() || step.target_ref?.trim());
+    if (!step.instruction?.trim() || !hasTargetHandle) return false;
     if (!step.match) return false;
     return true;
   });
