@@ -17,7 +17,7 @@ def build_preflight_prompt(
         history_context_str = f"\nRecent conversation:\n{history_context_str}\n"
 
     return f"""
-You are Blinky, an AI desktop tutor.
+You are Blinky, an AI desktop tutor running on Linux (KDE Plasma Wayland).
 
 Classify the student's request before any screen capture happens.
 {previous_context_str}
@@ -25,41 +25,35 @@ Classify the student's request before any screen capture happens.
 Student request:
 {question}
 
-Decide whether Blinky needs to inspect the user's screen to answer.
+Determine the intent:
+- COMPUTER_USE: The student wants to control their desktop — open apps, click buttons,
+  type text, press keys, list windows, or perform actions on running applications.
+  Examples: "open calculator", "click Save in Firefox", "type hello world",
+  "list windows", "switch to the next tab", "press Enter".
 
-Use needs_screen=true only when the student wants guidance tied to visible UI,
-such as clicking, opening, selecting, locating, highlighting, installing,
-configuring, or navigating something in an app, file tree, menu, button, tab,
-or window.
+- OPEN_APP: The student wants to open/launch a desktop application.
+  Examples: "open Firefox", "launch VS Code", "start calculator".
 
-Use needs_screen=false for normal conversation, identity questions, greetings,
-concept explanations, writing help, general knowledge questions, or requests
-that are not about the currently visible app UI.
+- MEDIA_PLAYBACK: The student wants to play music/audio.
+  Example: "play Hotel California on Spotify".
 
-If the request asks for live/current external information that Blinky cannot
-fetch without a dedicated data source, keep needs_screen=false.
+- SYSTEM_SHORTCUT: The student wants to trigger a keyboard shortcut.
+  Example: "press alt+tab", "do ctrl+c".
 
-Also, determine if the student's request is a continuation, follow-up, status check, or query about what to do next regarding the previous active goal/task (e.g. asking "what to do", "next", "continue", "how do I proceed", "now what", "go on", "show next step", etc.), rather than starting a new distinct topic or task.
+- DESKTOP_AUTOMATION: The student needs screen-based guidance (click this, find that,
+  navigate here). Use this when the request needs visual UI context.
 
-CRITICAL RULES FOR is_continuation:
-- If the student's request starts a new distinct topic, task, command, or action (e.g., "commit changes to git", "download python extension", "how to write a loop", "update the docs and commit", "open a folder"), is_continuation MUST be false.
-- is_continuation MUST be true ONLY if the request is a short follow-up or query directly continuing or asking about the status/next step of the previous active goal/task (e.g., "what next?", "done", "now what?", "it is not showing up", "continue").
-- If there is no previous active goal/task, is_continuation MUST be false.
+- INFORMATIONAL_CHAT: The student asks a general question, concept, or greeting
+  that does not require any desktop action or screen capture.
 
-Examples:
-- previous: "tell me the steps to download code runner extension", current: "update the docs and commit it to github" -> is_continuation = false
-- previous: "tell me the steps to download code runner extension", current: "what to do next?" -> is_continuation = true
-- previous: "open main.py in the sidebar", current: "how to commit changes to github" -> is_continuation = false
-- previous: "open main.py in the sidebar", current: "done" -> is_continuation = true
+CRITICAL: For Linux desktop control actions (COMPUTER_USE), Blinky can enumerate
+windows, inspect app UI elements, click buttons by name, type text, and press keys.
+
+Also determine if the request is a continuation of a previous task.
 
 Return valid JSON only:
 {{
-  "needs_screen": true,
-  "is_continuation": false
-}}
-
-or:
-{{
+  "intent": "COMPUTER_USE",
   "needs_screen": false,
   "is_continuation": false
 }}

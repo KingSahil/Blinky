@@ -133,6 +133,7 @@ export function CommandBar() {
   const [shortcut, setShortcut] = useState('Enter');
   const [sarvamApiKey, setSarvamApiKey] = useState('');
   const [groqApiKey, setGroqApiKey] = useState('');
+  const [deepseekApiKey, setDeepseekApiKey] = useState('');
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -682,70 +683,79 @@ export function CommandBar() {
     try {
       let result: TutorResult;
       if (agentModeEnabled) {
-        let firstObservation: TutorResult | null = null;
-        const autopilot = await runAutopilotLoop({
-          maxAttempts: 5,
-          observeAfterAction: true,
-          observe: async () => {
-            if (!firstObservation) {
-              firstObservation = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, false, true);
-              return firstObservation;
-            }
-            return runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, false, true);
-          },
-          act: async (point, step) => {
-            if (isScrollAction(step.instruction)) {
-              const direction = getScrollDirection(step.instruction);
-              setStatus(`Autopilot scrolling ${direction}...`);
-              rememberCompletedStep(step.target_text, step.instruction);
-              await scrollAtPoint(point.x, point.y, direction, 3);
-            } else {
-              const textToType = extractTextToType(step.instruction);
-              if (textToType !== null) {
-                setStatus(`Autopilot typing "${textToType}"...`);
-                rememberCompletedStep(step.target_text, step.instruction);
-                await clickScreenPoint(point.x, point.y);
-                await new Promise((resolve) => setTimeout(resolve, 150));
-                const pressEnter = shouldPressEnterAfterTyping(step.instruction);
-                await typeText(textToType, pressEnter);
-              } else {
-                setStatus(`Autopilot clicking (${point.x}, ${point.y})...`);
-                rememberCompletedStep(step.target_text, step.instruction);
-                await clickScreenPoint(point.x, point.y);
-              }
-            }
-          },
-        });
-        if (autopilot.stopReason === 'complete') {
-          result = {
-            ...autopilot.finalResult,
-            summary: `Autopilot successfully completed the task!`,
-            steps: [],
-          };
-        } else if (autopilot.stopReason === 'unsafe_step') {
-          const nextStep = autopilot.finalResult.steps.find((candidate) => candidate.instruction.trim());
-          const blockedLabel = nextStep?.target_text || nextStep?.instruction || 'the next action';
-          result = {
-            ...autopilot.finalResult,
-            summary: `Autopilot paused because "${blockedLabel}" requires manual interaction for safety.`,
-          };
-        } else if (autopilot.stopReason === 'missing_target') {
-          result = {
-            ...autopilot.finalResult,
-            summary: `Autopilot stopped because it could not locate the next target on the screen. Please guide me manually.`,
-          };
-        } else if (autopilot.stopReason === 'unchanged_after_action') {
-          result = {
-            ...autopilot.finalResult,
-            summary: `Autopilot stopped because the screen did not change after the last action. Please try manually.`,
-          };
-        } else if (autopilot.stopReason === 'max_attempts') {
-          result = {
-            ...autopilot.finalResult,
-            summary: `Autopilot reached the maximum number of attempts. Please complete the remaining steps manually.`,
-          };
+        // Run the agent first — it may handle everything via MCP tools
+        const agentResult = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, false, true);
+
+        // Agent handled it autonomously — use its result directly
+        if (agentResult.computer_use) {
+          result = agentResult;
         } else {
-          result = autopilot.finalResult;
+          // Vision-guided autopilot loop (screen-based clicking)
+          let firstObservation: TutorResult | null = null;
+          const autopilot = await runAutopilotLoop({
+            maxAttempts: 5,
+            observeAfterAction: true,
+            observe: async () => {
+              if (!firstObservation) {
+                firstObservation = agentResult;
+                return firstObservation;
+              }
+              return runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, false, true);
+            },
+            act: async (point, step) => {
+              if (isScrollAction(step.instruction)) {
+                const direction = getScrollDirection(step.instruction);
+                setStatus(`Autopilot scrolling ${direction}...`);
+                rememberCompletedStep(step.target_text, step.instruction);
+                await scrollAtPoint(point.x, point.y, direction, 3);
+              } else {
+                const textToType = extractTextToType(step.instruction);
+                if (textToType !== null) {
+                  setStatus(`Autopilot typing "${textToType}"...`);
+                  rememberCompletedStep(step.target_text, step.instruction);
+                  await clickScreenPoint(point.x, point.y);
+                  await new Promise((resolve) => setTimeout(resolve, 150));
+                  const pressEnter = shouldPressEnterAfterTyping(step.instruction);
+                  await typeText(textToType, pressEnter);
+                } else {
+                  setStatus(`Autopilot clicking (${point.x}, ${point.y})...`);
+                  rememberCompletedStep(step.target_text, step.instruction);
+                  await clickScreenPoint(point.x, point.y);
+                }
+              }
+            },
+          });
+          if (autopilot.stopReason === 'complete') {
+            result = {
+              ...autopilot.finalResult,
+              summary: `Autopilot successfully completed the task!`,
+              steps: [],
+            };
+          } else if (autopilot.stopReason === 'unsafe_step') {
+            const nextStep = autopilot.finalResult.steps.find((candidate) => candidate.instruction.trim());
+            const blockedLabel = nextStep?.target_text || nextStep?.instruction || 'the next action';
+            result = {
+              ...autopilot.finalResult,
+              summary: `Autopilot paused because "${blockedLabel}" requires manual interaction for safety.`,
+            };
+          } else if (autopilot.stopReason === 'missing_target') {
+            result = {
+              ...autopilot.finalResult,
+              summary: `Autopilot stopped because it could not locate the next target on the screen. Please guide me manually.`,
+            };
+          } else if (autopilot.stopReason === 'unchanged_after_action') {
+            result = {
+              ...autopilot.finalResult,
+              summary: `Autopilot stopped because the screen did not change after the last action. Please try manually.`,
+            };
+          } else if (autopilot.stopReason === 'max_attempts') {
+            result = {
+              ...autopilot.finalResult,
+              summary: `Autopilot reached the maximum number of attempts. Please complete the remaining steps manually.`,
+            };
+          } else {
+            result = autopilot.finalResult;
+          }
         }
       } else {
         result = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, webSearchEnabled);
@@ -788,7 +798,10 @@ export function CommandBar() {
         ...conversationHistoryRef.current,
         ...newHistoryEntries,
       ].slice(-10);
-      setShowGuideCompletionSummary(hasCompletedProgress && currentGuideSteps.length === 0 && Boolean(result.summary));
+      setShowGuideCompletionSummary(
+        (hasCompletedProgress && currentGuideSteps.length === 0 && Boolean(result.summary))
+        || Boolean(result.computer_use)
+      );
       setSteps((previousSteps) => mergeGuideHistory(previousSteps, currentGuideSteps, currentProgress()));
       setQuestion('');
       if (inputRef.current) {
@@ -841,6 +854,7 @@ export function CommandBar() {
         setShortcut(settings.shortcut);
         setSarvamApiKey(settings.sarvam_api_key || '');
         setGroqApiKey(settings.groq_api_key || '');
+        setDeepseekApiKey(settings.deepseek_api_key || '');
       })
       .catch((err) => console.error('Failed to load settings:', err));
   }, []);
@@ -860,7 +874,7 @@ export function CommandBar() {
   const updateProvider = async (newProvider: string) => {
     setProvider(newProvider);
     try {
-      await saveSettings(newProvider, shortcut, sarvamApiKey, groqApiKey);
+      await saveSettings(newProvider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey);
     } catch (err) {
       console.error('Failed to save provider:', err);
     }
@@ -869,7 +883,7 @@ export function CommandBar() {
   const updateShortcut = async (newShortcut: string) => {
     setShortcut(newShortcut);
     try {
-      await saveSettings(provider, newShortcut, sarvamApiKey, groqApiKey);
+      await saveSettings(provider, newShortcut, sarvamApiKey, groqApiKey, deepseekApiKey);
     } catch (err) {
       console.error('Failed to save shortcut:', err);
     }
@@ -878,7 +892,7 @@ export function CommandBar() {
   const updateSarvamApiKey = async (newKey: string) => {
     setSarvamApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, newKey, groqApiKey);
+      await saveSettings(provider, shortcut, newKey, groqApiKey, deepseekApiKey);
     } catch (err) {
       console.error('Failed to save Sarvam API key:', err);
     }
@@ -887,9 +901,18 @@ export function CommandBar() {
   const updateGroqApiKey = async (newKey: string) => {
     setGroqApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, sarvamApiKey, newKey);
+      await saveSettings(provider, shortcut, sarvamApiKey, newKey, deepseekApiKey);
     } catch (err) {
       console.error('Failed to save Groq API key:', err);
+    }
+  };
+
+  const updateDeepseekApiKey = async (newKey: string) => {
+    setDeepseekApiKey(newKey);
+    try {
+      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, newKey);
+    } catch (err) {
+      console.error('Failed to save DeepSeek API key:', err);
     }
   };
 
@@ -1154,6 +1177,22 @@ export function CommandBar() {
                   <span>Ollama</span>
                   {provider === 'ollama' && <Check size={14} className="active-dot" />}
                 </button>
+                <button
+                  type="button"
+                  className={`dropdown-option ${provider === 'deepseek' ? 'active' : ''}`}
+                  onClick={() => updateProvider('deepseek')}
+                >
+                  <span>DeepSeek</span>
+                  {provider === 'deepseek' && <Check size={14} className="active-dot" />}
+                </button>
+                <button
+                  type="button"
+                  className={`dropdown-option ${provider === 'mimo' ? 'active' : ''}`}
+                  onClick={() => updateProvider('mimo')}
+                >
+                  <span>MiMo</span>
+                  {provider === 'mimo' && <Check size={14} className="active-dot" />}
+                </button>
               </div>
             </div>
 
@@ -1186,6 +1225,17 @@ export function CommandBar() {
                 className="settings-input"
                 value={groqApiKey}
                 onChange={(e) => updateGroqApiKey(e.target.value)}
+                placeholder="Paste API Key..."
+              />
+            </div>
+
+            <div className="dropdown-section">
+              <h4>DeepSeek API Key</h4>
+              <input
+                type="password"
+                className="settings-input"
+                value={deepseekApiKey}
+                onChange={(e) => updateDeepseekApiKey(e.target.value)}
                 placeholder="Paste API Key..."
               />
             </div>

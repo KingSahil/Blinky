@@ -373,6 +373,14 @@ export function App() {
                   <span>Ollama</span>
                   {provider === 'ollama' && <Check size={14} className="active-dot" />}
                 </button>
+                <button
+                  type="button"
+                  className={`dropdown-option ${provider === 'mimo' ? 'active' : ''}`}
+                  onClick={() => updateProvider('mimo')}
+                >
+                  <span>MiMo</span>
+                  {provider === 'mimo' && <Check size={14} className="active-dot" />}
+                </button>
               </div>
             </div>
 
