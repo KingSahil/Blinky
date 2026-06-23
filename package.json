@@ -5,7 +5,7 @@
   "packageManager": "bun@1.3.14",
   "description": "Blinky is an offline-first AI desktop tutor for Windows.",
   "scripts": {
-    "dev": "bun run tauri:dev",
+    "dev": "docker compose -f common/docker-compose.yml up -d && bun run tauri:dev",
     "tauri:dev": "bun tauri dev",
     "build": "bun run typecheck && vite build --config common/frontend/vite.config.ts",
     "tauri:build": "bun tauri build",
