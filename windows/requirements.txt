@@ -13,3 +13,5 @@ pywinauto==0.6.9; sys_platform == 'win32'
 requests>=2.34.2
 typing-extensions>=4.15.0
 pytesseract>=0.3.10; sys_platform != 'win32'
+PyYAML>=6.0.1
+
