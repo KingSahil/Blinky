@@ -31,13 +31,29 @@ export function Overlay() {
   const [offsets, setOffsets] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
+    let timeoutId: any = null;
+
     const unlisten = listen<TutorResult>('blinky://guidance', (event) => {
       setResult(event.payload);
       setDismissedKeys(new Set());
+
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+
+      // Auto-dismiss highlights after 8 seconds on non-Windows platforms (fallback for missing global click hook)
+      if (!navigator.userAgent.includes('Windows')) {
+        timeoutId = setTimeout(() => {
+          setResult(null);
+        }, 8000);
+      }
     });
 
     return () => {
       unlisten.then((dispose) => dispose());
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     };
   }, []);
 
