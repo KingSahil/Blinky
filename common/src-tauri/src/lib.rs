@@ -726,7 +726,7 @@ pub fn run() {
                                     _ => false,
                                 };
                                 if is_match {
-                                    show_command_window(&app_handle);
+                                    toggle_command_window(&app_handle);
                                 }
                             }
                         })
@@ -773,6 +773,21 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         }
     }
     Ok(())
+}
+
+fn toggle_command_window(app: &AppHandle) {
+    if let Some(command) = app.get_webview_window("command") {
+        let is_visible = command.is_visible().unwrap_or(false);
+        let is_focused = command.is_focused().unwrap_or(false);
+        if is_visible && is_focused {
+            let _ = command.hide();
+        } else {
+            let _ = command.emit("blinky://open-command", ());
+            let _ = command.unminimize();
+            let _ = command.show();
+            let _ = command.set_focus();
+        }
+    }
 }
 
 fn show_command_window(app: &AppHandle) {
