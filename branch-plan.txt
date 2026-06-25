@@ -1,3 +1,0 @@
-#ONCE objectives complete the file gets deleted
-
-* this is just a comit to ensure that if tts fixing gets wrong, then I can revert to this state 
