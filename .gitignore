@@ -37,3 +37,4 @@ desktop.ini
 *.njsproj
 *.sln
 *.swp
+.wwebjs_auth

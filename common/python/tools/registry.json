@@ -38,5 +38,20 @@
     "verification_args": {
       "product_query": "best noise cancelling headphones"
     }
+  },
+  "whatsapp_tool": {
+    "name": "whatsapp_tool",
+    "description": "Interact with WhatsApp to check connection status, list chats, or generate summaries of group or direct chats. Actions: 'status' (checks connection/QR code state), 'chats' (lists recent chats), 'summarize' (summarizes the chat matching 'chat_name' or 'chat_id').",
+    "filepath": "python/tools/whatsapp_tool.py",
+    "arguments": [
+      "action",
+      "chat_name",
+      "chat_id",
+      "limit"
+    ],
+    "status": "generalized",
+    "verification_args": {
+      "action": "status"
+    }
   }
 }

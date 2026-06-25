@@ -1,8 +1,9 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check } from 'lucide-react';
+import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check, QrCode } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import QRCode from 'qrcode';
 import { linkCitationMarkers } from './lib/citations';
 import { runTutor, showOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, openUrl } from './lib/tauri';
 
@@ -72,6 +73,164 @@ export function App() {
   const [shortcut, setShortcut] = useState('Enter');
   const [sarvamApiKey, setSarvamApiKey] = useState('');
   const [groqApiKey, setGroqApiKey] = useState('');
+  const [deepseekApiKey, setDeepseekApiKey] = useState('');
+
+  // WhatsApp connection states
+  const [waBackendUrl, setWaBackendUrl] = useState('http://localhost:3000');
+  const [waStatus, setWaStatus] = useState<'loading' | 'disconnected' | 'qr' | 'connected' | 'error'>('loading');
+  const [waQr, setWaQr] = useState('');
+  const [waError, setWaError] = useState('');
+  const [isWaActionLoading, setIsWaActionLoading] = useState(false);
+  const [showWaModal, setShowWaModal] = useState(false);
+  const waCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  const SESSION_ID = 'blinky-default-session';
+  const PORTS_TO_SCAN = [3000, 3001, 3002, 3003, 3004, 3005];
+
+  const findWaBackendUrl = async (): Promise<string> => {
+    for (const port of PORTS_TO_SCAN) {
+      const url = `http://localhost:${port}`;
+      try {
+        const res = await fetch(`${url}/api/sessions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: SESSION_ID })
+        });
+        if (res.ok || res.status === 400) {
+          return url;
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+    return 'http://localhost:3000';
+  };
+
+  const connectWhatsApp = async () => {
+    setIsWaActionLoading(true);
+    setWaError('');
+    try {
+      const res = await fetch(`${waBackendUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: SESSION_ID })
+      });
+      if (res.ok) {
+        const statusRes = await fetch(`${waBackendUrl}/api/status`, {
+          headers: { 'X-Session-Id': SESSION_ID }
+        });
+        if (statusRes.ok) {
+          const data = await statusRes.json();
+          setWaStatus(data.status);
+          setWaQr(data.qr || '');
+        }
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setWaError(data.error || 'Failed to initialize session');
+        setWaStatus('error');
+      }
+    } catch (err) {
+      setWaError('Server communication error');
+      setWaStatus('error');
+    } finally {
+      setIsWaActionLoading(false);
+    }
+  };
+
+  const logoutWhatsApp = async () => {
+    setIsWaActionLoading(true);
+    setWaError('');
+    try {
+      const res = await fetch(`${waBackendUrl}/api/logout`, {
+        method: 'POST',
+        headers: {
+          'X-Session-Id': SESSION_ID,
+          'Content-Type': 'application/json'
+        }
+      });
+      if (res.ok) {
+        setWaStatus('disconnected');
+        setWaQr('');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setWaError(data.error || 'Failed to logout');
+      }
+    } catch (err) {
+      setWaError('Server communication error');
+    } finally {
+      setIsWaActionLoading(false);
+    }
+  };
+
+  // Discover WhatsApp backend port on mount
+  useEffect(() => {
+    async function discover() {
+      const url = await findWaBackendUrl();
+      setWaBackendUrl(url);
+    }
+    void discover();
+  }, []);
+
+  // Poll WhatsApp status when settings dropdown or WhatsApp modal is open
+  useEffect(() => {
+    if (!showSettings && !showWaModal) return;
+
+    let active = true;
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch(`${waBackendUrl}/api/status`, {
+          headers: { 'X-Session-Id': SESSION_ID }
+        });
+        if (!active) return;
+        if (res.ok) {
+          const data = await res.json();
+          setWaStatus(data.status);
+          setWaQr(data.qr || '');
+          setWaError('');
+        } else {
+          if (res.status === 404) {
+            setWaStatus('disconnected');
+          } else {
+            const data = await res.json().catch(() => ({}));
+            setWaError(data.error || `HTTP error ${res.status}`);
+            setWaStatus('error');
+          }
+        }
+      } catch (err) {
+        if (!active) return;
+        setWaStatus('disconnected');
+      }
+    };
+
+    void fetchStatus();
+    const interval = setInterval(fetchStatus, 3000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [showSettings, showWaModal, waBackendUrl]);
+
+  // Draw QR code to canvas
+  useEffect(() => {
+    if (waStatus === 'qr' && waQr && waCanvasRef.current) {
+      QRCode.toCanvas(
+        waCanvasRef.current,
+        waQr,
+        {
+          width: 180,
+          margin: 2,
+          color: {
+            dark: '#140f13',
+            light: '#ffffff'
+          }
+        },
+        (error) => {
+          if (error) console.error('Failed to render QR Code:', error);
+        }
+      );
+    }
+  }, [waStatus, waQr]);
 
   // Load settings on mount
   useEffect(() => {
@@ -81,6 +240,7 @@ export function App() {
         setShortcut(settings.shortcut);
         setSarvamApiKey(settings.sarvam_api_key || '');
         setGroqApiKey(settings.groq_api_key || '');
+        setDeepseekApiKey(settings.deepseek_api_key || '');
       })
       .catch((err) => console.error('Failed to load settings:', err));
   }, []);
@@ -98,9 +258,10 @@ export function App() {
   }, []);
 
   const updateProvider = async (newProvider: string) => {
-    setProvider(newProvider);
+    const cleanProvider = newProvider.toLowerCase().trim();
+    setProvider(cleanProvider);
     try {
-      await saveSettings(newProvider, shortcut, sarvamApiKey, groqApiKey);
+      await saveSettings(cleanProvider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey);
     } catch (err) {
       console.error('Failed to save provider:', err);
     }
@@ -109,7 +270,7 @@ export function App() {
   const updateShortcut = async (newShortcut: string) => {
     setShortcut(newShortcut);
     try {
-      await saveSettings(provider, newShortcut, sarvamApiKey, groqApiKey);
+      await saveSettings(provider, newShortcut, sarvamApiKey, groqApiKey, deepseekApiKey);
     } catch (err) {
       console.error('Failed to save shortcut:', err);
     }
@@ -118,7 +279,7 @@ export function App() {
   const updateSarvamApiKey = async (newKey: string) => {
     setSarvamApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, newKey, groqApiKey);
+      await saveSettings(provider, shortcut, newKey, groqApiKey, deepseekApiKey);
     } catch (err) {
       console.error('Failed to save Sarvam API key:', err);
     }
@@ -127,9 +288,18 @@ export function App() {
   const updateGroqApiKey = async (newKey: string) => {
     setGroqApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, sarvamApiKey, newKey);
+      await saveSettings(provider, shortcut, sarvamApiKey, newKey, deepseekApiKey);
     } catch (err) {
       console.error('Failed to save Groq API key:', err);
+    }
+  };
+
+  const updateDeepseekApiKey = async (newKey: string) => {
+    setDeepseekApiKey(newKey);
+    try {
+      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, newKey);
+    } catch (err) {
+      console.error('Failed to save DeepSeek API key:', err);
     }
   };
 
@@ -231,6 +401,10 @@ export function App() {
         height = Math.max(height, 52 + dropdownRect.height);
       }
 
+      if (showWaModal) {
+        height = Math.max(height, 420);
+      }
+
       const targetHeight = Math.ceil(height + 40);
       void resizeCommandWindow(targetHeight);
     };
@@ -245,7 +419,7 @@ export function App() {
     return () => {
       observer.disconnect();
     };
-  }, [showSettings]);
+  }, [showSettings, showWaModal, waStatus]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setQuestion(event.target.value);
@@ -357,32 +531,16 @@ export function App() {
           <div ref={dropdownRef} className="command-settings-dropdown">
             <div className="dropdown-section">
               <h4>Change Model</h4>
-              <div className="dropdown-options">
-                <button
-                  type="button"
-                  className={`dropdown-option ${provider === 'groq' ? 'active' : ''}`}
-                  onClick={() => updateProvider('groq')}
-                >
-                  <span>Groq</span>
-                  {provider === 'groq' && <Check size={14} className="active-dot" />}
-                </button>
-                <button
-                  type="button"
-                  className={`dropdown-option ${provider === 'ollama' ? 'active' : ''}`}
-                  onClick={() => updateProvider('ollama')}
-                >
-                  <span>Ollama</span>
-                  {provider === 'ollama' && <Check size={14} className="active-dot" />}
-                </button>
-                <button
-                  type="button"
-                  className={`dropdown-option ${provider === 'mimo' ? 'active' : ''}`}
-                  onClick={() => updateProvider('mimo')}
-                >
-                  <span>MiMo</span>
-                  {provider === 'mimo' && <Check size={14} className="active-dot" />}
-                </button>
-              </div>
+              <select
+                className="settings-input settings-select"
+                value={provider}
+                onChange={(e) => updateProvider(e.target.value)}
+              >
+                <option value="groq">Groq</option>
+                <option value="ollama">Ollama</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="mimo">MiMo</option>
+              </select>
             </div>
 
             <div className="dropdown-section">
@@ -407,16 +565,31 @@ export function App() {
               </div>
             </div>
 
-            <div className="dropdown-section">
-              <h4>Groq API Key</h4>
-              <input
-                type="password"
-                className="settings-input"
-                value={groqApiKey}
-                onChange={(e) => updateGroqApiKey(e.target.value)}
-                placeholder="Paste API Key..."
-              />
-            </div>
+            {provider.toLowerCase().trim() === 'groq' && (
+              <div className="dropdown-section">
+                <h4>Groq API Key</h4>
+                <input
+                  type="password"
+                  className="settings-input"
+                  value={groqApiKey}
+                  onChange={(e) => updateGroqApiKey(e.target.value)}
+                  placeholder="Paste API Key..."
+                />
+              </div>
+            )}
+
+            {provider.toLowerCase().trim() === 'deepseek' && (
+              <div className="dropdown-section">
+                <h4>DeepSeek API Key</h4>
+                <input
+                  type="password"
+                  className="settings-input"
+                  value={deepseekApiKey}
+                  onChange={(e) => updateDeepseekApiKey(e.target.value)}
+                  placeholder="Paste API Key..."
+                />
+              </div>
+            )}
 
             <div className="dropdown-section">
               <h4>Sarvam AI API Key</h4>
@@ -429,12 +602,31 @@ export function App() {
               />
             </div>
 
+            <div className="dropdown-section">
+              <h4>WhatsApp</h4>
+              <div className="dropdown-options">
+                <button
+                  type="button"
+                  className="dropdown-option wa-dropdown-btn"
+                  onClick={() => {
+                    setShowWaModal(true);
+                    setShowSettings(false);
+                  }}
+                >
+                  <span>Link / Connection Status</span>
+                  <div className={`wa-indicator-dot ${waStatus === 'connected' ? 'connected' : 'disconnected'}`} />
+                </button>
+              </div>
+            </div>
+
             <div className="dropdown-section dropdown-about">
               <span>Theme: <strong>Ember</strong></span>
               <span>About: <strong>v1.0.0</strong></span>
             </div>
           </div>
         )}
+
+
 
         <div className="command-stack">
           <div className="command-input" onClick={() => inputRef.current?.focus()}>
@@ -512,6 +704,98 @@ export function App() {
           )}
         </div>
       </form>
+
+      {showWaModal && (
+        <div className="wa-modal-backdrop" onClick={() => setShowWaModal(false)}>
+          <div className="wa-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="wa-modal-header">
+              <h3>WhatsApp Connection</h3>
+              <button
+                type="button"
+                className="wa-modal-close"
+                onClick={() => setShowWaModal(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="wa-modal-content">
+              {waStatus === 'loading' && (
+                <div className="wa-loader">
+                  <Loader2 className="spin" size={16} />
+                  <span>Loading WhatsApp status...</span>
+                </div>
+              )}
+
+              {waStatus === 'disconnected' && (
+                <div className="wa-disconnected">
+                  <p className="wa-help-text">Connect to summarize group or direct chats using AI commands.</p>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-connect"
+                    onClick={connectWhatsApp}
+                    disabled={isWaActionLoading}
+                  >
+                    {isWaActionLoading ? <Loader2 className="spin" size={14} /> : 'Connect WhatsApp'}
+                  </button>
+                </div>
+              )}
+
+              {waStatus === 'qr' && (
+                <div className="wa-qr-container">
+                  <p className="wa-scan-instruction">Scan this QR code with WhatsApp Linked Devices:</p>
+                  <div className="wa-qr-canvas-wrapper">
+                    <canvas ref={waCanvasRef} className="wa-qr-canvas" />
+                    {isWaActionLoading && (
+                      <div className="wa-qr-overlay">
+                        <Loader2 className="spin" size={24} />
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-cancel"
+                    onClick={logoutWhatsApp}
+                    disabled={isWaActionLoading}
+                  >
+                    Cancel Connection
+                  </button>
+                </div>
+              )}
+
+              {waStatus === 'connected' && (
+                <div className="wa-connected">
+                  <div className="wa-status-badge">
+                    <Check size={14} className="wa-check-icon" />
+                    <span>WhatsApp Connected</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-logout"
+                    onClick={logoutWhatsApp}
+                    disabled={isWaActionLoading}
+                  >
+                    {isWaActionLoading ? <Loader2 className="spin" size={14} /> : 'Disconnect Account'}
+                  </button>
+                </div>
+              )}
+
+              {waStatus === 'error' && (
+                <div className="wa-error-container">
+                  <p className="wa-error-msg">{waError || 'An error occurred'}</p>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-retry"
+                    onClick={connectWhatsApp}
+                    disabled={isWaActionLoading}
+                  >
+                    Retry Connection
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

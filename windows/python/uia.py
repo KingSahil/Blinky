@@ -32,6 +32,12 @@ def get_visible_ui_text(window=None, target_pid: int | None = None, include_unla
             LOGGER.warning("No target window resolved for UIA query")
             return []
 
+        active_y = 0
+        try:
+            active_y = active.rectangle().top
+        except Exception as exc:
+            LOGGER.warning("UIA: failed to resolve active window top coordinate: %s", exc)
+
         process_name = ""
         try:
             import psutil
@@ -92,6 +98,19 @@ def get_visible_ui_text(window=None, target_pid: int | None = None, include_unla
             if x < -1000 or y < -1000:
                 continue
 
+            auto_id = _element_metadata(element, "automation_id")
+            
+            # Check if this element is browser chrome (address/URL bar)
+            is_address_bar = False
+            if process_name and any(b in process_name for b in ["chrome", "msedge", "firefox", "browser", "brave", "opera"]):
+                relative_y = y - active_y
+                if relative_y < 130:
+                    is_address_bar = True
+            
+            auto_id_lower = auto_id.lower()
+            if "address" in auto_id_lower or "url" in auto_id_lower or "omnibox" in auto_id_lower or auto_id_lower in {"view_1021", "view_1020"}:
+                is_address_bar = True
+
             items.append(
                 _uia_item(
                     text=text,
@@ -101,7 +120,8 @@ def get_visible_ui_text(window=None, target_pid: int | None = None, include_unla
                     height=height,
                     source="uia",
                     control_type=ctype,
-                    automation_id=_element_metadata(element, "automation_id"),
+                    automation_id=auto_id,
+                    is_address_bar=is_address_bar,
                 )
             )
 
@@ -197,6 +217,7 @@ def _uia_item(
     source: str,
     control_type: str,
     automation_id: str = "",
+    is_address_bar: bool = False,
 ) -> dict:
     item = {
         "text": text,
@@ -209,6 +230,8 @@ def _uia_item(
     }
     if automation_id:
         item["automation_id"] = automation_id
+    if is_address_bar:
+        item["is_address_bar"] = True
     return item
 
 

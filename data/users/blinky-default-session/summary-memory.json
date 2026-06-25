@@ -1,0 +1,198 @@
+{
+  "chats": {
+    "120363426466297788@g.us": {
+      "chatName": "hackathon crew!",
+      "participants": [
+        "Supreme Sahil (918968520989)",
+        "Gourish (FeV) (34244311126079)",
+        "Meharwan (202066081407148)",
+        "Khanna Sparsh (Тужды) (259948667789549)"
+      ],
+      "summaries": [
+        {
+          "at": "2026-06-25T16:04:42.930Z",
+          "text": "*📌 Key Updates*\n- Deadline extended till July 13\n- Custom model in development\n- Error in development fixed\n- Ability to play latest YouTube videos using Blinky added\n- WhatsApp summarizer to be integrated in Blinky\n- Feature to remind someone or bulk send messages at a particular time to be added\n\n*✅ Decisions Made*\n- Sections in college will be divided based on name (A to J and rest)\n\n*📝 Action Items*\n- [Gourish] Push documents for new changes\n- [Khanna Sparsh] Continue working on custom model\n\n*❓ Open Questions*\n- How will the sections be divided in college (answered: based on name)\n\n*⚠️ Unresolved*\n- None \n\nNote: Some conversations were casual or joked about and didn't contribute to any important updates, decisions, or action items, so they were ignored in the summary."
+        }
+      ],
+      "updatedAt": "2026-06-25T16:04:42.930Z",
+      "messageCache": {
+        "cachedAt": "2026-06-25T16:04:41.792Z",
+        "latestMessageId": "true_120363426466297788@g.us_3EB026D0E6B2408281E690_918968520989@c.us",
+        "limit": 50,
+        "contextLines": [
+          "[CONTEXT] Supreme Sahil: ic",
+          "[CONTEXT] 34244311126079@lid aka Gourish (FeV): Oh shit, forgot to push the docs which are for the new changes basically",
+          "[CONTEXT] 34244311126079@lid aka Gourish (FeV): to use opencode models",
+          "[CONTEXT] 34244311126079@lid aka Gourish (FeV): OPENCODE_API_KEY",
+          "[CONTEXT] 34244311126079@lid aka Gourish (FeV): BLINKY_PROVIDER=deepseek/mimo",
+          "[CONTEXT] Supreme Sahil: https://www.reddit.com/r/kde/comments/1uc3azf/caelestia_reimagined_for_kde_plasma_6/\nis this real guys!",
+          "[CONTEXT] Supreme Sahil: oh np push them now",
+          "[CONTEXT] 202066081407148@lid aka Meharwan: yea , it looks like it tho",
+          "[CONTEXT] Supreme Sahil: Lessgo gng",
+          "[CONTEXT] Supreme Sahil: [MEDIA:image] caption=\"Lessgo gng\"",
+          "[CONTEXT] 202066081407148@lid aka Meharwan: is it on kde or hyprland ?",
+          "[CONTEXT] Supreme Sahil: It's kde",
+          "[CONTEXT] Supreme Sahil: :D",
+          "[CONTEXT] 202066081407148@lid aka Meharwan: dayumnn",
+          "[CONTEXT] 202066081407148@lid aka Meharwan: nice",
+          "[CONTEXT] 259948667789549@lid aka Khanna Sparsh (Тужды): Guyz deadline extdn",
+          "[CONTEXT] 259948667789549@lid aka Khanna Sparsh (Тужды): Till july 13",
+          "[CONTEXT] 259948667789549@lid aka Khanna Sparsh (Тужды): yay",
+          "[CONTEXT] 259948667789549@lid aka Khanna Sparsh (Тужды): [MEDIA:image] caption=\"yay\"",
+          "[CONTEXT] 34244311126079@lid aka Gourish (FeV): Yay",
+          "[CONTEXT] 259948667789549@lid aka Khanna Sparsh (Тужды): custom model in dev",
+          "[CONTEXT] 259948667789549@lid aka Khanna Sparsh (Тужды): [MEDIA:image] caption=\"custom model in dev\"",
+          "[CONTEXT] Supreme Sahil: Bro showed an error in disguise in development💀",
+          "[CONTEXT] 259948667789549@lid aka Khanna Sparsh (Тужды): Fix kr deya",
+          "[CONTEXT] 259948667789549@lid aka Khanna Sparsh (Тужды): Hoya woh toh",
+          "[CONTEXT] 259948667789549@lid aka Khanna Sparsh (Тужды): Niche dekh lala",
+          "[CONTEXT] 259948667789549@lid aka Khanna Sparsh (Тужды): 😂",
+          "[CONTEXT] Supreme Sahil: Oh error so big progress wasn't visible",
+          "[CONTEXT] Supreme Sahil: [MEDIA:sticker]",
+          "[CONTEXT] 202066081407148@lid aka Meharwan: Bro",
+          "[CONTEXT] 202066081407148@lid aka Meharwan: Btw",
+          "[CONTEXT] 202066081407148@lid aka Meharwan: Hmare batch me around 230 students honge. to fir sab kya sections me divide honge ?"
+        ],
+        "targetLines": [
+          "[SUMMARY TARGET] Supreme Sahil: Yeah 1st year main 2 sections",
+          "[SUMMARY TARGET] Supreme Sahil: 2nd onwards 3 sections",
+          "[SUMMARY TARGET] Supreme Sahil: You'll lose some friends and make memories",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: How btw ? Is there any criteria or is it random ?",
+          "[SUMMARY TARGET] Supreme Sahil: Ok the basis of the randomly assigned roll no (so ya random)",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: Ahh i see . Thnx",
+          "[SUMMARY TARGET] Supreme Sahil: Wait u meant sections",
+          "[SUMMARY TARGET] Supreme Sahil: For me",
+          "[SUMMARY TARGET] Supreme Sahil: a to j name starting was section a",
+          "[SUMMARY TARGET] Supreme Sahil: Baaki was section b",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: Ohh",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: Ha vhi pucha tha",
+          "[SUMMARY TARGET] Supreme Sahil: Nice you'll be in section b",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: So. Do you meet other sections of ppl often ?",
+          "[SUMMARY TARGET] Supreme Sahil: I'll come to your section as a senior (we come for making CR's etc)",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: Yayy",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: Lfg",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: So there are like 10 sections ?",
+          "[SUMMARY TARGET] Supreme Sahil: Rarely, they combine classes",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: Nice . More ppl , more networking",
+          "[SUMMARY TARGET] Supreme Sahil: Only 2 for btech cse",
+          "[SUMMARY TARGET] Supreme Sahil: Hehe same philosophy",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): @90985040191717 ..... Isnt this visible to u?!",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): [MEDIA:image] caption=\"@90985040191717 ..... Isnt this visible to u?!\" mime=image/jpeg",
+          "[SUMMARY TARGET] Supreme Sahil: Yes i saw",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): Oh",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): Oh i get it now what u werr saying",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): Fck me",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): Shud i shoot myself in head?",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): [MEDIA:image] caption=\"Shud i shoot myself in head?\" mime=image/jpeg",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: I have the same bed table",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: What's wrong btw ? 😭",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): Yay",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): That mfing synthetic data is taking too long",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): I started around 8",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): [MEDIA:image] mime=image/jpeg",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: Ohh dayumn",
+          "[SUMMARY TARGET] 202066081407148@lid aka Meharwan: is this an ai model or wot ?",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): Hey blinky",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): Well that cud have been done easily just wud require to create a acc and api...not training no nothing",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): But gosh these many apis dont look good",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): So gonna take the arrow in my ass",
+          "[SUMMARY TARGET] Supreme Sahil: Me 2 have same bed stand",
+          "[SUMMARY TARGET] Supreme Sahil: Alike minds have alike things",
+          "[SUMMARY TARGET] Supreme Sahil: Is this smthing like fine tuned version for detecting stuff ai you training?",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): [MEDIA:ptt] mime=audio/ogg; codecs=opus",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): i can feel the trouble... i predict in future ur desirre to unalive urslef gonna rise brdr @34244311126079  😂",
+          "[SUMMARY TARGET] 259948667789549@lid aka Khanna Sparsh (Тужды): [MEDIA:image] caption=\"i can feel the trouble... i predict in future ur desirre to unalive urslef gonna rise brdr @34244311126079  😂\" mime=image/jpeg",
+          "[SUMMARY TARGET] 34244311126079@lid aka Gourish (FeV): 😭😭😭",
+          "[SUMMARY TARGET] Supreme Sahil: i just added a ability to play latest yt videos using blinky (by searXNG)",
+          "[SUMMARY TARGET] Supreme Sahil: handsdown to @34244311126079 for implementing searXNG its so cool",
+          "[SUMMARY TARGET] Supreme Sahil: now i am also gonna integrate whatsapp summarizer in blinky! (cuz why not, if its gonna run local)",
+          "[SUMMARY TARGET] Supreme Sahil: also i'll add a feature to remind someone or bulk send some messages at particular time (useful for hackathon organizers)"
+        ]
+      }
+    }
+  },
+  "chatDirectory": {
+    "134355267674317@lid": {
+      "chatId": "134355267674317@lid",
+      "chatName": "+91 86992 94311",
+      "isGroup": false,
+      "phones": [
+        "134355267674317"
+      ],
+      "updatedAt": "2026-06-25T15:38:10.363Z"
+    },
+    "263552329879755@lid": {
+      "chatId": "263552329879755@lid",
+      "chatName": "Unknown number",
+      "isGroup": false,
+      "phones": [
+        "263552329879755"
+      ],
+      "updatedAt": "2026-06-25T15:38:10.382Z"
+    },
+    "100283610824847@lid": {
+      "chatId": "100283610824847@lid",
+      "chatName": "Unknown number",
+      "isGroup": false,
+      "phones": [
+        "100283610824847"
+      ],
+      "updatedAt": "2026-06-25T15:38:10.390Z"
+    },
+    "40866949394467@lid": {
+      "chatId": "40866949394467@lid",
+      "chatName": "Unknown number",
+      "isGroup": false,
+      "phones": [
+        "40866949394467"
+      ],
+      "updatedAt": "2026-06-25T15:38:10.398Z"
+    },
+    "31692630810810@lid": {
+      "chatId": "31692630810810@lid",
+      "chatName": "Unknown number",
+      "isGroup": false,
+      "phones": [
+        "31692630810810"
+      ],
+      "updatedAt": "2026-06-25T15:38:10.408Z"
+    },
+    "215096273928200@lid": {
+      "chatId": "215096273928200@lid",
+      "chatName": "Nimish Suri",
+      "isGroup": false,
+      "phones": [
+        "215096273928200"
+      ],
+      "updatedAt": "2026-06-25T15:47:10.014Z"
+    },
+    "120363427759628582@g.us": {
+      "chatId": "120363427759628582@g.us",
+      "chatName": "General",
+      "isGroup": true,
+      "phones": [
+        "222664442572829"
+      ],
+      "updatedAt": "2026-06-25T15:56:48.641Z"
+    },
+    "120363426466297788@g.us": {
+      "chatId": "120363426466297788@g.us",
+      "chatName": "hackathon crew!",
+      "isGroup": true,
+      "phones": [
+        "918968520989",
+        "34244311126079",
+        "202066081407148",
+        "259948667789549"
+      ],
+      "updatedAt": "2026-06-25T16:05:51.415Z"
+    }
+  },
+  "chatNames": {
+    "+91 86992 94311": "134355267674317@lid",
+    "unknown number": "31692630810810@lid",
+    "nimish suri": "215096273928200@lid",
+    "general": "120363427759628582@g.us",
+    "hackathon crew!": "120363426466297788@g.us"
+  }
+}

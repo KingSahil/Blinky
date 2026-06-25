@@ -35,11 +35,12 @@ Intents to choose from:
 4. `SYSTEM_SHORTCUT`: The user requests to trigger or press a keyboard shortcut (e.g. "press alt+tab", "do ctrl+s"). Extract the shortcut combination to "shortcut".
 5. `WEB_SEARCH`: The user is asking for real-time, current/fresh facts, news, weather, comparisons, or recommendations requiring external web lookup (e.g. "what is the price of Bitcoin?", "search gaming chair reviews", "latest news on AI", "who won the match?", "weather in Tokyo").
 6. `INFORMATIONAL_CHAT`: The user is greeting you, asking about your identity, explaining concepts, starting a normal conversation, or asking general questions that don't need screen context or web search (e.g. "hello", "who are you", "what is a variable in Python?").
-7. `DESKTOP_AUTOMATION`: Any step-by-step guidance on the user's active desktop screen/application UI (e.g. "how do I install python extension?", "click the install button", "where is the settings tab?").
+7. `WHATSAPP`: The user wants to interact with WhatsApp — summarize a chat, list chats, or check WhatsApp connection status (e.g. "summarize hackathon crew", "summarize my whatsapp group", "list my whatsapp chats", "check whatsapp status", "whatsapp status"). Extract: the WhatsApp action to "wa_action" (one of: "summarize", "chats", "status"), and the group or chat name to "wa_chat_name" (if mentioned).
+8. `DESKTOP_AUTOMATION`: Any step-by-step guidance on the user's active desktop screen/application UI (e.g. "how do I install python extension?", "click the install button", "where is the settings tab?").
 
 Rules for needs_screen:
 - needs_screen is true ONLY when the student wants guidance tied to visible UI (like clicking, opening, selecting, locating, highlighting, installing, or navigating something in an app, menu, button, tab, or window).
-- needs_screen is false for COMPUTER_USE, OPEN_APP, MEDIA_PLAYBACK, SYSTEM_SHORTCUT, WEB_SEARCH, and INFORMATIONAL_CHAT.
+- needs_screen is false for COMPUTER_USE, OPEN_APP, MEDIA_PLAYBACK, SYSTEM_SHORTCUT, WEB_SEARCH, INFORMATIONAL_CHAT, and WHATSAPP.
 
 Rules for is_continuation:
 - is_continuation is true ONLY if the request is a short follow-up or query directly continuing or asking about the status/next step of the previous active goal/task (e.g. "what next?", "done", "now what?", "it is not showing up", "continue").
@@ -54,7 +55,9 @@ Return valid JSON in the following format only:
     "app_name": "extracted app name",
     "song_name": "extracted song/artist query or video/channel query",
     "platform": "spotify or youtube",
-    "shortcut": "extracted shortcut key combo"
+    "shortcut": "extracted shortcut key combo",
+    "wa_action": "summarize or chats or status",
+    "wa_chat_name": "extracted WhatsApp group or chat name"
   }}
 }}
 """.strip()

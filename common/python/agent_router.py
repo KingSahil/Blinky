@@ -527,7 +527,9 @@ async def execute_single_tool_call(tool_call, registry, query, semaphore, reques
             val = list(arguments.values())[0] if arguments else query
             mapped_args[arg] = val
         else:
-            mapped_args[arg] = query
+            # For multi-argument tools, do not populate missing arguments
+            # so the tool script can use its default values via get("arg", default)
+            pass
             
     # Granular Status Reporting
     send_response(request_id, "processing", data={

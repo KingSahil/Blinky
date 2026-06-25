@@ -566,6 +566,75 @@ fn start_ui_observer(app: &AppHandle) {
     }
 }
 
+// Spawns the Node.js WhatsApp backend server in the background
+fn start_whatsapp_backend(app: &AppHandle) {
+    if std::env::var("BLINKY_DISABLE_WHATSAPP")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let root = match project_root(app) {
+        Ok(root) => root,
+        Err(err) => {
+            eprintln!("Warning: WhatsApp backend skipped because project root was not found: {err}");
+            return;
+        }
+    };
+    let script = root.join("common").join("whatsapp_backend").join("server.js");
+    if !script.exists() {
+        eprintln!(
+            "Warning: WhatsApp backend server.js was not found: {}",
+            script.display()
+        );
+        return;
+    }
+
+    let mut command = Command::new("node");
+    command
+        .arg(&script)
+        .current_dir(&root)
+        .envs(read_env_file(&root))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(0x08000000);
+    }
+
+    match command.spawn() {
+        Ok(_) => {
+            eprintln!("WhatsApp backend server started successfully via Node");
+        }
+        Err(e) => {
+            eprintln!("Warning: Failed to start WhatsApp backend via Node: {e}. Trying Bun...");
+            let mut command_bun = Command::new("bun");
+            command_bun
+                .arg("run")
+                .arg(&script)
+                .current_dir(&root)
+                .envs(read_env_file(&root))
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+
+            #[cfg(target_os = "windows")]
+            {
+                command_bun.creation_flags(0x08000000);
+            }
+
+            if let Err(err) = command_bun.spawn() {
+                eprintln!("Warning: Failed to start WhatsApp backend via Bun: {err}");
+            } else {
+                eprintln!("WhatsApp backend server started successfully via Bun");
+            }
+        }
+    }
+}
+
 fn start_ydotoold() {
     #[cfg(target_os = "linux")]
     std::thread::spawn(|| {
@@ -615,6 +684,7 @@ pub fn run() {
         .setup(|app| {
             setup_tray(app)?;
             start_ui_observer(&app.handle());
+            start_whatsapp_backend(&app.handle());
 
             #[cfg(target_os = "linux")]
             {

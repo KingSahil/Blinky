@@ -105,7 +105,7 @@ def _fill_empty_search_targets(steps: list[dict], visible_items: list[dict]) -> 
 
             # Skip browser address/URL bars to avoid highlighting them instead of page-level inputs
             is_url = text.startswith(("http://", "https://", "www.")) or re.search(r"^[a-z0-9-]+\.[a-z]{2,}", text)
-            is_address_bar = is_url or any(
+            is_address_bar = item.get("is_address_bar", False) or is_url or any(
                 phrase in text
                 for phrase in {
                     "search or enter web address",
@@ -208,7 +208,7 @@ def run(
         if agent_mode:
             _emit_status("analyzing", "Understanding your request...")
         preflight_started = time.perf_counter()
-        preflight = classify_request(question, previous_question, warnings, conversation_history)
+        preflight = classify_request(question, previous_question, warnings, conversation_history, agent_mode=agent_mode)
         log_stage_timing("preflight", preflight_started)
 
     intent = "DESKTOP_AUTOMATION"
@@ -226,6 +226,11 @@ def run(
     if intent == "WEB_SEARCH":
         LOGGER.info("Automatically enabling web search mode for classified intent: WEB_SEARCH")
         web_search_enabled = True
+    elif intent == "WHATSAPP":
+        LOGGER.info("Routing to WhatsApp tool for intent: WHATSAPP")
+        wa_action = str(extracted_params.get("wa_action") or "status").lower().strip()
+        wa_chat_name = extracted_params.get("wa_chat_name") or None
+        return run_whatsapp_tool(wa_action, wa_chat_name, started, warnings)
     elif intent in {"COMPUTER_USE", "OPEN_APP", "MEDIA_PLAYBACK", "SYSTEM_SHORTCUT"}:
         LOGGER.info("Automatically enabling agent mode for classified intent: %s", intent)
         agent_mode = True
@@ -264,9 +269,8 @@ def run(
             app = extracted_params.get("app_name")
             if app:
                 if is_web_destination(app) or is_in_app_action(app) or not looks_like_app_name(app):
-                    LOGGER.info("Overriding OPEN_APP intent in main.py for app '%s' to DESKTOP_AUTOMATION", app)
-                    intent = "DESKTOP_AUTOMATION"
-                    agent_mode = False
+                    # Web destinations or in-app actions are handled directly via try_run_agent_action fallback.
+                    pass
                 else:
                     from computer_use.tools import open_app_tool
                     direct_agent_result = open_app_tool(app)
@@ -565,6 +569,7 @@ def classify_request(
     previous_question: str | None,
     warnings: list[str],
     conversation_history: list[dict] | None = None,
+    agent_mode: bool = False,
 ) -> dict | None:
     try:
         payload = ask_text_model(build_preflight_prompt(question, previous_question, conversation_history))
@@ -577,8 +582,8 @@ def classify_request(
     extracted_params = payload.get("extracted_params", {}) or {}
     
     # Safety check: if intent is OPEN_APP but targets web UI, an in-app
-    # feature/action, or a query, override to DESKTOP_AUTOMATION.
-    if intent == "OPEN_APP":
+    # feature/action, or a query, override to DESKTOP_AUTOMATION (only if not in agent_mode).
+    if intent == "OPEN_APP" and not agent_mode:
         app_name = extracted_params.get("app_name", "")
         if app_name and (is_web_destination(app_name) or is_in_app_action(app_name) or not looks_like_app_name(app_name)):
             LOGGER.info("Overriding OPEN_APP intent with app_name '%s' to DESKTOP_AUTOMATION", app_name)
@@ -604,6 +609,91 @@ def answer_without_screen(question: str, conversation_history: list[dict] | None
     if not summary:
         raise RuntimeError("The chat model returned an empty reply.")
     return {"summary": summary, "steps": []}
+
+
+def run_whatsapp_tool(
+    action: str,
+    chat_name: str | None,
+    started: float,
+    warnings: list[str],
+) -> dict:
+    """Call whatsapp_tool.py as a subprocess and return a Blinky-formatted result."""
+    import subprocess
+    import sys as _sys
+
+    tool_path = Path(__file__).resolve().parent / "tools" / "whatsapp_tool.py"
+    args_dict: dict = {"action": action}
+    if chat_name:
+        args_dict["chat_name"] = chat_name
+
+    LOGGER.info("Running WhatsApp tool: action=%s chat_name=%s", action, chat_name)
+    _emit_status("whatsapp", f"Connecting to WhatsApp backend ({action})...")
+
+    try:
+        proc = subprocess.run(
+            [_sys.executable, str(tool_path), json.dumps(args_dict)],
+            capture_output=True,
+            text=True,
+            timeout=130,
+            cwd=str(tool_path.parent),
+        )
+        stdout = proc.stdout.strip()
+        LOGGER.debug("whatsapp_tool stdout: %s", stdout)
+        LOGGER.debug("whatsapp_tool stderr: %s", proc.stderr.strip())
+
+        if not stdout:
+            error_detail = proc.stderr.strip() or "No output from WhatsApp tool."
+            summary = f"WhatsApp tool returned no output. {error_detail}"
+        else:
+            try:
+                result_data = json.loads(stdout)
+                if "error" in result_data:
+                    summary = f"WhatsApp error: {result_data['error']}"
+                elif action == "summarize" or action == "summarise":
+                    raw_summary = result_data.get("summary", "")
+                    if raw_summary:
+                        summary = raw_summary
+                    else:
+                        summary = json.dumps(result_data, indent=2)
+                elif action == "chats":
+                    chats = result_data.get("chats", [])
+                    if chats:
+                        chat_lines = "\n".join(
+                            f"- {c.get('name', c.get('id', '?'))}" for c in chats[:20]
+                        )
+                        summary = f"Found {len(chats)} WhatsApp chats:\n{chat_lines}"
+                    else:
+                        summary = "No WhatsApp chats found. Make sure you are connected."
+                elif action == "status":
+                    status_val = result_data.get("status", "")
+                    if status_val == "connected":
+                        summary = "WhatsApp is connected and ready."
+                    elif status_val == "qr":
+                        summary = "WhatsApp is waiting for QR code scan. Open the WhatsApp Connection window in Blinky to scan."
+                    elif status_val == "disconnected":
+                        summary = "WhatsApp is not connected. Use the WhatsApp button in Blinky settings to connect."
+                    else:
+                        summary = f"WhatsApp status: {status_val or json.dumps(result_data)}"
+                else:
+                    summary = json.dumps(result_data, indent=2)
+            except json.JSONDecodeError:
+                summary = stdout
+    except subprocess.TimeoutExpired:
+        summary = "WhatsApp tool timed out. The backend may be busy or not running."
+    except Exception as exc:
+        summary = f"Failed to run WhatsApp tool: {exc}"
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": summary,
+        "steps": [],
+        "active_app": {"title": "", "process": "", "supported": False},
+        "ocr": {"count": 0, "items": []},
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+        "is_continuation": False,
+    }
 
 
 def run_web_intelligence(
