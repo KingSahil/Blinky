@@ -434,6 +434,230 @@ async def resolve_spotify_track_uri(song_name: str) -> str | None:
     return None
 
 
+def play_youtube_video_tool(video_query: str) -> ToolResult:
+    import asyncio
+    import urllib.parse
+
+    try:
+        import threading
+        from concurrent.futures import Future
+
+        future: Future[str | None] = Future()
+
+        def run_in_thread():
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                result = loop.run_until_complete(resolve_youtube_video_url(video_query))
+                future.set_result(result)
+            except Exception as ex:
+                future.set_exception(ex)
+            finally:
+                loop.close()
+
+        thread = threading.Thread(target=run_in_thread)
+        thread.start()
+        video_url = future.result()
+
+        if not video_url:
+            # Fallback to general search query on YouTube in browser
+            fallback_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(video_query)}"
+            webbrowser.open(fallback_url)
+            return ToolResult(
+                True,
+                "play_youtube",
+                f"Could not find specific video for '{video_query}' on YouTube. Opening YouTube search results instead.",
+                {"video_query": video_query, "fallback_url": fallback_url},
+            )
+
+        webbrowser.open(video_url)
+        return ToolResult(
+            True,
+            "play_youtube",
+            f"Playing '{video_query}' on YouTube.",
+            {"video_query": video_query, "video_url": video_url},
+        )
+    except Exception as e:
+        LOGGER.exception("Error in play_youtube_video_tool")
+        return ToolResult(
+            False,
+            "play_youtube",
+            f"Error playing '{video_query}' on YouTube: {str(e)}",
+            {"video_query": video_query, "error": str(e)},
+        )
+
+
+def extract_channel_from_query(query: str) -> str | None:
+    cleaned = " ".join(query.strip().lower().split())
+    # Remove leading play/play youtube
+    cleaned = re.sub(r"^(play\s+youtube|play)\s+", "", cleaned).strip()
+    # Remove "on youtube" or "in youtube" if present
+    cleaned = re.sub(r"\b(on|in)\s+youtube\b", "", cleaned).strip()
+    
+    # Try patterns
+    p1 = re.search(r"\blatest\s+video\s+of\s+(.+)", cleaned)
+    if p1:
+        return p1.group(1).strip()
+        
+    p2 = re.search(r"(.+?)'s?\s+latest\s+video\b", cleaned)
+    if p2:
+        return p2.group(1).strip()
+        
+    p3 = re.search(r"\blatest\s+(.+?)\s+video\b", cleaned)
+    if p3:
+        return p3.group(1).strip()
+        
+    # Check if the query starts with "latest video" or similar but didn't match patterns
+    # or just contains "latest video" and a name, e.g. "mythpat latest video"
+    if "latest video" in cleaned:
+        temp = cleaned.replace("latest video", "").strip()
+        temp = re.sub(r"\b(of|from|by|'s)\b", "", temp).strip()
+        if temp:
+            return temp
+            
+    return None
+
+
+async def resolve_youtube_video_url(video_query: str) -> str | None:
+    from wil.searxng_client import SearXNGClient
+    from wil.http_fetcher import fetch_html
+    import urllib.parse
+
+    # Try to extract a channel name if it's a "latest video" query
+    channel_name = extract_channel_from_query(video_query)
+    
+    if channel_name:
+        LOGGER.info(f"Detected latest video query for channel: '{channel_name}'")
+        # 1. Search for the channel on SearXNG
+        client = SearXNGClient()
+        search_query = f"{channel_name} youtube channel"
+        channel_url = None
+        
+        try:
+            results = await client.search_category(search_query, category="general", limit=5)
+            for r in results:
+                url = r.get("url", "")
+                if "youtube.com/" in url:
+                    # Filter out watch pages, search pages, etc. We want channel profiles.
+                    if any(p in url for p in ["/channel/", "/c/", "/user/", "/@"]):
+                        if "/watch?" not in url and "/results?" not in url:
+                            channel_url = url
+                            break
+        except Exception as e:
+            LOGGER.warning(f"SearXNG search for channel '{channel_name}' failed: {e}")
+
+        # DuckDuckGo fallback for channel search
+        if not channel_url:
+            try:
+                query_encoded = urllib.parse.quote(search_query)
+                url = f"https://html.duckduckgo.com/html/?q={query_encoded}"
+                html = await fetch_html(url)
+                if html:
+                    unquoted_html = urllib.parse.unquote(html)
+                    patterns = [
+                        r"youtube\.com/channel/([a-zA-Z0-9_-]+)",
+                        r"youtube\.com/(@[a-zA-Z0-9_\.-]+)",
+                        r"youtube\.com/c/([a-zA-Z0-9_-]+)",
+                        r"youtube\.com/user/([a-zA-Z0-9_-]+)"
+                    ]
+                    for pattern in patterns:
+                        matches = re.findall(pattern, unquoted_html)
+                        if matches:
+                            m = matches[0]
+                            if pattern == patterns[0]:
+                                channel_url = f"https://www.youtube.com/channel/{m}"
+                            elif pattern == patterns[1]:
+                                channel_url = f"https://www.youtube.com/@{m}"
+                            elif pattern == patterns[2]:
+                                channel_url = f"https://www.youtube.com/c/{m}"
+                            elif pattern == patterns[3]:
+                                channel_url = f"https://www.youtube.com/user/{m}"
+                            break
+            except Exception as e:
+                LOGGER.warning(f"DuckDuckGo fallback search for channel '{channel_name}' failed: {e}")
+
+        # 2. Construct videos page URL and fetch
+        if channel_url:
+            parsed = urllib.parse.urlparse(channel_url)
+            path_parts = [p for p in parsed.path.split("/") if p]
+            
+            base_path = ""
+            if path_parts:
+                if path_parts[0] in ["channel", "user", "c"]:
+                    if len(path_parts) >= 2:
+                        base_path = f"/{path_parts[0]}/{path_parts[1]}"
+                elif path_parts[0].startswith("@"):
+                    base_path = f"/{path_parts[0]}"
+            
+            if base_path:
+                videos_url = f"https://www.youtube.com{base_path}/videos"
+                LOGGER.info(f"Resolved videos page URL: {videos_url}")
+                
+                try:
+                    html = await fetch_html(videos_url)
+                    if html:
+                        pattern = r"ytInitialData\s*=\s*({.+?});\s*</script>"
+                        match = re.search(pattern, html, re.DOTALL)
+                        if match:
+                            data = json.loads(match.group(1))
+                            
+                            # Recursively find lockupViewModel objects to get the first video
+                            videos = []
+                            def search_videos(item):
+                                if isinstance(item, dict):
+                                    if "lockupViewModel" in item:
+                                        vm = item["lockupViewModel"]
+                                        content_id = vm.get("contentId", "")
+                                        on_tap = vm.get("rendererContext", {}).get("commandContext", {}).get("onTap", {}).get("innertubeCommand", {})
+                                        watch_endpoint = on_tap.get("watchEndpoint", {})
+                                        video_id = watch_endpoint.get("videoId", content_id)
+                                        if video_id:
+                                            videos.append(video_id)
+                                    for k, v in item.items():
+                                        search_videos(v)
+                                elif isinstance(item, list):
+                                    for sub in item:
+                                        search_videos(sub)
+                                        
+                            search_videos(data)
+                            if videos:
+                                latest_video_id = videos[0]
+                                LOGGER.info(f"Found latest video ID: {latest_video_id}")
+                                return f"https://www.youtube.com/watch?v={latest_video_id}"
+                except Exception as e:
+                    LOGGER.warning(f"Failed to fetch or parse channel videos page: {e}")
+
+    # Fallback to general query search on SearXNG
+    LOGGER.info(f"Performing general YouTube video search for query: '{video_query}'")
+    try:
+        client = SearXNGClient()
+        results = await client.search_category(f"site:youtube.com/watch {video_query}", category="general", limit=5)
+        for r in results:
+            url = r.get("url", "")
+            if "youtube.com/watch?v=" in url or "youtu.be/" in url:
+                return url
+    except Exception as e:
+        LOGGER.warning(f"General SearXNG search for '{video_query}' failed: {e}")
+
+    # Fallback to general query search on DuckDuckGo
+    try:
+        query_encoded = urllib.parse.quote(f"site:youtube.com/watch {video_query}")
+        url = f"https://html.duckduckgo.com/html/?q={query_encoded}"
+        html = await fetch_html(url)
+        if html:
+            unquoted_html = urllib.parse.unquote(html)
+            matches = re.findall(r"youtube\.com/watch\?v=([a-zA-Z0-9_-]+)", unquoted_html)
+            if matches:
+                return f"https://www.youtube.com/watch?v={matches[0]}"
+            matches_be = re.findall(r"youtu\.be/([a-zA-Z0-9_-]+)", unquoted_html)
+            if matches_be:
+                return f"https://www.youtube.com/watch?v={matches_be[0]}"
+    except Exception as e:
+        LOGGER.warning(f"DuckDuckGo fallback search for video '{video_query}' failed: {e}")
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Linux desktop automation tools (via computer-use-linux MCP)
 # ---------------------------------------------------------------------------

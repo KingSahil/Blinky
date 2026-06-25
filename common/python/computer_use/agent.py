@@ -43,6 +43,11 @@ PLAY_SPOTIFY_RE = re.compile(
     re.IGNORECASE,
 )
 
+PLAY_YOUTUBE_RE = re.compile(
+    r"^\s*play\s+(?:youtube\s+(?P<query1>.+)|(?P<query2>.+?)\s+(?:in|on)\s+youtube)\s*$",
+    re.IGNORECASE,
+)
+
 LIST_WINDOWS_RE = re.compile(
     r"^\s*(?:list|show|enumerate|what)\s+(?:windows|apps|applications|desktop apps|open windows)\s*$",
     re.IGNORECASE,
@@ -112,6 +117,13 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
         if song:
             from .tools import play_spotify_track_tool
             return play_spotify_track_tool(song.strip())
+
+    play_yt_match = PLAY_YOUTUBE_RE.match(question_cleaned)
+    if play_yt_match:
+        query = play_yt_match.group("query1") or play_yt_match.group("query2")
+        if query:
+            from .tools import play_youtube_video_tool
+            return play_youtube_video_tool(query.strip())
 
     # Linux desktop actions
     if IS_LINUX:

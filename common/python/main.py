@@ -251,9 +251,15 @@ def run(
 
         if intent == "MEDIA_PLAYBACK":
             song = extracted_params.get("song_name")
+            platform = str(extracted_params.get("platform", "spotify")).lower().strip()
             if song:
-                from computer_use.tools import play_spotify_track_tool
-                direct_agent_result = play_spotify_track_tool(song)
+                question_lower = question.lower()
+                if platform == "youtube" or "youtube" in question_lower or "you tube" in question_lower:
+                    from computer_use.tools import play_youtube_video_tool
+                    direct_agent_result = play_youtube_video_tool(song)
+                else:
+                    from computer_use.tools import play_spotify_track_tool
+                    direct_agent_result = play_spotify_track_tool(song)
         elif intent == "OPEN_APP":
             app = extracted_params.get("app_name")
             if app:

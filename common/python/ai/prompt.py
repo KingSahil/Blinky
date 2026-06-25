@@ -31,7 +31,7 @@ Intents to choose from:
 1. `COMPUTER_USE`: The student wants to control their Linux desktop — open/list windows, click buttons, type text, press keys, or perform sequential actions on running applications (e.g. "type hello world", "list windows", "click the search box", "press Enter").
 2. `OPEN_APP`: The user explicitly requests to open, launch, or start a local desktop application (e.g. "open Spotify", "launch vscode", "start WhatsApp"). Extract the app name to "app_name".
    - Note: Do NOT classify web destinations, sites, or domains (e.g. YouTube, GitHub, Gmail, ChatGPT, or URLs) as `OPEN_APP`. Route those to `DESKTOP_AUTOMATION`.
-3. `MEDIA_PLAYBACK`: The user requests to play a song/artist/playlist on Spotify (e.g. "play blinding lights", "play lo-fi beats on spotify"). Extract the song/query to "song_name".
+3. `MEDIA_PLAYBACK`: The user requests to play a song/artist/playlist on Spotify, or a video/channel on YouTube (e.g. "play blinding lights", "play latest video of mythpat on youtube"). Extract the song/query to "song_name", and the platform ("spotify" or "youtube") to "platform".
 4. `SYSTEM_SHORTCUT`: The user requests to trigger or press a keyboard shortcut (e.g. "press alt+tab", "do ctrl+s"). Extract the shortcut combination to "shortcut".
 5. `WEB_SEARCH`: The user is asking for real-time, current/fresh facts, news, weather, comparisons, or recommendations requiring external web lookup (e.g. "what is the price of Bitcoin?", "search gaming chair reviews", "latest news on AI", "who won the match?", "weather in Tokyo").
 6. `INFORMATIONAL_CHAT`: The user is greeting you, asking about your identity, explaining concepts, starting a normal conversation, or asking general questions that don't need screen context or web search (e.g. "hello", "who are you", "what is a variable in Python?").
@@ -52,10 +52,10 @@ Return valid JSON in the following format only:
   "is_continuation": true_or_false,
   "extracted_params": {{
     "app_name": "extracted app name",
-    "song_name": "extracted song/artist query",
+    "song_name": "extracted song/artist query or video/channel query",
+    "platform": "spotify or youtube",
     "shortcut": "extracted shortcut key combo"
   }}
-}}
 }}
 """.strip()
 

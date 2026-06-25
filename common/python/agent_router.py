@@ -585,10 +585,21 @@ async def handle_request(line):
         terms, url = youtube_search
         send_response(request_id, "processing", data={"message": f"Searching YouTube for {terms}..."})
         try:
+            from computer_use.tools import extract_channel_from_query, resolve_youtube_video_url
+            msg = f"Searched YouTube for {terms}."
+            if extract_channel_from_query(query):
+                try:
+                    resolved_url = await resolve_youtube_video_url(query)
+                    if resolved_url:
+                        url = resolved_url
+                        msg = "Playing latest video on YouTube."
+                except Exception as ex:
+                    import logging
+                    logging.getLogger("blinky.agent_router").warning(f"Failed to resolve latest video URL in agent_router: {ex}")
             opened = await asyncio.to_thread(webbrowser.open, url)
             if not opened:
                 raise RuntimeError("The default browser did not accept the YouTube search request")
-            send_response(request_id, "success", data={"response": f"Searched YouTube for {terms}."})
+            send_response(request_id, "success", data={"response": msg})
         except Exception as e:
             send_response(request_id, "error", error={"code": "YOUTUBE_SEARCH_FAILED", "message": f"Failed to search YouTube for {terms}", "details": str(e)})
         return

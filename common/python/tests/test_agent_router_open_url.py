@@ -205,27 +205,33 @@ class AgentRouterOpenUrlRequestTests(unittest.IsolatedAsyncioTestCase):
         mock_send.assert_any_call("abc", "success", data={"response": "Searched YouTube for mythpat."})
 
     async def test_youtube_search_in_youtube_request_bypasses_llm_routing(self):
+        from unittest.mock import AsyncMock
         with (
             patch("agent_router.webbrowser.open", return_value=True) as mock_open,
             patch("agent_router.ask_text_model", side_effect=AssertionError("LLM should not be called")),
+            patch("computer_use.tools.resolve_youtube_video_url", new_callable=AsyncMock) as mock_resolve,
             patch("agent_router.send_response") as mock_send,
         ):
+            mock_resolve.return_value = "https://www.youtube.com/watch?v=mocked_id"
             await handle_request('{"requestId":"abc","query":"play latest mythpat video in youtube"}')
 
-        mock_open.assert_called_once_with("https://www.youtube.com/results?search_query=latest+mythpat+video")
-        mock_send.assert_any_call("abc", "success", data={"response": "Searched YouTube for latest mythpat video."})
+        mock_open.assert_called_once_with("https://www.youtube.com/watch?v=mocked_id")
+        mock_send.assert_any_call("abc", "success", data={"response": "Playing latest video on YouTube."})
 
     async def test_youtube_video_phrase_bypasses_tool_router(self):
+        from unittest.mock import AsyncMock
         with (
             patch("agent_router.webbrowser.open", return_value=True) as mock_open,
             patch("agent_router.ask_text_model", side_effect=AssertionError("LLM should not be called")),
             patch("agent_router.load_registry_async", side_effect=AssertionError("Tool router should not be called")),
+            patch("computer_use.tools.resolve_youtube_video_url", new_callable=AsyncMock) as mock_resolve,
             patch("agent_router.send_response") as mock_send,
         ):
+            mock_resolve.return_value = "https://www.youtube.com/watch?v=mocked_id2"
             await handle_request('{"requestId":"abc","query":"play latest mrbeast youtube video"}')
 
-        mock_open.assert_called_once_with("https://www.youtube.com/results?search_query=latest+mrbeast+video")
-        mock_send.assert_any_call("abc", "success", data={"response": "Searched YouTube for latest mrbeast video."})
+        mock_open.assert_called_once_with("https://www.youtube.com/watch?v=mocked_id2")
+        mock_send.assert_any_call("abc", "success", data={"response": "Playing latest video on YouTube."})
 
     async def test_unknown_site_search_uses_ai_browser_plan_before_tool_generation(self):
         plan = {
