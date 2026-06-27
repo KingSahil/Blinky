@@ -135,4 +135,16 @@ def test_agent_routes_voice_command():
         result_ex = try_run_agent_action("play blinding lights in spotify!  ")
         assert result_ex is mock_play.return_value
 
-
+def test_agent_routes_stop_spotify():
+    with patch("computer_use.agent.shortcut_tool") as mock_shortcut:
+        mock_shortcut.return_value = MagicMock()
+        
+        result_stop = try_run_agent_action("stop spotify")
+        assert result_stop is mock_shortcut.return_value
+        mock_shortcut.assert_called_with("media_play_pause")
+        
+        result_pause = try_run_agent_action("pause music")
+        assert result_pause is mock_shortcut.return_value
+        
+        result_resume = try_run_agent_action("resume playback")
+        assert result_resume is mock_shortcut.return_value

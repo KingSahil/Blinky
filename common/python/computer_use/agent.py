@@ -48,6 +48,11 @@ PLAY_YOUTUBE_RE = re.compile(
     re.IGNORECASE,
 )
 
+STOP_SPOTIFY_RE = re.compile(
+    r"^\s*(?:stop|pause|resume)(?:\s+(?:the\s+)?(?:music|song|spotify|video|playback))?\s*$",
+    re.IGNORECASE,
+)
+
 LIST_WINDOWS_RE = re.compile(
     r"^\s*(?:list|show|enumerate|what)\s+(?:windows|apps|applications|desktop apps|open windows)\s*$",
     re.IGNORECASE,
@@ -124,6 +129,9 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
         if query:
             from .tools import play_youtube_video_tool
             return play_youtube_video_tool(query.strip())
+
+    if STOP_SPOTIFY_RE.match(question_cleaned):
+        return shortcut_tool("media_play_pause")
 
     # Linux desktop actions
     if IS_LINUX:

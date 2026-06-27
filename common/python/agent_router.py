@@ -577,7 +577,11 @@ async def handle_request(line):
                 intent = "COMPUTER_USE"
                 
             direct_result = None
-            if intent == "MEDIA_PLAYBACK":
+            from computer_use.agent import STOP_SPOTIFY_RE
+            if STOP_SPOTIFY_RE.match(query.strip().rstrip("?.!,;:")):
+                send_response(request_id, "processing", data={"message": "Toggling media playback..."})
+                direct_result = shortcut_tool("media_play_pause")
+            elif intent == "MEDIA_PLAYBACK":
                 song = extracted_params.get("song_name")
                 pform = str(extracted_params.get("platform", "spotify")).lower().strip()
                 if song:

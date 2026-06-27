@@ -254,7 +254,11 @@ def run(
             LOGGER.info("Rerouting OPEN_APP → COMPUTER_USE (query contains action verbs)")
             intent = "COMPUTER_USE"
 
-        if intent == "MEDIA_PLAYBACK":
+        from computer_use.agent import STOP_SPOTIFY_RE
+        if STOP_SPOTIFY_RE.match(question.strip().rstrip("?.!,;:")):
+            from computer_use.tools import shortcut_tool
+            direct_agent_result = shortcut_tool("media_play_pause")
+        elif intent == "MEDIA_PLAYBACK":
             song = extracted_params.get("song_name")
             platform = str(extracted_params.get("platform", "spotify")).lower().strip()
             if song:

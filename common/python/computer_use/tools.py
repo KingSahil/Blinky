@@ -536,6 +536,10 @@ def normalize_shortcut(shortcut: str) -> str:
             "escape": "{ESC}",
             "esc": "{ESC}",
             "space": "{SPACE}",
+            "media_play_pause": "{VK_MEDIA_PLAY_PAUSE}",
+            "media_stop": "{VK_MEDIA_STOP}",
+            "media_next": "{VK_MEDIA_NEXT_TRACK}",
+            "media_prev": "{VK_MEDIA_PREV_TRACK}",
         }.get(key)
         if not special:
             return ""
@@ -611,11 +615,74 @@ def open_spotify_uri(track_uri: str) -> ToolResult:
     if os.name == "nt":
         try:
             os.startfile(track_uri)
+            import time
+            from pywinauto.keyboard import send_keys
+            time.sleep(1.2)
+
+            # Bring Spotify window to foreground/focus so that the keypress goes to Spotify
+            app = None
+            try:
+                import win32gui
+                import win32con
+                from pywinauto import Application
+
+                focused = False
+                # Try class name first
+                try:
+                    app = Application().connect(class_name="SpotifyMainWindow")
+                    app.top_window().set_focus()
+                    focused = True
+                except Exception:
+                    pass
+
+                # Try title search if class name connection failed
+                if not focused:
+                    try:
+                        app = Application().connect(title_re=".*Spotify.*")
+                        app.top_window().set_focus()
+                        focused = True
+                    except Exception:
+                        pass
+
+                # EnumWindows fallback
+                if not focused:
+                    hwnds = []
+                    def check_spotify_hwnd(h, extra):
+                        if win32gui.IsWindowVisible(h):
+                            t = win32gui.GetWindowText(h).lower()
+                            c = win32gui.GetClassName(h)
+                            if "spotify" in t or c == "SpotifyMainWindow":
+                                extra.append(h)
+                        return True
+                    win32gui.EnumWindows(check_spotify_hwnd, hwnds)
+                    if hwnds:
+                        hwnd = hwnds[0]
+                        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                        win32gui.SetForegroundWindow(hwnd)
+            except Exception as fe:
+                LOGGER.warning("Could not focus Spotify window: %s", fe)
+
+            # Single click at (40% width, 50% height) of Spotify window to select/focus the track row
+            clicked = False
+            if app:
+                try:
+                    rect = app.top_window().rectangle()
+                    w = rect.width()
+                    h = rect.height()
+                    click_x = int(w * 0.4)
+                    click_y = int(h * 0.5)
+                    app.top_window().click_input(double=False, coords=(click_x, click_y))
+                    clicked = True
+                    time.sleep(0.4)
+                except Exception as ce:
+                    LOGGER.warning("Could not click Spotify window: %s", ce)
+
+            send_keys("{ENTER}")
             return ToolResult(
                 True,
                 "open_spotify_uri",
-                "Opened Spotify URI.",
-                {"method": "os.startfile"},
+                "Opened Spotify URI and started playback.",
+                {"method": "os.startfile", "clicked": clicked},
             )
         except Exception as exc:
             return ToolResult(
