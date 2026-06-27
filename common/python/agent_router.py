@@ -560,6 +560,75 @@ async def handle_request(line):
 
     send_response(request_id, "processing", data={"message": "Analyzing query and routing..."})
 
+    # ── Check for Local Desktop Agent Actions (aligning mobile behavior with PC chatbar) ──
+    try:
+        import platform
+        from main import classify_request, _has_computer_use_action
+        from computer_use import is_web_destination, looks_like_app_name, try_run_agent_action, is_in_app_action
+        from computer_use.tools import play_spotify_track_tool, play_youtube_video_tool, open_app_tool, shortcut_tool
+        
+        preflight = classify_request(query, None, [], None, agent_mode=True)
+        if preflight:
+            intent = preflight.get("intent", "DESKTOP_AUTOMATION")
+            extracted_params = preflight.get("extracted_params", {}) or {}
+            
+            # Match the routing logic in main.py
+            if intent == "OPEN_APP" and _has_computer_use_action(query):
+                intent = "COMPUTER_USE"
+                
+            direct_result = None
+            if intent == "MEDIA_PLAYBACK":
+                song = extracted_params.get("song_name")
+                pform = str(extracted_params.get("platform", "spotify")).lower().strip()
+                if song:
+                    query_lower = query.lower()
+                    if pform == "youtube" or "youtube" in query_lower or "you tube" in query_lower:
+                        send_response(request_id, "processing", data={"message": f"Playing '{song}' on YouTube..."})
+                        direct_result = play_youtube_video_tool(song)
+                    else:
+                        send_response(request_id, "processing", data={"message": f"Playing '{song}' on Spotify..."})
+                        direct_result = play_spotify_track_tool(song)
+            elif intent == "OPEN_APP":
+                app = extracted_params.get("app_name")
+                if app and not (is_web_destination(app) or is_in_app_action(app) or not looks_like_app_name(app)):
+                    send_response(request_id, "processing", data={"message": f"Opening {app}..."})
+                    direct_result = open_app_tool(app)
+            elif intent == "SYSTEM_SHORTCUT":
+                shortcut = extracted_params.get("shortcut")
+                if shortcut:
+                    send_response(request_id, "processing", data={"message": f"Triggering shortcut {shortcut}..."})
+                    direct_result = shortcut_tool(shortcut)
+            elif intent == "COMPUTER_USE":
+                # Only run the full computer use loop if on Linux
+                if platform.system() == "Linux":
+                    from computer_use.loop import run_computer_use_loop
+                    send_response(request_id, "processing", data={"message": "Running desktop automation loop..."})
+                    loop_result = run_computer_use_loop(query)
+                    if loop_result.get("success"):
+                        send_response(request_id, "success", data={"response": loop_result.get("answer", "Task completed.")})
+                    else:
+                        send_response(request_id, "error", error={"code": "COMPUTER_USE_FAILED", "message": loop_result.get("error", "Task failed"), "details": ""})
+                    return
+                else:
+                    # Windows doesn't support the vision-based loop.py computer use, but try direct agent action first
+                    direct_result = try_run_agent_action(query)
+                    
+            if direct_result is None and intent in {"COMPUTER_USE", "DESKTOP_AUTOMATION"}:
+                # Try regex-based try_run_agent_action fallback
+                direct_result = try_run_agent_action(query)
+                
+            if direct_result is not None and not direct_result.success:
+                # If a direct action was matched but failed (e.g. app not installed),
+                # reset it to None so it can fall back to browser automation.
+                direct_result = None
+
+            if direct_result is not None:
+                send_response(request_id, "success", data={"response": direct_result.message})
+                return
+    except Exception as ex:
+        import logging
+        logging.getLogger("blinky.agent_router").warning(f"Error during local desktop routing check: {ex}")
+
     if is_playwright_health_check_request(query):
         send_response(request_id, "processing", data={"message": "Testing Playwright locally..."})
         ok, message = await run_playwright_health_check()

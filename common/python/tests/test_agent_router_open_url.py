@@ -259,6 +259,51 @@ class AgentRouterOpenUrlRequestTests(unittest.IsolatedAsyncioTestCase):
         mock_run.assert_awaited_once_with(plan)
         mock_send.assert_any_call("abc", "success", data=browser_result)
 
+    async def test_local_spotify_playback_via_agent_router(self):
+        preflight_payload = {
+            "intent": "MEDIA_PLAYBACK",
+            "needs_screen": False,
+            "is_continuation": False,
+            "extracted_params": {
+                "song_name": "blinding lights",
+                "platform": "spotify"
+            }
+        }
+        from computer_use.tools import ToolResult
+        mock_result = ToolResult(True, "play_spotify", "Playing 'blinding lights' in Spotify.", {})
+        with (
+            patch("main.classify_request", return_value=preflight_payload) as mock_classify,
+            patch("computer_use.tools.play_spotify_track_tool", return_value=mock_result) as mock_play,
+            patch("agent_router.send_response") as mock_send,
+        ):
+            await handle_request('{"requestId":"abc","query":"play blinding lights on spotify"}')
+
+        mock_classify.assert_called_once()
+        mock_play.assert_called_once_with("blinding lights")
+        mock_send.assert_any_call("abc", "success", data={"response": "Playing 'blinding lights' in Spotify."})
+
+    async def test_local_app_open_via_agent_router(self):
+        preflight_payload = {
+            "intent": "OPEN_APP",
+            "needs_screen": False,
+            "is_continuation": False,
+            "extracted_params": {
+                "app_name": "spotify"
+            }
+        }
+        from computer_use.tools import ToolResult
+        mock_result = ToolResult(True, "open_app", "Opened spotify.", {})
+        with (
+            patch("main.classify_request", return_value=preflight_payload) as mock_classify,
+            patch("computer_use.tools.open_app_tool", return_value=mock_result) as mock_open,
+            patch("agent_router.send_response") as mock_send,
+        ):
+            await handle_request('{"requestId":"abc","query":"open spotify"}')
+
+        mock_classify.assert_called_once()
+        mock_open.assert_called_once_with("spotify")
+        mock_send.assert_any_call("abc", "success", data={"response": "Opened spotify."})
+
 
 if __name__ == "__main__":
     unittest.main()
