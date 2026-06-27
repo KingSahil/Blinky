@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
