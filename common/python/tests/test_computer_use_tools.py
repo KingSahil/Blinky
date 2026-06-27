@@ -1,3 +1,5 @@
+import sys
+import types
 from unittest.mock import Mock, patch
 
 from computer_use.agent import cleanup_app_name, try_run_agent_action
@@ -43,6 +45,19 @@ def test_open_web_destination_uses_known_url() -> None:
     open_url.assert_called_once_with("https://www.youtube.com/")
 
 
+def test_open_app_routes_to_linux_launcher_on_linux() -> None:
+    with (
+        patch("computer_use.tools.os.name", "posix"),
+        patch("computer_use.tools.platform.system", return_value="Linux"),
+        patch("computer_use.tools.open_app_tool_linux") as open_linux,
+    ):
+        open_linux.return_value = ToolResult(True, "open_app", "Launched Spotify.", {"app_name": "Spotify"})
+        result = open_app_tool("Spotify")
+
+    assert result is open_linux.return_value
+    open_linux.assert_called_once_with("Spotify")
+
+
 def test_agent_routes_help_menu_to_shortcut_when_context_matches() -> None:
     observation = {
         "active_app": {"process": "Code.exe"},
@@ -81,7 +96,7 @@ def test_open_app_uses_start_apps_appid_on_windows() -> None:
 def test_open_app_uses_protocol_before_start_apps() -> None:
     with (
         patch("computer_use.tools.os.name", "nt"),
-        patch("computer_use.tools.os.startfile") as startfile,
+        patch("computer_use.tools.os.startfile", create=True) as startfile,
         patch("computer_use.tools.find_start_app", side_effect=AssertionError("StartApps should not run first")),
         patch("computer_use.tools.time.sleep"),
     ):
@@ -95,7 +110,7 @@ def test_open_app_uses_protocol_before_start_apps() -> None:
 def test_open_app_uses_windows_search_as_last_fallback() -> None:
     with (
         patch("computer_use.tools.os.name", "nt"),
-        patch("computer_use.tools.os.startfile", side_effect=OSError("protocol unavailable")),
+        patch("computer_use.tools.os.startfile", side_effect=OSError("protocol unavailable"), create=True),
         patch("computer_use.tools.find_start_app", return_value=None),
         patch("computer_use.tools.open_app_via_windows_search") as search,
     ):
@@ -113,9 +128,15 @@ def test_normalize_app_name_removes_filler_words() -> None:
 
 def test_windows_search_fallback_clicks_visible_result() -> None:
     match = {"text": "WhatsApp", "x": 100, "y": 200, "width": 160, "height": 40}
+    pywinauto_module = types.ModuleType("pywinauto")
+    keyboard_module = types.ModuleType("pywinauto.keyboard")
+    send_keys = Mock()
+    setattr(keyboard_module, "send_keys", send_keys)
+    setattr(pywinauto_module, "keyboard", keyboard_module)
+
     with (
+        patch.dict(sys.modules, {"pywinauto": pywinauto_module, "pywinauto.keyboard": keyboard_module}),
         patch("computer_use.tools.os.name", "nt"),
-        patch("pywinauto.keyboard.send_keys") as send_keys,
         patch("computer_use.tools.find_windows_search_result", return_value=match),
         patch("computer_use.tools.click_item_center") as click_item,
         patch("computer_use.tools.time.sleep"),

@@ -4,8 +4,8 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from PIL import Image, ImageGrab
 
+from PIL import Image, ImageGrab
 from utils.logging import get_logger
 
 LOGGER = get_logger("blinky.capture")
@@ -46,21 +46,25 @@ def capture_screen() -> Screenshot:
     if os.name == "nt":
         try:
             from dxcam_capture import DXCamCaptureStrategy
+
             strategy = DXCamCaptureStrategy()
             image = strategy.capture()
             LOGGER.info("Captured screen with DXCamCaptureStrategy")
         except Exception as exc:
-            LOGGER.warning("DXCamCaptureStrategy failed, falling back to PIL ImageGrab: %s", exc)
+            LOGGER.warning(
+                "DXCamCaptureStrategy failed, falling back to PIL ImageGrab: %s", exc
+            )
             image = ImageGrab.grab(all_screens=False)
     else:
         try:
             from linux_capture import LinuxCaptureStrategyFactory
+
             strategy = LinuxCaptureStrategyFactory.get_strategy()
             image = strategy.capture()
             LOGGER.info("Captured screen with %s", strategy.__class__.__name__)
         except Exception as exc:
-            LOGGER.warning("Linux strategy failed, falling back to PIL ImageGrab: %s", exc)
-            image = ImageGrab.grab(all_screens=False)
+            LOGGER.exception("Linux screen capture failed")
+            raise CaptureError(f"Linux screen capture failed: {exc}") from exc
 
     screen_w, screen_h = image.width, image.height
 
@@ -77,7 +81,11 @@ def capture_screen() -> Screenshot:
     image.save(path, format="JPEG", quality=75, optimize=True)
     LOGGER.info(
         "Saved optimized screenshot: %s (size: %dx%d, screen: %dx%d)",
-        path, image.width, image.height, screen_w, screen_h,
+        path,
+        image.width,
+        image.height,
+        screen_w,
+        screen_h,
     )
 
     return Screenshot(

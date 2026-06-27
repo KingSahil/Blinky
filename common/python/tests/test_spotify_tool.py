@@ -1,5 +1,4 @@
 import pytest
-import os
 from unittest.mock import patch, AsyncMock, MagicMock
 from computer_use.agent import try_run_agent_action
 from computer_use.tools import ToolResult, play_spotify_track_tool
@@ -28,16 +27,32 @@ def test_agent_routes_play_spotify_prefix():
     assert result is mock_play.return_value
     mock_play.assert_called_once_with("blinding lights")
 
-def test_play_spotify_non_windows():
-    with patch("computer_use.tools.os.name", "posix"):
-        result = play_spotify_track_tool("blinding lights")
+@pytest.mark.asyncio
+@patch("computer_use.tools.os.name", "posix")
+@patch("computer_use.tools.platform.system", return_value="Linux")
+@patch("computer_use.tools.open_spotify_uri_linux")
+@patch("wil.searxng_client.SearXNGClient.search_category", new_callable=AsyncMock)
+async def test_play_spotify_linux_uses_desktop_uri_handler(mock_search_category, mock_open_linux, mock_platform):
+    mock_search_category.return_value = [
+        {"url": "https://open.spotify.com/track/6qYkmqFsXbj8CQjAdbYz07", "title": "Blinding Lights"}
+    ]
+    mock_open_linux.return_value = ToolResult(
+        True,
+        "open_spotify_uri",
+        "Opened Spotify URI.",
+        {"method": "xdg-open", "track_uri": "spotify:track:6qYkmqFsXbj8CQjAdbYz07"},
+    )
+
+    result = play_spotify_track_tool("blinding lights")
         
-    assert result.success is False
-    assert "supported on Windows only" in result.message
+    assert result.success is True
+    assert result.details["track_uri"] == "spotify:track:6qYkmqFsXbj8CQjAdbYz07"
+    assert result.details["method"] == "xdg-open"
+    mock_open_linux.assert_called_once_with("spotify:track:6qYkmqFsXbj8CQjAdbYz07")
 
 @pytest.mark.asyncio
 @patch("computer_use.tools.os.name", "nt")
-@patch("computer_use.tools.os.startfile")
+@patch("computer_use.tools.os.startfile", create=True)
 @patch("wil.searxng_client.SearXNGClient.search_category", new_callable=AsyncMock)
 async def test_play_spotify_via_searxng_success(mock_search_category, mock_startfile):
     # Mock SearXNG returning a valid spotify track URL
@@ -54,7 +69,7 @@ async def test_play_spotify_via_searxng_success(mock_search_category, mock_start
 
 @pytest.mark.asyncio
 @patch("computer_use.tools.os.name", "nt")
-@patch("computer_use.tools.os.startfile")
+@patch("computer_use.tools.os.startfile", create=True)
 @patch("wil.searxng_client.SearXNGClient.search_category", new_callable=AsyncMock)
 @patch("wil.http_fetcher.fetch_html", new_callable=AsyncMock)
 async def test_play_spotify_via_ddg_fallback(mock_fetch_html, mock_search_category, mock_startfile):

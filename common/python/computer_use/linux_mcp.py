@@ -79,9 +79,7 @@ class LinuxMCPClient:
                 if attempt < 9:
                     time.sleep(0.3)
         else:
-            raise LinuxMCPError(
-                f"Failed to connect to MCP bridge: {last_err}"
-            )
+            raise LinuxMCPError(f"Failed to connect to MCP bridge: {last_err}")
 
         self._sock_file = self._sock.makefile("rw", buffering=1)
 
@@ -140,9 +138,7 @@ class LinuxMCPClient:
         assert self._sock
         self._sock.sendall((payload + "\n").encode())
 
-    def _send_request(
-        self, request: str, req_id: int, method: str
-    ) -> dict[str, Any]:
+    def _send_request(self, request: str, req_id: int, method: str) -> dict[str, Any]:
         assert self._sock_file
 
         self._send_raw(request)
@@ -151,9 +147,7 @@ class LinuxMCPClient:
         while time.monotonic() < deadline:
             line = self._sock_file.readline()
             if not line:
-                raise LinuxMCPError(
-                    f"MCP connection closed during {method}"
-                )
+                raise LinuxMCPError(f"MCP connection closed during {method}")
 
             try:
                 msg = json.loads(line.strip())
@@ -169,9 +163,7 @@ class LinuxMCPClient:
                     )
                 return msg.get("result", {})
 
-        raise TimeoutError(
-            f"MCP call '{method}' timed out after {CALL_TIMEOUT}s"
-        )
+        raise TimeoutError(f"MCP call '{method}' timed out after {CALL_TIMEOUT}s")
 
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
         if not self._started:
@@ -256,13 +248,20 @@ def get_app_state(
     """Get accessibility tree.
     First calls MCP get_app_state to populate the click-element cache,
     then augments with absolute coordinates via KWin window positions."""
-    import subprocess
     import os
+    import subprocess
 
     # Call MCP get_app_state first to populate the bridge's cache for click_element
     try:
         client = get_client()
-        client.call_tool("get_app_state", {"app_name": app_name or "", "max_nodes": max_nodes, "max_depth": max_depth})
+        client.call_tool(
+            "get_app_state",
+            {
+                "app_name": app_name or "",
+                "max_nodes": max_nodes,
+                "max_depth": max_depth,
+            },
+        )
     except Exception:
         pass
 
@@ -270,7 +269,9 @@ def get_app_state(
     try:
         result = subprocess.run(
             [binary, "state", app_name or ""],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         if result.returncode != 0 or not result.stdout.strip():
             return {"elements": [], "windows": []}
@@ -297,7 +298,9 @@ def get_app_state(
                 app_id = str(w.get("app_id", "")).lower()
                 title = str(w.get("title", "")).lower()
                 node_name = str(node.get("name", "")).lower()
-                if node_name and (node_name in app_id or node_name in title or app_id in node_name):
+                if node_name and (
+                    node_name in app_id or node_name in title or app_id in node_name
+                ):
                     wb = w.get("bounds", {})
                     node["absolute_bounds"] = {
                         "x": wb.get("x", 0) + local_bounds.get("x", 0),
@@ -340,19 +343,110 @@ def click_element(
     return client.call_tool("click", args)
 
 
-def type_text(
-    text: str, target_app: str | None = None
-) -> dict[str, Any]:
+WINDOW_TARGET_ALIASES = {
+    "konsole": ["org.kde.konsole", "konsole"],
+    "terminal": [
+        "org.kde.konsole",
+        "konsole",
+        "gnome-terminal",
+        "kitty",
+        "alacritty",
+        "wezterm",
+    ],
+    "console": [
+        "org.kde.konsole",
+        "konsole",
+        "gnome-terminal",
+        "kitty",
+        "alacritty",
+        "wezterm",
+    ],
+}
+
+CANONICAL_APP_IDS = {
+    "konsole": "org.kde.konsole",
+    "terminal": "org.kde.konsole",
+    "console": "org.kde.konsole",
+}
+
+
+def _canonical_app_id(target_app: str | None) -> str | None:
+    if not target_app:
+        return None
+    target = " ".join(target_app.strip().lower().split())
+    return CANONICAL_APP_IDS.get(target)
+
+
+def _resolve_window_selector(target_app: str | None) -> dict[str, Any]:
+    if not target_app:
+        return {}
+
+    target = " ".join(target_app.strip().lower().split())
+    if not target:
+        return {}
+
+    terms = [target, *WINDOW_TARGET_ALIASES.get(target, [])]
+    best: tuple[int, dict[str, Any]] | None = None
+
+    try:
+        windows = list_windows()
+    except Exception as e:
+        LOGGER.warning("Could not resolve target window '%s': %s", target_app, e)
+        return {}
+
+    for window in windows:
+        app_id = str(window.get("app_id", "")).lower()
+        wm_class = str(window.get("wm_class", "")).lower()
+        title = str(window.get("title", "")).lower()
+        score = 0
+
+        for term in terms:
+            if term in {app_id, wm_class}:
+                score = max(score, 100)
+            elif term and (term in app_id or term in wm_class):
+                score = max(score, 80)
+            elif term and term in title:
+                score = max(score, 50)
+
+        if score:
+            if window.get("focused"):
+                score += 5
+            if not window.get("hidden"):
+                score += 2
+
+        if score and (best is None or score > best[0]):
+            best = (score, window)
+
+    if not best:
+        return {}
+
+    window = best[1]
+    selector: dict[str, Any] = {}
+    for key in ("app_id", "wm_class", "title", "pid"):
+        value = window.get(key)
+        if value not in (None, ""):
+            selector[key] = value
+    if target not in {"konsole", "terminal", "console"}:
+        window_id = window.get("window_id")
+        if window_id not in (None, ""):
+            selector["window_id"] = window_id
+    return selector
+
+
+def type_text(text: str, target_app: str | None = None) -> dict[str, Any]:
     client = get_client()
     args: dict[str, Any] = {"text": text}
-    if target_app:
+    selector = _resolve_window_selector(target_app)
+    if selector:
+        args.update(selector)
+    elif canonical_app_id := _canonical_app_id(target_app):
+        args["app_id"] = canonical_app_id
+    elif target_app:
         args["app_id"] = target_app
     return client.call_tool("type_text", args)
 
 
-def press_key(
-    key: str, target_app: str | None = None
-) -> dict[str, Any]:
+def press_key(key: str, target_app: str | None = None) -> dict[str, Any]:
     client = get_client()
     key_lower = key.lower().strip()
 
@@ -369,7 +463,12 @@ def press_key(
     }
     normalized = key_map.get(key_lower, key_lower)
     args: dict[str, Any] = {"key": normalized}
-    if target_app:
+    selector = _resolve_window_selector(target_app)
+    if selector:
+        args.update(selector)
+    elif canonical_app_id := _canonical_app_id(target_app):
+        args["app_id"] = canonical_app_id
+    elif target_app:
         args["app_id"] = target_app
     return client.call_tool("press_key", args)
 
@@ -387,6 +486,7 @@ def get_focused_window_bounds() -> dict | None:
     """
     try:
         from wayland_vision import get_active_window_bounds
+
         bounds = get_active_window_bounds()
         LOGGER.info("get_active_window_bounds returned: %s", bounds)
         if bounds and isinstance(bounds, dict):
@@ -401,7 +501,10 @@ def get_focused_window_bounds() -> dict | None:
                     "app_id": bounds.get("app_id", ""),
                 }
             else:
-                LOGGER.warning("get_active_window_bounds: missing required keys. Got: %s", list(bounds.keys()))
+                LOGGER.warning(
+                    "get_active_window_bounds: missing required keys. Got: %s",
+                    list(bounds.keys()),
+                )
     except Exception as e:
         LOGGER.warning("get_focused_window_bounds failed: %s", e)
     return None

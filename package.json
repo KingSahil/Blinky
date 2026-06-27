@@ -6,6 +6,8 @@
   "description": "Blinky is an offline-first AI desktop tutor for Windows.",
   "scripts": {
     "dev": "docker compose -f common/docker-compose.yml up -d && bun run tauri:dev",
+    "dev:no-docker": "bun run tauri:dev",
+    "dev:app": "bun run tauri:dev",
     "tauri:dev": "bun tauri dev",
     "build": "bun run typecheck && vite build --config common/frontend/vite.config.ts",
     "tauri:build": "bun tauri build",
@@ -15,9 +17,11 @@
     "check:ollama": "powershell -ExecutionPolicy Bypass -File windows/scripts/check-ollama.ps1",
     "linux:setup:python": "chmod +x ./linux/scripts/setup-python.sh && ./linux/scripts/setup-python.sh",
     "linux:check:ollama": "chmod +x ./linux/scripts/check-ollama.sh && ./linux/scripts/check-ollama.sh",
-    "linux:check:groq": "chmod +x ./linux/scripts/groq-check.sh && ./linux/scripts/groq-check.sh"
+    "linux:check:groq": "chmod +x ./linux/scripts/groq-check.sh && ./linux/scripts/groq-check.sh",
+    "linux:check:computer-use": "computer-use-linux doctor"
   },
   "dependencies": {
+    "@agent-sh/computer-use-linux": "^0.2.9",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-global-shortcut": "^2.2.0",
     "axios": "^1.7.9",
