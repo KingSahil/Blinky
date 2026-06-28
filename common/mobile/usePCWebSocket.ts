@@ -80,7 +80,7 @@ export function usePCWebSocket() {
     }
   }, [disconnect]);
 
-  const sendCommand = useCallback((command: 'power_off' | 'restart' | 'sleep') => {
+  const sendCommand = useCallback((command: 'power_off' | 'restart' | 'sleep' | 'volume_up' | 'volume_down' | 'volume_mute') => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(command);
       return true;

@@ -5,6 +5,7 @@
     "": {
       "name": "blinky",
       "dependencies": {
+        "@agent-sh/computer-use-linux": "^0.2.9",
         "@tauri-apps/api": "^2.11.0",
         "@tauri-apps/plugin-global-shortcut": "^2.2.0",
         "axios": "^1.7.9",
@@ -37,6 +38,8 @@
     "yauzl": "3.2.1",
   },
   "packages": {
+    "@agent-sh/computer-use-linux": ["@agent-sh/computer-use-linux@0.2.9", "", { "os": "linux", "cpu": [ "x64", "arm64", ], "bin": { "computer-use-linux": "npm/bin/computer-use-linux.js" } }, "sha512-H3idg7FXex5t3YOc6ZEmbt7WJNV/xiMPnR595BixMwvLfNeSdf3DzTtxZqGEeXhmX5dB2S1B+99+SitqdLW4Vw=="],
+
     "@babel/code-frame": ["@babel/code-frame@7.29.7", "", { "dependencies": { "@babel/helper-validator-identifier": "^7.29.7", "js-tokens": "^4.0.0", "picocolors": "^1.1.1" } }, "sha512-Aup7aUOfpbAUg2ROOJN6Iw5f9DMBlzu0mIkm/malLQFN/YQgO48wCj0Kxa3sEHJvPVFg7siR+qRInwXd2qhQKw=="],
 
     "@babel/helper-validator-identifier": ["@babel/helper-validator-identifier@7.29.7", "", {}, "sha512-qehxGkRj55h/ff8EMaJ+cYhyaKlHIxqYDn682wQD7RNp9UujOQsHog2uS0r2vzr4pW+sXf90NeeayjcNaX3fFg=="],

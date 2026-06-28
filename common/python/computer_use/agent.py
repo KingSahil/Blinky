@@ -19,6 +19,7 @@ WEB_DESTINATION_NAMES = {
     "google docs",
     "google sheets",
     "google slides",
+    "whatsapp",
     "whatsapp web",
     "facebook",
     "instagram",
@@ -47,6 +48,34 @@ PLAY_YOUTUBE_RE = re.compile(
     r"^\s*play\s+(?:youtube\s+(?P<query1>.+)|(?P<query2>.+?)\s+(?:in|on)\s+youtube)\s*$",
     re.IGNORECASE,
 )
+
+STOP_SPOTIFY_RE = re.compile(
+    r"^\s*(?:stop|pause|resume)(?:\s+(?:the\s+)?(?:music|song|spotify|video|playback))?\s*$",
+    re.IGNORECASE,
+)
+
+SEEK_FORWARD_RE = re.compile(
+    r"^\s*(?:(?:fast\s*forward|forward|seek\s+forward|skip\s+forward|go\s+forward|seek)\s*(?:the\s+)?(?:music|song|spotify|video|playback\s+)?(?:forward\s+)?(?:by\s+)?(?P<value>\d+)?\s*(?P<unit>s|sec|secs|second|seconds|m|min|mins|minute|minutes)?\s*(?:forward)?|skip\s+(?:the\s+)?(?:music|song|spotify|video|playback\s+)?(?:by\s+)?(?P<value_skip>\d+)\s*(?P<unit_skip>s|sec|secs|second|seconds|m|min|mins|minute|minutes)?\s*(?:forward)?)\s*(?:in\s+|on\s+|of\s+)?(?:the\s+)?(?:music|song|spotify|video|playback)?\s*$",
+    re.IGNORECASE,
+)
+
+SEEK_BACKWARD_RE = re.compile(
+    r"^\s*(?:(?:rewind|backward|back|seek\s+back(?:ward)?|skip\s+back(?:ward)?|go\s+back(?:ward)?)\s*(?:the\s+)?(?:music|song|spotify|video|playback\s+)?(?:back(?:ward)?\s+)?(?:by\s+)?(?P<value>\d+)?\s*(?P<unit>s|sec|secs|second|seconds|m|min|mins|minute|minutes)?\s*(?:back|backward)?|skip\s+(?:the\s+)?(?:music|song|spotify|video|playback\s+)?(?:by\s+)?(?P<value_skip>\d+)\s*(?P<unit_skip>s|sec|secs|second|seconds|m|min|mins|minute|minutes)?\s*(?:back|backward))\s*(?:in\s+|on\s+|of\s+)?(?:the\s+)?(?:music|song|spotify|video|playback)?\s*$",
+    re.IGNORECASE,
+)
+
+
+
+NEXT_TRACK_RE = re.compile(
+    r"^\s*(?:next\s+(?:song|track|music|video)|skip\s+(?:the\s+)?(?:song|track|music|video|playback)|play\s+next|next)\s*$",
+    re.IGNORECASE,
+)
+
+PREV_TRACK_RE = re.compile(
+    r"^\s*(?:prev(?:ious)?\s+(?:song|track|music|video)|play\s+prev(?:ious)?|prev(?:ious)?)\s*$",
+    re.IGNORECASE,
+)
+
 
 LIST_WINDOWS_RE = re.compile(
     r"^\s*(?:list|show|enumerate|what)\s+(?:windows|apps|applications|desktop apps|open windows)\s*$",
@@ -105,6 +134,36 @@ def looks_like_app_name(app_name: str) -> bool:
     return True
 
 
+def handle_media_playback_action(extracted_params: dict, query: str) -> ToolResult:
+    media_action = str(extracted_params.get("media_action", "play")).lower().strip()
+    if media_action in ("pause", "stop", "resume"):
+        return shortcut_tool("media_play_pause")
+    elif media_action == "next":
+        return shortcut_tool("media_next")
+    elif media_action == "prev":
+        return shortcut_tool("media_prev")
+    elif media_action == "seek":
+        seek_sec = extracted_params.get("seek_seconds")
+        try:
+            seconds = int(seek_sec) if seek_sec is not None else 10
+        except Exception:
+            seconds = 10
+        forward = seconds >= 0
+        from .tools import seek_spotify_tool
+        return seek_spotify_tool(abs(seconds), forward=forward)
+    else:
+        # Default to play song
+        song = extracted_params.get("song_name")
+        pform = str(extracted_params.get("platform", "spotify")).lower().strip()
+        query_lower = query.lower()
+        if pform == "youtube" or "youtube" in query_lower or "you tube" in query_lower:
+            from .tools import play_youtube_video_tool
+            return play_youtube_video_tool(song) if song else play_youtube_video_tool(query)
+        else:
+            from .tools import play_spotify_track_tool
+            return play_spotify_track_tool(song) if song else play_spotify_track_tool(query)
+
+
 def try_run_agent_action(question: str, observation: dict[str, Any] | None = None) -> ToolResult | None:
     question_cleaned = question.strip().rstrip("?.!,;:")
 
@@ -124,6 +183,43 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
         if query:
             from .tools import play_youtube_video_tool
             return play_youtube_video_tool(query.strip())
+
+    if STOP_SPOTIFY_RE.match(question_cleaned):
+        return shortcut_tool("media_play_pause")
+
+    # Spotify seeking and track skipping control
+    seek_forward_match = SEEK_FORWARD_RE.match(question_cleaned)
+    if seek_forward_match:
+        val_str = seek_forward_match.group("value") or seek_forward_match.group("value_skip")
+        unit_str = seek_forward_match.group("unit") or seek_forward_match.group("unit_skip")
+        if val_str:
+            val = int(val_str)
+            seconds = val * 60 if unit_str and unit_str.lower().startswith("m") else val
+        else:
+            seconds = 10
+        from .tools import seek_spotify_tool
+        return seek_spotify_tool(seconds, forward=True)
+
+    seek_backward_match = SEEK_BACKWARD_RE.match(question_cleaned)
+    if seek_backward_match:
+        val_str = seek_backward_match.group("value") or seek_backward_match.group("value_skip")
+        unit_str = seek_backward_match.group("unit") or seek_backward_match.group("unit_skip")
+        if val_str:
+            val = int(val_str)
+            seconds = val * 60 if unit_str and unit_str.lower().startswith("m") else val
+        else:
+            seconds = 10
+        from .tools import seek_spotify_tool
+        return seek_spotify_tool(seconds, forward=False)
+
+
+
+    if NEXT_TRACK_RE.match(question_cleaned):
+        return shortcut_tool("media_next")
+
+    if PREV_TRACK_RE.match(question_cleaned):
+        return shortcut_tool("media_prev")
+
 
     # Linux desktop actions
     if IS_LINUX:

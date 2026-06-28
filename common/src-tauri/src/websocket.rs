@@ -1,4 +1,4 @@
-use futures_util::{SinkExt, StreamExt};
+ use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -259,6 +259,12 @@ async fn handle_connection(
                 crate::platform::execute_restart();
             } else if trimmed == "sleep" {
                 crate::platform::execute_sleep();
+            } else if trimmed == "volume_up" {
+                crate::platform::execute_volume_up();
+            } else if trimmed == "volume_down" {
+                crate::platform::execute_volume_down();
+            } else if trimmed == "volume_mute" || trimmed == "mute" {
+                crate::platform::execute_volume_mute();
             } else if trimmed.starts_with("query:") || trimmed.starts_with("{") {
                 let request_id = if trimmed.starts_with("query:") {
                     let parts: Vec<&str> = trimmed.splitn(3, ':').collect();

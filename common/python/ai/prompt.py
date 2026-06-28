@@ -31,7 +31,11 @@ Intents to choose from:
 1. `COMPUTER_USE`: The student wants to control their Linux desktop — open/list windows, click buttons, type text, press keys, or perform sequential actions on running applications (e.g. "type hello world", "list windows", "click the search box", "press Enter").
 2. `OPEN_APP`: The user explicitly requests to open, launch, or start a local desktop application (e.g. "open Spotify", "launch vscode", "start WhatsApp"). Extract the app name to "app_name".
    - Note: Do NOT classify web destinations, sites, or domains (e.g. YouTube, GitHub, Gmail, ChatGPT, or URLs) as `OPEN_APP`. Route those to `DESKTOP_AUTOMATION`.
-3. `MEDIA_PLAYBACK`: The user requests to play a song/artist/playlist on Spotify, or a video/channel on YouTube (e.g. "play blinding lights", "play latest video of mythpat on youtube"). Extract the song/query to "song_name", and the platform ("spotify" or "youtube") to "platform".
+3. `MEDIA_PLAYBACK`: The user requests to play a song/artist/playlist, pause/stop/resume playback, seek (fast-forward or rewind), or skip to the next/previous track on Spotify or YouTube (e.g. "play blinding lights", "pause the music", "skip 1 minute in song", "go back 10 seconds", "next song", "prev track"). Extract the following parameters if applicable:
+    - "media_action": one of "play", "pause", "resume", "stop", "seek", "next", "prev"
+    - "song_name": song/artist or video/channel query (only for "play" action)
+    - "platform": "spotify" or "youtube" (only for "play" action)
+    - "seek_seconds": integer representing the seek offset in seconds (positive for forward seek, negative for backward seek, e.g. 60 for "skip 1 minute in song", -10 for "go back 10s")
 4. `SYSTEM_SHORTCUT`: The user requests to trigger or press a keyboard shortcut (e.g. "press alt+tab", "do ctrl+s"). Extract the shortcut combination to "shortcut".
 5. `WEB_SEARCH`: The user is asking for real-time, current/fresh facts, news, weather, comparisons, or recommendations requiring external web lookup (e.g. "what is the price of Bitcoin?", "search gaming chair reviews", "latest news on AI", "who won the match?", "weather in Tokyo").
 6. `INFORMATIONAL_CHAT`: The user is greeting you, asking about your identity, explaining concepts, starting a normal conversation, or asking general questions that don't need screen context or web search (e.g. "hello", "who are you", "what is a variable in Python?").
@@ -57,7 +61,9 @@ Return valid JSON in the following format only:
     "platform": "spotify or youtube",
     "shortcut": "extracted shortcut key combo",
     "wa_action": "summarize or chats or status",
-    "wa_chat_name": "extracted WhatsApp group or chat name"
+    "wa_chat_name": "extracted WhatsApp group or chat name",
+    "media_action": "play or pause or resume or stop or seek or next or prev",
+    "seek_seconds": 10
   }}
 }}
 """.strip()
@@ -102,7 +108,8 @@ def build_prompt(
     progress: dict | None = None,
     latest_update: str | None = None,
     conversation_history: list[dict] | None = None,
-) -> str:
+    return_ref_items: bool = False,
+) -> str | tuple[str, list[dict]]:
     # Filter out any OCR items that belong to Blinky itself (the host tutor app)
     # to prevent Blinky from referencing or recommending clicks inside its own UI.
     blinky_ignored_terms = {
@@ -118,9 +125,6 @@ def build_prompt(
         text = str(item.get("text", "")).lower().strip()
         # Skip if the item matches any Blinky UI text
         if any(term in text for term in blinky_ignored_terms):
-            continue
-        # Skip Blinky's input text box content matching the user's question
-        if item.get("source") != "uia" and cleaned_question and text == cleaned_question:
             continue
         filtered_items.append(item)
 
@@ -157,7 +161,7 @@ def build_prompt(
     if history_context_str:
         student_query_context = f"{student_query_context}\n\nRecent conversation:\n{history_context_str}"
 
-    return f"""
+    prompt_text = f"""
 You are Blinky, a free offline AI desktop tutor for students.
 
 {student_query_context}
@@ -228,6 +232,9 @@ Format B (For purely informational queries, screen summaries, explaining concept
   "steps": []
 }}
 """.strip()
+    if return_ref_items:
+        return prompt_text, ref_items
+    return prompt_text
 
 
 def _string_list(progress: dict | None, key: str) -> list[str]:

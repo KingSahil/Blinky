@@ -1,0 +1,40 @@
+{
+  "signature": {
+    "title": "VS Code",
+    "process": "code.exe",
+    "target_pid": null,
+    "width": 1728,
+    "height": 1080,
+    "screen_width": 2560,
+    "screen_height": 1600
+  },
+  "updated_at": 1782629582.5740714,
+  "items": [
+    {
+      "text": "Customize Layout...",
+      "x": 1000,
+      "y": 4,
+      "width": 25,
+      "height": 20,
+      "confidence": 0.98,
+      "source": "uia",
+      "control_type": "Button",
+      "ref": "@e1",
+      "clickable": true,
+      "input": false
+    },
+    {
+      "text": "Settings",
+      "x": 1090,
+      "y": 259,
+      "width": 25,
+      "height": 25,
+      "confidence": 0.98,
+      "source": "blinky",
+      "control_type": "Button",
+      "ref": "@e2",
+      "clickable": true,
+      "input": false
+    }
+  ]
+}

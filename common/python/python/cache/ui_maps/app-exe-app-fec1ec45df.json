@@ -8,6 +8,20 @@
     "screen_width": 2560,
     "screen_height": 1600
   },
-  "updated_at": 1782191537.7978323,
-  "items": []
+  "updated_at": 1782629582.4989183,
+  "items": [
+    {
+      "text": "Customize Layout...",
+      "x": 1000,
+      "y": 4,
+      "width": 25,
+      "height": 20,
+      "confidence": 0.7,
+      "source": "uia",
+      "control_type": "Button",
+      "ref": "@e1",
+      "clickable": true,
+      "input": false
+    }
+  ]
 }

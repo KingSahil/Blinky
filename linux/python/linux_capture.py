@@ -5,8 +5,8 @@ import subprocess
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from PIL import Image, ImageGrab
 
+from PIL import Image, ImageGrab
 from utils.logging import get_logger
 
 LOGGER = get_logger("blinky.capture")
@@ -39,7 +39,16 @@ class LinuxCaptureStrategy(CaptureStrategy):
             temp_path = Path("tmp") / "gnome-screenshot-temp.png"
             temp_path.parent.mkdir(parents=True, exist_ok=True)
             env_copy = {}
-            for key in ["DBUS_SESSION_BUS_ADDRESS", "PATH", "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "USER", "HOME", "XDG_SESSION_TYPE"]:
+            for key in [
+                "DBUS_SESSION_BUS_ADDRESS",
+                "PATH",
+                "DISPLAY",
+                "WAYLAND_DISPLAY",
+                "XDG_RUNTIME_DIR",
+                "USER",
+                "HOME",
+                "XDG_SESSION_TYPE",
+            ]:
                 if key in os.environ:
                     env_copy[key] = os.environ[key]
             res = subprocess.run(
@@ -47,7 +56,7 @@ class LinuxCaptureStrategy(CaptureStrategy):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 check=True,
-                env=env_copy
+                env=env_copy,
             )
             if temp_path.exists():
                 img = Image.open(temp_path)
@@ -62,7 +71,12 @@ class LinuxCaptureStrategy(CaptureStrategy):
             try:
                 temp_path = Path("tmp") / f"{tool}-temp.png"
                 temp_path.parent.mkdir(parents=True, exist_ok=True)
-                subprocess.run([tool, str(temp_path)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(
+                    [tool, str(temp_path)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
                 if temp_path.exists():
                     img = Image.open(temp_path)
                     img.load()
@@ -84,13 +98,16 @@ class WaylandPortalIPCOrchestrator:
         try:
             return self._capture_via_python_dbus()
         except ImportError:
-            LOGGER.debug("dbus-python or PyGObject not available; falling back to CLI dbus wrapper.")
+            LOGGER.debug(
+                "dbus-python or PyGObject not available; falling back to CLI dbus wrapper."
+            )
             return self._capture_via_cli_dbus()
 
     def _capture_via_python_dbus(self) -> Path:
-        import dbus
-        import uuid
         import urllib.parse
+        import uuid
+
+        import dbus
         from dbus.mainloop.glib import DBusGMainLoop
         from gi.repository import GLib
 
@@ -100,32 +117,36 @@ class WaylandPortalIPCOrchestrator:
         def try_capture(interactive_mode):
             token = f"blinky_{uuid.uuid4().hex}"
             try:
-                portal = bus.get_object('org.freedesktop.portal.Desktop', '/org/freedesktop/portal/desktop')
-                screenshot_iface = dbus.Interface(portal, 'org.freedesktop.portal.Screenshot')
+                portal = bus.get_object(
+                    "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop"
+                )
+                screenshot_iface = dbus.Interface(
+                    portal, "org.freedesktop.portal.Screenshot"
+                )
             except Exception as e:
                 return False, f"Failed to access XDG Desktop Portal: {e}"
 
             options = {
-                'interactive': dbus.Boolean(interactive_mode),
-                'handle_token': dbus.String(token)
+                "interactive": dbus.Boolean(interactive_mode),
+                "handle_token": dbus.String(token),
             }
 
             loop = GLib.MainLoop()
-            result = {'response': None, 'results': None}
+            result = {"response": None, "results": None}
 
-            sender = bus.get_unique_name().replace(':', '').replace('.', '_')
+            sender = bus.get_unique_name().replace(":", "").replace(".", "_")
             request_path = f"/org/freedesktop/portal/desktop/request/{sender}/{token}"
 
             def signal_handler(response_code, results):
-                result['response'] = int(response_code)
-                result['results'] = results
+                result["response"] = int(response_code)
+                result["results"] = results
                 loop.quit()
 
             signal_match = bus.add_signal_receiver(
                 signal_handler,
                 signal_name="Response",
                 dbus_interface="org.freedesktop.portal.Request",
-                path=request_path
+                path=request_path,
             )
 
             try:
@@ -135,6 +156,7 @@ class WaylandPortalIPCOrchestrator:
                 return False, f"Failed to call Screenshot method: {e}"
 
             timed_out = [False]
+
             def timeout_callback():
                 timed_out[0] = True
                 loop.quit()
@@ -150,7 +172,7 @@ class WaylandPortalIPCOrchestrator:
             if timed_out[0]:
                 return False, "Timeout"
 
-            response_code = result['response']
+            response_code = result["response"]
             if response_code is None:
                 return False, "No response received"
 
@@ -159,23 +181,32 @@ class WaylandPortalIPCOrchestrator:
             elif response_code != 0:
                 return False, f"Portal error code {response_code}"
 
-            results = result['results']
-            if not results or 'uri' not in results:
+            results = result["results"]
+            if not results or "uri" not in results:
                 return False, "No URI found in results"
 
-            return True, str(results['uri'])
+            return True, str(results["uri"])
 
         success, res_val = try_capture(False)
         if not success:
             if res_val == "PermissionDenied":
-                raise PermissionDeniedError("Screen capture permission was denied by the user.")
-            LOGGER.info("Non-interactive portal screenshot failed (%s). Retrying with interactive prompt...", res_val)
+                raise PermissionDeniedError(
+                    "Screen capture permission was denied by the user."
+                )
+            LOGGER.info(
+                "Non-interactive portal screenshot failed (%s). Retrying with interactive prompt...",
+                res_val,
+            )
             success, res_val = try_capture(True)
             if not success:
                 if res_val == "PermissionDenied":
-                    raise PermissionDeniedError("Screen capture permission was denied by the user.")
+                    raise PermissionDeniedError(
+                        "Screen capture permission was denied by the user."
+                    )
                 elif res_val == "Timeout":
-                    raise TimeoutError("Wayland Portal screen capture request timed out.")
+                    raise TimeoutError(
+                        "Wayland Portal screen capture request timed out."
+                    )
                 else:
                     raise CaptureError(f"Wayland Portal capture failed: {res_val}")
 
@@ -198,7 +229,7 @@ from gi.repository import GLib
 try:
     DBusGMainLoop(set_as_default=True)
     bus = dbus.SessionBus()
-    
+
     def try_capture(interactive_mode):
         token = "blinky_" + uuid.uuid4().hex
         portal = bus.get_object('org.freedesktop.portal.Desktop', '/org/freedesktop/portal/desktop')
@@ -284,7 +315,16 @@ except Exception as e:
 
         try:
             env_copy = {}
-            for key in ["DBUS_SESSION_BUS_ADDRESS", "PATH", "DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "USER", "HOME", "XDG_SESSION_TYPE"]:
+            for key in [
+                "DBUS_SESSION_BUS_ADDRESS",
+                "PATH",
+                "DISPLAY",
+                "WAYLAND_DISPLAY",
+                "XDG_RUNTIME_DIR",
+                "USER",
+                "HOME",
+                "XDG_SESSION_TYPE",
+            ]:
                 if key in os.environ:
                     env_copy[key] = os.environ[key]
 
@@ -295,14 +335,16 @@ except Exception as e:
                 text=True,
                 check=True,
                 shell=False,
-                env=env_copy
+                env=env_copy,
             )
             captured_path = Path(res.stdout.strip())
             return captured_path
         except subprocess.CalledProcessError as e:
             err_msg = e.stderr.strip()
             if "PermissionDenied" in err_msg:
-                raise PermissionDeniedError("Screen capture permission was denied by the user.")
+                raise PermissionDeniedError(
+                    "Screen capture permission was denied by the user."
+                )
             elif "Timeout" in err_msg:
                 raise TimeoutError("Wayland Portal screen capture request timed out.")
             else:
@@ -318,12 +360,15 @@ class WaylandPortalCaptureStrategy:
         try:
             temp_path = self.orchestrator.capture_via_portal()
             if not temp_path or not temp_path.exists():
-                raise CaptureError("Portal captured file does not exist or was not returned.")
+                raise CaptureError(
+                    "Portal captured file does not exist or was not returned."
+                )
 
             with open(temp_path, "rb") as f:
                 img_data = f.read()
 
             from io import BytesIO
+
             with Image.open(BytesIO(img_data)) as img:
                 img.load()
                 return img.copy()
@@ -336,7 +381,65 @@ class WaylandPortalCaptureStrategy:
                 try:
                     temp_path.unlink()
                 except Exception as ex:
-                    LOGGER.warning(f"Failed to delete temporary portal capture file {temp_path}: {ex}")
+                    LOGGER.warning(
+                        f"Failed to delete temporary portal capture file {temp_path}: {ex}"
+                    )
+
+
+class SpectacleCaptureStrategy(CaptureStrategy):
+    """Capture the full screen using KDE Spectacle in background mode."""
+
+    def capture(self) -> Image.Image:
+        import tempfile
+
+        temp_dir = Path(tempfile.gettempdir()) / "blinky-screenshots"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_path = (
+            temp_dir / f"spectacle-capture-{int(time.time() * 1000)}.png"
+        ).resolve()
+        temp_path.unlink(missing_ok=True)
+
+        env_copy = os.environ.copy()
+        try:
+            result = subprocess.run(
+                [
+                    "spectacle",
+                    "--background",
+                    "--nonotify",
+                    "--fullscreen",
+                    "--output",
+                    str(temp_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=env_copy,
+            )
+        except FileNotFoundError as exc:
+            raise CaptureError("spectacle not installed") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError("spectacle screenshot timed out") from exc
+
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise CaptureError(f"spectacle capture failed: {detail}")
+
+        # Spectacle can return before the file is fully materialized when invoked
+        # from the Tauri process, so wait briefly for the output to appear.
+        for _ in range(20):
+            if temp_path.exists() and temp_path.stat().st_size > 0:
+                break
+            time.sleep(0.1)
+
+        if not temp_path.exists() or temp_path.stat().st_size == 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise CaptureError(f"spectacle did not produce output file: {detail}")
+
+        img = Image.open(temp_path)
+        img.load()
+        temp_path.unlink(missing_ok=True)
+        LOGGER.info("Captured screen via spectacle")
+        return img
 
 
 class KWinGrimCaptureStrategy(CaptureStrategy):
@@ -346,6 +449,7 @@ class KWinGrimCaptureStrategy(CaptureStrategy):
     def capture(self) -> Image.Image:
         try:
             from window_linux import _kwin_active_window
+
             win = _kwin_active_window()
         except ImportError:
             win = None
@@ -360,7 +464,9 @@ class KWinGrimCaptureStrategy(CaptureStrategy):
         try:
             subprocess.run(
                 ["grim", "-g", f"{x},{y} {w}x{h}", str(temp_path)],
-                check=True, capture_output=True, timeout=10,
+                check=True,
+                capture_output=True,
+                timeout=10,
             )
         except FileNotFoundError:
             raise CaptureError(
@@ -379,8 +485,54 @@ class KWinGrimCaptureStrategy(CaptureStrategy):
         return img
 
 
+class FallbackCaptureStrategy(CaptureStrategy):
+    def __init__(self, strategies: list[CaptureStrategy]):
+        self.strategies = strategies
+
+    def capture(self) -> Image.Image:
+        errors: list[str] = []
+        for strategy in self.strategies:
+            try:
+                image = strategy.capture()
+                LOGGER.info(
+                    "Captured screen with fallback strategy %s",
+                    strategy.__class__.__name__,
+                )
+                return image
+            except Exception as exc:
+                errors.append(f"{strategy.__class__.__name__}: {exc}")
+                LOGGER.warning(
+                    "Capture strategy %s failed: %s", strategy.__class__.__name__, exc
+                )
+        raise CaptureError("All Linux capture strategies failed: " + "; ".join(errors))
+
+
 class LinuxCaptureStrategyFactory:
     _cached_portal_available = None
+    _cached_grim_usable = None
+
+    @classmethod
+    def is_grim_usable(cls) -> bool:
+        if cls._cached_grim_usable is not None:
+            return cls._cached_grim_usable
+        try:
+            subprocess.run(
+                ["which", "grim"], capture_output=True, check=True, timeout=2
+            )
+            probe_path = Path("tmp") / f"grim-probe-{int(time.time() * 1000)}.png"
+            probe_path.parent.mkdir(parents=True, exist_ok=True)
+            result = subprocess.run(
+                ["grim", str(probe_path)], capture_output=True, timeout=5
+            )
+            cls._cached_grim_usable = (
+                result.returncode == 0
+                and probe_path.exists()
+                and probe_path.stat().st_size > 0
+            )
+            probe_path.unlink(missing_ok=True)
+        except Exception:
+            cls._cached_grim_usable = False
+        return cls._cached_grim_usable
 
     @classmethod
     def is_portal_available(cls) -> bool:
@@ -394,9 +546,12 @@ class LinuxCaptureStrategyFactory:
         try:
             import dbus
             from dbus.mainloop.glib import DBusGMainLoop
+
             DBusGMainLoop(set_as_default=True)
             bus = dbus.SessionBus()
-            bus.get_object('org.freedesktop.portal.Desktop', '/org/freedesktop/portal/desktop')
+            bus.get_object(
+                "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop"
+            )
             cls._cached_portal_available = True
             return True
         except Exception:
@@ -404,13 +559,21 @@ class LinuxCaptureStrategyFactory:
 
         try:
             res = subprocess.run(
-                ["gdbus", "introspect", "--session", "--dest", "org.freedesktop.portal.Desktop", "--object-path", "/org/freedesktop/portal/desktop"],
+                [
+                    "gdbus",
+                    "introspect",
+                    "--session",
+                    "--dest",
+                    "org.freedesktop.portal.Desktop",
+                    "--object-path",
+                    "/org/freedesktop/portal/desktop",
+                ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=2,
-                shell=False
+                shell=False,
             )
-            cls._cached_portal_available = (res.returncode == 0)
+            cls._cached_portal_available = res.returncode == 0
         except Exception:
             cls._cached_portal_available = False
 
@@ -420,21 +583,45 @@ class LinuxCaptureStrategyFactory:
     def get_strategy(cls):
         session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
         wayland_display = os.environ.get("WAYLAND_DISPLAY", "")
-        is_wayland = (session_type == "wayland" or bool(wayland_display))
+        is_wayland = session_type == "wayland" or bool(wayland_display)
 
         if is_wayland:
-            # Try grim-based cropped capture first (no portal prompts)
+            strategies: list[CaptureStrategy] = []
+
+            # Try grim only if it can actually capture on this compositor.
+            if cls.is_grim_usable():
+                LOGGER.info(
+                    "Wayland detected and grim capture works. Adding KWinGrimCaptureStrategy."
+                )
+                strategies.append(KWinGrimCaptureStrategy())
+            else:
+                LOGGER.debug("grim is not usable on this Wayland compositor")
+
             try:
-                subprocess.run(["which", "grim"], capture_output=True, check=True, timeout=2)
-                LOGGER.info("Wayland detected, grim available. Using KWinGrimCaptureStrategy.")
-                return KWinGrimCaptureStrategy()
+                subprocess.run(
+                    ["which", "spectacle"], capture_output=True, check=True, timeout=2
+                )
+                LOGGER.info(
+                    "Wayland/KDE session detected. Adding SpectacleCaptureStrategy."
+                )
+                strategies.append(SpectacleCaptureStrategy())
             except Exception:
-                LOGGER.debug("grim not available on Wayland")
+                LOGGER.debug("spectacle not available on Wayland")
 
             if cls.is_portal_available():
-                LOGGER.info("Wayland session detected and Desktop Portal is available. Using WaylandPortalCaptureStrategy.")
-                return WaylandPortalCaptureStrategy()
+                LOGGER.info(
+                    "Wayland session detected and Desktop Portal is available. Adding WaylandPortalCaptureStrategy."
+                )
+                strategies.append(WaylandPortalCaptureStrategy())
             else:
-                LOGGER.warning("Wayland session detected but Desktop Portal is NOT available. Falling back to default Linux stack.")
+                LOGGER.warning(
+                    "Wayland session detected but Desktop Portal is NOT available."
+                )
+
+            if strategies:
+                return FallbackCaptureStrategy(strategies)
+            LOGGER.warning(
+                "No Wayland capture strategy available. Falling back to default Linux stack."
+            )
 
         return LinuxCaptureStrategy()

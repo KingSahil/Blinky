@@ -357,8 +357,16 @@ def _clean_instruction_candidate(value: str) -> str:
 
 
 def _target_candidates(target: str) -> list[str]:
+    import re as _re
     normalized = _normalize(target)
     candidates = [normalized] if normalized else []
+
+    # Strip keyboard shortcut suffixes like "(Ctrl+Shift+X)" or "(⌘K)" that the AI
+    # copies verbatim from UIA tooltip text but OCR/UIA items don't include.
+    shortcut_stripped = _re.sub(r"\s*\([^)]*(?:ctrl|shift|alt|cmd|key|⌘|⌥|⇧)[^)]*\)", "", normalized, flags=_re.IGNORECASE).strip()
+    if shortcut_stripped and shortcut_stripped != normalized and shortcut_stripped not in candidates:
+        candidates.append(shortcut_stripped)
+
     generic_ui_words = {
         "icon",
         "button",
@@ -374,9 +382,10 @@ def _target_candidates(target: str) -> list[str]:
         "activity",
         "panel",
     }
-    stripped = " ".join(word for word in normalized.split() if word not in generic_ui_words)
-    if stripped and stripped not in candidates:
-        candidates.append(stripped)
+    for base in list(candidates):
+        stripped = " ".join(word for word in base.split() if word not in generic_ui_words)
+        if stripped and stripped not in candidates:
+            candidates.append(stripped)
     return candidates
 
 

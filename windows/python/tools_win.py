@@ -157,7 +157,17 @@ def shortcut_tool_impl(shortcut: str) -> ToolResult:
         return ToolResult(False, "shortcut", "Keyboard shortcuts are currently supported on Windows only.", {"shortcut": shortcut})
 
     try:
-        from pywinauto.keyboard import send_keys
+        from pywinauto.keyboard import CODES, send_keys
+
+        # Register standard virtual media keys dynamically in pywinauto
+        if "VK_MEDIA_PLAY_PAUSE" not in CODES:
+            CODES["VK_MEDIA_PLAY_PAUSE"] = 0xB3
+        if "VK_MEDIA_STOP" not in CODES:
+            CODES["VK_MEDIA_STOP"] = 0xB2
+        if "VK_MEDIA_NEXT_TRACK" not in CODES:
+            CODES["VK_MEDIA_NEXT_TRACK"] = 0xB0
+        if "VK_MEDIA_PREV_TRACK" not in CODES:
+            CODES["VK_MEDIA_PREV_TRACK"] = 0xB1
 
         send_keys(normalized)
         time.sleep(0.5)

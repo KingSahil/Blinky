@@ -13,7 +13,8 @@ import {
   Keyboard,
   SafeAreaView,
   StatusBar,
-  ScrollView
+  ScrollView,
+  Image
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
@@ -22,6 +23,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { usePCWebSocket, ConnectionStatus } from './usePCWebSocket';
 
 const STORAGE_KEY = '@blinky_pc_ip';
+
+let VolumeManager: any = null;
+try {
+  VolumeManager = require('react-native-volume-manager').VolumeManager;
+} catch (e) {
+  console.log('react-native-volume-manager not available in this environment');
+}
 
 const getExpoHostIp = (): string | null => {
   const hostUri =
@@ -40,6 +48,7 @@ const getExpoHostIp = (): string | null => {
 export default function App() {
   const [ipAddress, setIpAddress] = useState('');
   const { status, errorMsg, latestResponse, connect, disconnect, sendCommand, sendQuery } = usePCWebSocket();
+  const isConnected = status === 'connected';
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
 
   const [queryText, setQueryText] = useState('');
@@ -122,6 +131,52 @@ export default function App() {
     loadIp();
   }, []);
 
+  // Listen to physical volume keys when connected
+  useEffect(() => {
+    if (!isConnected || !VolumeManager) return;
+
+    try {
+      // Disable system volume UI on phone when app is active
+      VolumeManager.showNativeVolumeUI({ enabled: false });
+
+      let lastVolume: number | null = null;
+
+      // Get initial volume
+      VolumeManager.getVolume().then((val: any) => {
+        const vol = typeof val === 'object' ? val.volume : val;
+        lastVolume = vol;
+      }).catch(() => {});
+
+      const volumeListener = VolumeManager.addVolumeListener((result: any) => {
+        const currentVolume = result.volume;
+        if (lastVolume !== null) {
+          if (currentVolume > lastVolume) {
+            sendCommand('volume_up');
+          } else if (currentVolume < lastVolume) {
+            sendCommand('volume_down');
+          }
+        }
+        lastVolume = currentVolume;
+
+        // Hack to keep volume off the edges (100% or 0%) so listener always fires on future button presses
+        if (currentVolume >= 0.95) {
+          VolumeManager.setVolume(0.9);
+          lastVolume = 0.9;
+        } else if (currentVolume <= 0.05) {
+          VolumeManager.setVolume(0.1);
+          lastVolume = 0.1;
+        }
+      });
+
+      return () => {
+        volumeListener.remove();
+        VolumeManager.showNativeVolumeUI({ enabled: true });
+      };
+    } catch (err) {
+      console.warn('Failed to initialize volume manager listener:', err);
+    }
+  }, [isConnected, sendCommand]);
+
   // Validate IP address format (simple pattern check)
   const validateIp = (ip: string): boolean => {
     const trimmed = ip.trim();
@@ -172,6 +227,10 @@ export default function App() {
     );
   };
 
+  const triggerVolumeCommand = (command: 'volume_up' | 'volume_down' | 'volume_mute') => {
+    sendCommand(command);
+  };
+
   const getStatusDetails = (currentStatus: ConnectionStatus) => {
     switch (currentStatus) {
       case 'connected':
@@ -206,7 +265,6 @@ export default function App() {
     }
   };
 
-  const isConnected = status === 'connected';
   const statusDetails = getStatusDetails(status);
 
   return (
@@ -368,7 +426,40 @@ export default function App() {
                     <Ionicons name="checkmark-circle" size={18} color="#10B981" style={{ marginRight: 6 }} />
                     <Text style={styles.resultTitle}>Result Details</Text>
                   </View>
-                  {agentResult.response ? (
+                  {agentResult.screenshot_b64 || (agentResult.steps && agentResult.steps.length > 0) ? (
+                    <View>
+                      {agentResult.response ? (
+                        <Text style={[styles.resultParagraph, { marginBottom: 8 }]}>{agentResult.response}</Text>
+                      ) : null}
+
+                      {agentResult.screenshot_b64 ? (
+                        <Image
+                          source={{ uri: `data:image/jpeg;base64,${agentResult.screenshot_b64}` }}
+                          style={styles.screenshotImage}
+                        />
+                      ) : null}
+
+                      {agentResult.steps && agentResult.steps.length > 0 ? (
+                        <View style={styles.stepsContainer}>
+                          {agentResult.steps.map((step: any, index: number) => (
+                            <View key={index} style={styles.stepItem}>
+                              <View style={styles.stepNumberBadge}>
+                                <Text style={styles.stepNumberText}>{step.step || index + 1}</Text>
+                              </View>
+                              <View style={styles.stepContent}>
+                                <Text style={styles.stepInstruction}>{step.instruction}</Text>
+                                {step.target_text ? (
+                                  <View style={styles.stepTargetBadge}>
+                                    <Text style={styles.stepTargetText}>{step.target_text}</Text>
+                                  </View>
+                                ) : null}
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+                      ) : null}
+                    </View>
+                  ) : agentResult.response ? (
                     <Text style={styles.resultParagraph}>{agentResult.response}</Text>
                   ) : (
                     Object.entries(agentResult).map(([key, value]) => {
@@ -386,6 +477,61 @@ export default function App() {
                   )}
                 </View>
               )}
+            </View>
+
+            {/* PC Volume Control Card (Glassmorphic) */}
+            <View style={[styles.card, !isConnected && styles.cardDisabled]}>
+              <Text style={styles.cardTitle}>Audio & Volume</Text>
+              
+              <View style={styles.volumeRow}>
+                {/* Volume Down */}
+                <TouchableOpacity
+                  style={[styles.volumeBtn, !isConnected && styles.btnDisabled]}
+                  disabled={!isConnected}
+                  onPress={() => triggerVolumeCommand('volume_down')}
+                  activeOpacity={0.7}
+                >
+                  <LinearGradient
+                    colors={isConnected ? ['#1E293B', '#0F172A'] : ['#1F1D2B', '#1F1D2B']}
+                    style={styles.volumeBtnGradient}
+                  >
+                    <Ionicons name="volume-low-outline" size={24} color={isConnected ? '#3B82F6' : '#4B5563'} />
+                    <Text style={[styles.volumeBtnText, !isConnected && styles.textDisabled]}>Down</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+
+                {/* Mute */}
+                <TouchableOpacity
+                  style={[styles.volumeBtn, !isConnected && styles.btnDisabled]}
+                  disabled={!isConnected}
+                  onPress={() => triggerVolumeCommand('volume_mute')}
+                  activeOpacity={0.7}
+                >
+                  <LinearGradient
+                    colors={isConnected ? ['#1E293B', '#0F172A'] : ['#1F1D2B', '#1F1D2B']}
+                    style={styles.volumeBtnGradient}
+                  >
+                    <Ionicons name="volume-mute-outline" size={24} color={isConnected ? '#EF4444' : '#4B5563'} />
+                    <Text style={[styles.volumeBtnText, !isConnected && styles.textDisabled]}>Mute</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+
+                {/* Volume Up */}
+                <TouchableOpacity
+                  style={[styles.volumeBtn, !isConnected && styles.btnDisabled]}
+                  disabled={!isConnected}
+                  onPress={() => triggerVolumeCommand('volume_up')}
+                  activeOpacity={0.7}
+                >
+                  <LinearGradient
+                    colors={isConnected ? ['#1E293B', '#0F172A'] : ['#1F1D2B', '#1F1D2B']}
+                    style={styles.volumeBtnGradient}
+                  >
+                    <Ionicons name="volume-high-outline" size={24} color={isConnected ? '#10B981' : '#4B5563'} />
+                    <Text style={[styles.volumeBtnText, !isConnected && styles.textDisabled]}>Up</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
             </View>
 
             {/* PC Controls Card (Glassmorphic) */}
@@ -748,6 +894,92 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     lineHeight: 22,
     fontWeight: '500',
+  },
+  screenshotImage: {
+    width: '100%',
+    height: 220,
+    resizeMode: 'contain',
+    borderRadius: 12,
+    marginVertical: 12,
+    backgroundColor: '#0F172A',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  stepsContainer: {
+    marginTop: 10,
+  },
+  stepItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  stepNumberBadge: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FF5722',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+    marginTop: 2,
+  },
+  stepNumberText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  stepContent: {
+    flex: 1,
+  },
+  stepInstruction: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '500',
+  },
+  stepTargetBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255, 87, 34, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 87, 34, 0.25)',
+  },
+  stepTargetText: {
+    color: '#FF7043',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  volumeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 12,
+  },
+  volumeBtn: {
+    flex: 1,
+    borderRadius: 16,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  volumeBtnGradient: {
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  volumeBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
   },
   footer: {
     textAlign: 'center',

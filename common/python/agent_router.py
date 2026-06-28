@@ -560,6 +560,111 @@ async def handle_request(line):
 
     send_response(request_id, "processing", data={"message": "Analyzing query and routing..."})
 
+    # ── Check for Local Desktop Agent Actions (aligning mobile behavior with PC chatbar) ──
+    try:
+        import platform
+        from main import classify_request, _has_computer_use_action
+        from computer_use import is_web_destination, looks_like_app_name, try_run_agent_action, is_in_app_action
+        from computer_use.tools import play_spotify_track_tool, play_youtube_video_tool, open_app_tool, shortcut_tool
+
+        # Run direct regex action checks FIRST before LLM classification to ensure instant execution
+        # and prevent misclassification of seek/skip commands as music/playback tracks.
+        direct_result = try_run_agent_action(query)
+
+        if direct_result is not None:
+            if direct_result.success or direct_result.tool in {"seek_spotify", "shortcut", "play_spotify", "play_youtube"}:
+                if direct_result.success:
+                    send_response(request_id, "success", data={"response": direct_result.message})
+                else:
+                    send_response(request_id, "error", error={"code": "MEDIA_ACTION_FAILED", "message": direct_result.message, "details": ""})
+                return
+
+        # If regex matched but failed (and is not media-related), clear it to let it fall back
+        direct_result = None
+
+
+        preflight = classify_request(query, None, [], None, agent_mode=True)
+
+        if preflight:
+            intent = preflight.get("intent", "DESKTOP_AUTOMATION")
+            extracted_params = preflight.get("extracted_params", {}) or {}
+            
+            # Match the routing logic in main.py
+            if intent == "OPEN_APP" and _has_computer_use_action(query):
+                intent = "COMPUTER_USE"
+                
+            direct_result = None
+            from computer_use.agent import STOP_SPOTIFY_RE
+            if STOP_SPOTIFY_RE.match(query.strip().rstrip("?.!,;:")):
+                send_response(request_id, "processing", data={"message": "Toggling media playback..."})
+                direct_result = shortcut_tool("media_play_pause")
+            elif intent == "MEDIA_PLAYBACK":
+                from computer_use.agent import handle_media_playback_action
+                direct_result = handle_media_playback_action(extracted_params, query)
+            elif intent == "OPEN_APP":
+                app = extracted_params.get("app_name")
+                if app and not (is_web_destination(app) or is_in_app_action(app) or not looks_like_app_name(app)):
+                    send_response(request_id, "processing", data={"message": f"Opening {app}..."})
+                    direct_result = open_app_tool(app)
+            elif intent == "SYSTEM_SHORTCUT":
+                shortcut = extracted_params.get("shortcut")
+                if shortcut:
+                    send_response(request_id, "processing", data={"message": f"Triggering shortcut {shortcut}..."})
+                    direct_result = shortcut_tool(shortcut)
+            elif intent == "COMPUTER_USE":
+                # Only run the full computer use loop if on Linux
+                if platform.system() == "Linux":
+                    from computer_use.loop import run_computer_use_loop
+                    send_response(request_id, "processing", data={"message": "Running desktop automation loop..."})
+                    loop_result = run_computer_use_loop(query)
+                    if loop_result.get("success"):
+                        send_response(request_id, "success", data={"response": loop_result.get("answer", "Task completed.")})
+                    else:
+                        send_response(request_id, "error", error={"code": "COMPUTER_USE_FAILED", "message": loop_result.get("error", "Task failed"), "details": ""})
+                    return
+                else:
+                    # Windows doesn't support the vision-based loop.py computer use, but try direct agent action first
+                    direct_result = try_run_agent_action(query)
+                    
+            if direct_result is None and intent in {"COMPUTER_USE", "DESKTOP_AUTOMATION"}:
+                # Try regex-based try_run_agent_action fallback
+                direct_result = try_run_agent_action(query)
+                
+            if direct_result is not None and not direct_result.success:
+                # If a direct action was matched but failed (e.g. app not installed),
+                # reset it to None so it can fall back to browser automation.
+                direct_result = None
+
+            if direct_result is not None:
+                send_response(request_id, "success", data={"response": direct_result.message})
+                return
+
+            if intent == "DESKTOP_AUTOMATION":
+                send_response(request_id, "processing", data={"message": "Inspecting PC screen..."})
+                import main
+                from utils.screen_annotator import annotate_screenshot
+                
+                tutor_result = await asyncio.to_thread(main.run, query)
+                screenshot_path = tutor_result.get("screenshot", {}).get("path")
+                steps = tutor_result.get("steps", [])
+                
+                screenshot_b64 = None
+                if screenshot_path and steps:
+                    screenshot_b64 = await asyncio.to_thread(annotate_screenshot, screenshot_path, steps)
+                
+                payload = {
+                    "response": tutor_result.get("summary", ""),
+                    "steps": steps,
+                }
+                if screenshot_b64:
+                    payload["screenshot_b64"] = screenshot_b64
+                    
+                send_response(request_id, "success", data=payload)
+                return
+    except Exception as ex:
+        import logging
+        logging.getLogger("blinky.agent_router").warning(f"Error during local desktop routing check: {ex}")
+
     if is_playwright_health_check_request(query):
         send_response(request_id, "processing", data={"message": "Testing Playwright locally..."})
         ok, message = await run_playwright_health_check()

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::Command;
@@ -124,16 +126,40 @@ async fn handle_client(stream: TcpStream) {
 }
 
 fn find_mcp_binary() -> String {
-    for candidate in &[
-        "/home/fev/.cargo/bin/computer-use-linux",
-        "/usr/local/bin/computer-use-linux",
-        "/usr/bin/computer-use-linux",
-    ] {
-        if std::path::Path::new(candidate).exists() {
-            return candidate.to_string();
+    let binary_name = "computer-use-linux";
+    let local_binary = format!("node_modules/.bin/{binary_name}");
+
+    let mut candidates = vec![std::path::PathBuf::from(&local_binary)];
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir.join(&local_binary));
+        for ancestor in current_dir.ancestors() {
+            candidates.push(ancestor.join(&local_binary));
         }
     }
-    "computer-use-linux".to_string()
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            for ancestor in parent.ancestors() {
+                candidates.push(ancestor.join(&local_binary));
+            }
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        candidates.push(std::path::PathBuf::from(home).join(".cargo/bin/computer-use-linux"));
+    }
+
+    candidates.push(std::path::PathBuf::from("/usr/local/bin/computer-use-linux"));
+    candidates.push(std::path::PathBuf::from("/usr/bin/computer-use-linux"));
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+
+    binary_name.to_string()
 }
 
 fn dirs_runtime_dir() -> std::path::PathBuf {

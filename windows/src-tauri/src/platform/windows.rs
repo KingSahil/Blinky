@@ -390,3 +390,15 @@ pub fn open_url_impl(url: &str) -> Result<(), String> {
         .map_err(|err| format!("Failed to open link in default browser: {err}"))?;
     Ok(())
 }
+
+pub fn execute_volume_up() {
+    let _ = send_keypress(0xAF);
+}
+
+pub fn execute_volume_down() {
+    let _ = send_keypress(0xAE);
+}
+
+pub fn execute_volume_mute() {
+    let _ = send_keypress(0xAD);
+}

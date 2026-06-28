@@ -5,6 +5,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import time
 import webbrowser
@@ -21,6 +22,7 @@ IS_LINUX = platform.system() == "Linux"
 _WAYLAND_VISION_AVAILABLE = False
 try:
     from wayland_vision import capture_window_crop, get_screen_scale
+
     _WAYLAND_VISION_AVAILABLE = True
 except ImportError:
     pass
@@ -68,7 +70,9 @@ def translate_relative_to_absolute(
     result = dict(ocr_coords)
 
     if window_bounds is None:
-        LOGGER.warning("translate_relative_to_absolute: window_bounds is None, returning coords unchanged")
+        LOGGER.warning(
+            "translate_relative_to_absolute: window_bounds is None, returning coords unchanged"
+        )
         return result
 
     dx = _to_int(ocr_coords.get("x", 0))
@@ -76,6 +80,7 @@ def translate_relative_to_absolute(
 
     if _WAYLAND_VISION_AVAILABLE:
         from wayland_vision import translate_to_absolute
+
         abs_x, abs_y = translate_to_absolute(window_bounds, dx, dy, scale)
     else:
         abs_x = int((window_bounds["x"] + dx) * scale)
@@ -158,18 +163,34 @@ WEB_DESTINATION_URLS = {
 
 
 def open_app_tool(app_name: str) -> ToolResult:
-    try:
-        from tools_win import open_app_tool_impl
-        return open_app_tool_impl(app_name)
-    except ImportError:
-        return ToolResult(False, "open_app", "Opening desktop apps is currently supported on Windows only.", {"app_name": app_name})
+    if os.name == "nt":
+        try:
+            from tools_win import open_app_tool_impl
+
+            return open_app_tool_impl(app_name)
+        except ImportError:
+            return _open_app_tool_windows(app_name)
+
+    if platform.system() == "Linux":
+        return open_app_tool_linux(app_name)
+
+    return ToolResult(
+        False,
+        "open_app",
+        "Opening desktop apps is currently supported on Windows and Linux only.",
+        {"app_name": app_name},
+    )
 
 
 def open_web_destination_tool(destination: str) -> ToolResult:
     normalized = normalize_web_destination(destination)
     url = WEB_DESTINATION_URLS.get(normalized)
     if not url and is_domain_like_destination(normalized):
-        url = normalized if re.match(r"^https?://", normalized) else f"https://{normalized}"
+        url = (
+            normalized
+            if re.match(r"^https?://", normalized)
+            else f"https://{normalized}"
+        )
 
     if not url:
         return ToolResult(
@@ -199,40 +220,244 @@ def open_web_destination_tool(destination: str) -> ToolResult:
 def shortcut_tool(shortcut: str) -> ToolResult:
     try:
         from tools_win import shortcut_tool_impl
+
         return shortcut_tool_impl(shortcut)
     except ImportError:
-        return ToolResult(False, "shortcut", "Keyboard shortcuts are currently supported on Windows only.", {"shortcut": shortcut})
+        return ToolResult(
+            False,
+            "shortcut",
+            "Keyboard shortcuts are currently supported on Windows only.",
+            {"shortcut": shortcut},
+        )
 
 
 def find_start_app(app_name: str) -> dict[str, Any] | None:
     try:
         from tools_win import find_start_app_impl
+
         return find_start_app_impl(app_name)
     except ImportError:
-        return None
+        return _find_start_app_windows(app_name)
 
 
 def open_app_via_windows_search(app_name: str) -> ToolResult:
     try:
         from tools_win import open_app_via_windows_search_impl
+
         return open_app_via_windows_search_impl(app_name)
     except ImportError:
-        return ToolResult(False, "open_app", "Windows Search fallback is only available on Windows.", {"app_name": app_name})
+        return _open_app_via_windows_search_windows(app_name)
 
 
 def find_windows_search_result(app_name: str) -> dict[str, Any] | None:
     try:
         from tools_win import find_windows_search_result_impl
+
         return find_windows_search_result_impl(app_name)
     except ImportError:
-        return None
+        return _find_windows_search_result_windows(app_name)
 
 
 def click_item_center(item: dict[str, Any]) -> None:
     from pywinauto.mouse import click
+
     x = int(float(item.get("x") or 0) + float(item.get("width") or 0) / 2)
     y = int(float(item.get("y") or 0) + float(item.get("height") or 0) / 2)
     click(button="left", coords=(x, y))
+
+
+def _open_app_tool_windows(app_name: str) -> ToolResult:
+    app = normalize_app_name(app_name)
+    if not app:
+        return ToolResult(False, "open_app", "I need an app name to open.", {})
+    if os.name != "nt":
+        return ToolResult(
+            False,
+            "open_app",
+            "Opening desktop apps is currently supported on Windows only.",
+            {"app_name": app},
+        )
+
+    protocol = APP_PROTOCOLS.get(app)
+    if protocol:
+        try:
+            os.startfile(protocol)
+            time.sleep(1.0)
+            return ToolResult(
+                True,
+                "open_app",
+                f"Opened {display_app_name(app_name, app)}.",
+                {"app_name": app, "method": "app_protocol", "protocol": protocol},
+            )
+        except Exception as exc:
+            LOGGER.warning("Protocol launch failed for %s: %s", app, exc)
+
+    for path in KNOWN_EXECUTABLE_PATHS.get(app, []):
+        if os.path.exists(path):
+            try:
+                subprocess.Popen([path])
+                time.sleep(0.8)
+                return ToolResult(
+                    True,
+                    "open_app",
+                    f"Opened {display_app_name(app_name, app)}.",
+                    {"app_name": app, "method": "known_path", "path": path},
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "Known path launch failed for %s via %s: %s", app, path, exc
+                )
+
+    start_app = find_start_app(app)
+    if start_app:
+        app_id = str(start_app.get("AppID", "")).strip()
+        name = str(start_app.get("Name", app)).strip() or app
+        try:
+            subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{app_id}"])
+            time.sleep(1.0)
+            return ToolResult(
+                True,
+                "open_app",
+                f"Opened {name}.",
+                {"app_name": name, "method": "start_apps_appid", "app_id": app_id},
+            )
+        except Exception as exc:
+            LOGGER.warning("StartApps launch failed for %s: %s", app, exc)
+
+    alias = SAFE_PROCESS_ALIASES.get(app)
+    if alias:
+        try:
+            subprocess.Popen([alias])
+            time.sleep(0.8)
+            return ToolResult(
+                True,
+                "open_app",
+                f"Opened {app_name.strip()}.",
+                {"app_name": app, "method": "process_alias", "alias": alias},
+            )
+        except Exception as exc:
+            LOGGER.warning("Process alias launch failed for %s: %s", app, exc)
+
+    search_result = open_app_via_windows_search(app)
+    if search_result.success:
+        return search_result
+
+    return ToolResult(
+        False,
+        "open_app",
+        f"I couldn't find {display_app_name(app_name, app)} installed.",
+        {
+            "app_name": app,
+            "attempts": [
+                "protocol",
+                "known_path",
+                "start_apps",
+                "process_alias",
+                "windows_search",
+            ],
+        },
+    )
+
+
+def _find_start_app_windows(app_name: str) -> dict[str, Any] | None:
+    safe_query = normalize_app_name(app_name)
+    if not safe_query:
+        return None
+    command = "\n".join(
+        [
+            "$query = $args[0]",
+            '$apps = Get-StartApps | Where-Object { $_.Name -like "*$query*" } | Select-Object -First 1 Name,AppID',
+            "if ($apps) { $apps | ConvertTo-Json -Compress }",
+        ]
+    )
+    try:
+        completed = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                command,
+                safe_query,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception as exc:
+        LOGGER.warning("Get-StartApps lookup failed: %s", exc)
+        return None
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return None
+    try:
+        parsed = json.loads(completed.stdout)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) and parsed.get("AppID") else None
+
+
+def _open_app_via_windows_search_windows(app_name: str) -> ToolResult:
+    if os.name != "nt":
+        return ToolResult(
+            False,
+            "open_app",
+            "Windows Search fallback is only available on Windows.",
+            {"app_name": app_name},
+        )
+    try:
+        from pywinauto.keyboard import send_keys
+
+        send_keys("{VK_LWIN down}s{VK_LWIN up}")
+        time.sleep(0.4)
+        send_keys(app_name, with_spaces=True)
+        time.sleep(0.8)
+        match = find_windows_search_result(app_name)
+        if match:
+            click_item_center(match)
+            time.sleep(1.0)
+            return ToolResult(
+                True,
+                "open_app",
+                f"Found {display_app_name(app_name, app_name)} in Windows Search and opened it.",
+                {
+                    "app_name": app_name,
+                    "method": "windows_search_screen_match",
+                    "matched_text": match.get("text", ""),
+                },
+            )
+        send_keys("{ENTER}")
+        time.sleep(1.2)
+        return ToolResult(
+            True,
+            "open_app",
+            f"Searched Windows and opened {display_app_name(app_name, app_name)}.",
+            {"app_name": app_name, "method": "windows_search_enter"},
+        )
+    except Exception as exc:
+        LOGGER.warning("Windows Search launch failed for %s: %s", app_name, exc)
+        return ToolResult(
+            False,
+            "open_app",
+            f"I could not open {display_app_name(app_name, app_name)} from Windows Search.",
+            {"app_name": app_name, "method": "windows_search_enter", "error": str(exc)},
+        )
+
+
+def _find_windows_search_result_windows(app_name: str) -> dict[str, Any] | None:
+    try:
+        from uia import get_visible_ui_text
+        from utils.matching import find_best_match
+
+        items = get_visible_ui_text(include_unlabeled=False)
+        return find_best_match(
+            app_name, items, f"Open {app_name} from the Windows Search results."
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "Could not inspect Windows Search results for %s: %s", app_name, exc
+        )
+        return None
 
 
 def normalize_app_name(value: str) -> str:
@@ -255,7 +480,9 @@ def normalize_web_destination(value: str) -> str:
 
 
 def is_domain_like_destination(value: str) -> bool:
-    return bool(re.match(r"^(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+/?$", value))
+    return bool(
+        re.match(r"^(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+/?$", value)
+    )
 
 
 def display_web_destination(value: str) -> str:
@@ -267,13 +494,20 @@ def display_app_name(original: str, normalized: str) -> str:
     display = " ".join(str(original).strip().split())
     cleaned = normalize_app_name(display)
     if cleaned == normalized and display:
-        display = re.sub(r"\b(installed|desktop|app|application|please|on my pc|on pc|in my pc|from my pc|for me)\b", "", display, flags=re.IGNORECASE)
+        display = re.sub(
+            r"\b(installed|desktop|app|application|please|on my pc|on pc|in my pc|from my pc|for me)\b",
+            "",
+            display,
+            flags=re.IGNORECASE,
+        )
         display = " ".join(display.split()).strip()
     return display or normalized.title()
 
 
 def normalize_shortcut(shortcut: str) -> str:
-    parts = [part.strip().lower() for part in re.split(r"[+ ]+", shortcut) if part.strip()]
+    parts = [
+        part.strip().lower() for part in re.split(r"[+ ]+", shortcut) if part.strip()
+    ]
     if not parts:
         return ""
 
@@ -302,6 +536,10 @@ def normalize_shortcut(shortcut: str) -> str:
             "escape": "{ESC}",
             "esc": "{ESC}",
             "space": "{SPACE}",
+            "media_play_pause": "{VK_MEDIA_PLAY_PAUSE}",
+            "media_stop": "{VK_MEDIA_STOP}",
+            "media_next": "{VK_MEDIA_NEXT_TRACK}",
+            "media_prev": "{VK_MEDIA_PREV_TRACK}",
         }.get(key)
         if not special:
             return ""
@@ -314,14 +552,6 @@ def normalize_shortcut(shortcut: str) -> str:
 
 def play_spotify_track_tool(song_name: str) -> ToolResult:
     import asyncio
-
-    if os.name != "nt":
-        return ToolResult(
-            False,
-            "play_spotify",
-            "Playing Spotify tracks via URI is currently supported on Windows only.",
-            {"song_name": song_name},
-        )
 
     try:
         import threading
@@ -340,9 +570,11 @@ def play_spotify_track_tool(song_name: str) -> ToolResult:
             finally:
                 loop.close()
 
+        _emit_tool_status(f"Searching for '{song_name}' on Spotify...")
         thread = threading.Thread(target=run_in_thread)
         thread.start()
         track_uri = future.result()
+
 
         if not track_uri:
             return ToolResult(
@@ -352,12 +584,25 @@ def play_spotify_track_tool(song_name: str) -> ToolResult:
                 {"song_name": song_name},
             )
 
-        os.startfile(track_uri)
+        launch_result = open_spotify_uri(track_uri, song_name=song_name)
+        if not launch_result.success:
+            return ToolResult(
+                False,
+                "play_spotify",
+                f"Found '{song_name}' on Spotify but could not open it: {launch_result.message}",
+                {
+                    "song_name": song_name,
+                    "track_uri": track_uri,
+                    
+                    **launch_result.details,
+                },
+            )
+
         return ToolResult(
             True,
             "play_spotify",
             f"Playing '{song_name}' in Spotify.",
-            {"song_name": song_name, "track_uri": track_uri},
+            {"song_name": song_name, "track_uri": track_uri, **launch_result.details},
         )
     except Exception as e:
         LOGGER.exception("Error in play_spotify_track_tool")
@@ -369,12 +614,322 @@ def play_spotify_track_tool(song_name: str) -> ToolResult:
         )
 
 
+def _emit_tool_status(message: str) -> None:
+    """Emit a processing status line to stdout for the Rust/frontend to pick up."""
+    import sys, json
+    out = sys.__stdout__ if hasattr(sys, "__stdout__") else sys.stdout
+    print(json.dumps({"type": "status", "phase": "agent", "message": message}), flush=True, file=out)
+
+
+def open_spotify_uri(track_uri: str, song_name: str | None = None) -> ToolResult:
+    if os.name == "nt":
+        try:
+            import time
+            import win32gui
+            import win32con
+
+            _emit_tool_status("Opening Spotify track...")
+
+            # Detect if Spotify is currently playing by checking the window title.
+            # When paused, the title is typically "Spotify", "Spotify Premium", etc.
+            # When playing, the title is "Artist - Song".
+            is_playing = False
+            import win32process
+            import psutil
+
+            spotify_pids = set()
+            try:
+                for proc in psutil.process_iter(['pid', 'name']):
+                    if proc.info['name'] and proc.info['name'].lower() == "spotify.exe":
+                        spotify_pids.add(proc.info['pid'])
+            except Exception:
+                pass
+
+            hwnds: list[int] = []
+            def _find_spotify(h: int, extra: list) -> bool:
+                if win32gui.IsWindowVisible(h):
+                    try:
+                        _, pid = win32process.GetWindowThreadProcessId(h)
+                        if pid in spotify_pids:
+                            if win32gui.GetWindowText(h).strip():
+                                extra.append(h)
+                    except Exception:
+                        pass
+                return True
+
+            try:
+                win32gui.EnumWindows(_find_spotify, hwnds)
+            except Exception as e:
+                LOGGER.warning("Could not enumerate windows: %s", e)
+            if hwnds:
+                spotify_hwnd = hwnds[0]
+                title_text = win32gui.GetWindowText(spotify_hwnd).lower().strip()
+                if title_text and title_text not in ("spotify", "spotify premium", "spotify free", "spotify player"):
+                    is_playing = True
+                    LOGGER.info("Spotify is actively playing a song (title='%s'). Pausing first...", title_text)
+
+            # Only pause if a song is actively playing.
+            # This prevents toggling pause to play if Spotify was already paused.
+            if is_playing:
+                shortcut_tool("media_play_pause")
+                time.sleep(0.05)  # 50ms — let Spotify register the pause
+
+            # On Windows, os.startfile with a spotify:track: URI triggers the
+            # Spotify protocol handler which immediately starts playback.
+            os.startfile(track_uri)
+
+            # Bring Spotify window to foreground (best-effort, fast).
+            time.sleep(0.3)
+            if hwnds:
+                try:
+                    hwnd = hwnds[0]
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    win32gui.SetForegroundWindow(hwnd)
+                    LOGGER.info("Brought Spotify window to foreground (hwnd=%d)", hwnd)
+                except Exception as fe:
+                    LOGGER.debug("Could not bring Spotify window to foreground: %s", fe)
+
+            return ToolResult(
+                True,
+                "open_spotify_uri",
+                "Opened Spotify URI. Playback started via URI handler.",
+                {"method": "os.startfile"},
+            )
+        except Exception as exc:
+            return ToolResult(
+                False,
+                "open_spotify_uri",
+                str(exc),
+                {"method": "os.startfile", "error": str(exc)},
+            )
+
+
+
+
+    if platform.system() == "Linux":
+        linux_result = open_spotify_uri_linux(track_uri)
+        if linux_result.success:
+            return linux_result
+        web_url = spotify_uri_to_web_url(track_uri)
+        if web_url and webbrowser.open(web_url):
+            return ToolResult(
+                True,
+                "open_spotify_uri",
+                "Opened Spotify track in the browser because the desktop URI handler was unavailable.",
+                {
+                    "method": "spotify_web_fallback",
+                    "url": web_url,
+                    "linux_error": linux_result.message,
+                },
+            )
+        return linux_result
+
+    web_url = spotify_uri_to_web_url(track_uri)
+    if web_url and webbrowser.open(web_url):
+        return ToolResult(
+            True,
+            "open_spotify_uri",
+            "Opened Spotify track in the browser.",
+            {"method": "webbrowser", "url": web_url},
+        )
+    return ToolResult(
+        False,
+        "open_spotify_uri",
+        "No supported Spotify URI opener found for this OS.",
+        {"track_uri": track_uri},
+    )
+
+
+def seek_spotify_tool(seconds: int, forward: bool) -> ToolResult:
+    if os.name != "nt":
+        return ToolResult(
+            False,
+            "seek_spotify",
+            "Seeking is currently supported on Windows only.",
+            {"seconds": seconds, "forward": forward},
+        )
+
+    try:
+        import win32gui
+        import win32con
+        import time
+        from pywinauto.keyboard import send_keys
+
+        # Find Spotify window by process name (spotify.exe)
+        import win32process
+        import psutil
+
+        spotify_pids = set()
+        try:
+            for proc in psutil.process_iter(['pid', 'name']):
+                if proc.info['name'] and proc.info['name'].lower() == "spotify.exe":
+                    spotify_pids.add(proc.info['pid'])
+        except Exception:
+            pass
+
+        hwnds = []
+        def _find_spotify(h: int, extra: list) -> bool:
+            if win32gui.IsWindowVisible(h):
+                try:
+                    # Only match windows owned by spotify.exe process
+                    _, pid = win32process.GetWindowThreadProcessId(h)
+                    if pid in spotify_pids:
+                        # Require a non-empty window title to isolate the main window
+                        if win32gui.GetWindowText(h).strip():
+                            extra.append(h)
+                except Exception:
+                    pass
+            return True
+
+        try:
+            win32gui.EnumWindows(_find_spotify, hwnds)
+        except Exception as e:
+            LOGGER.warning("Could not enumerate windows: %s", e)
+        if not hwnds:
+            return ToolResult(
+                False,
+                "seek_spotify",
+                "Spotify window not found. Make sure Spotify is open.",
+                {"seconds": seconds, "forward": forward},
+            )
+
+        spotify_hwnd = hwnds[0]
+        prev_hwnd = win32gui.GetForegroundWindow()
+
+        # Bring Spotify to foreground
+        win32gui.ShowWindow(spotify_hwnd, win32con.SW_RESTORE)
+        win32gui.SetForegroundWindow(spotify_hwnd)
+        time.sleep(0.1)  # small pause to ensure focus is registered
+
+        # Calculate number of keypresses (each shift+right/left is 5 seconds)
+        presses = max(1, int(round(seconds / 5.0)))
+        key_str = "+{RIGHT}" if forward else "+{LEFT}"
+
+        _emit_tool_status(f"Seeking {'forward' if forward else 'backward'} by {seconds} seconds...")
+
+        for _ in range(presses):
+            send_keys(key_str)
+            time.sleep(0.05)
+
+        # Restore previous focused window
+        if prev_hwnd and prev_hwnd != spotify_hwnd:
+            try:
+                win32gui.SetForegroundWindow(prev_hwnd)
+            except Exception:
+                pass
+
+        direction = "forward" if forward else "backward"
+        return ToolResult(
+            True,
+            "seek_spotify",
+            f"Sought {direction} by {seconds} seconds in Spotify.",
+            {"seconds": seconds, "forward": forward, "presses": presses},
+        )
+    except Exception as e:
+        LOGGER.exception("Error in seek_spotify_tool")
+        return ToolResult(
+            False,
+            "seek_spotify",
+            f"Failed to seek: {str(e)}",
+            {"seconds": seconds, "forward": forward},
+        )
+
+
+
+def open_spotify_uri_linux(track_uri: str) -> ToolResult:
+    opener_commands = [
+        ["xdg-open", track_uri],
+        ["gio", "open", track_uri],
+        ["kde-open5", track_uri],
+        ["kde-open", track_uri],
+    ]
+    errors: list[str] = []
+    for cmd in opener_commands:
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            completed = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+            if completed.returncode == 0:
+                return ToolResult(
+                    True,
+                    "open_spotify_uri",
+                    "Opened Spotify URI.",
+                    {"method": cmd[0], "track_uri": track_uri},
+                )
+            errors.append(
+                f"{cmd[0]} exited {completed.returncode}: {(completed.stderr or '').strip()}"
+            )
+        except Exception as exc:
+            errors.append(f"{cmd[0]} failed: {exc}")
+
+    app_commands = [
+        ["spotify", f"--uri={track_uri}"],
+        ["flatpak", "run", "com.spotify.Client", f"--uri={track_uri}"],
+        ["snap", "run", "spotify", track_uri],
+    ]
+    for cmd in app_commands:
+        if not shutil.which(cmd[0]):
+            continue
+        try:
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return ToolResult(
+                True,
+                "open_spotify_uri",
+                "Launched Spotify with URI.",
+                {"method": " ".join(cmd[:3]), "track_uri": track_uri},
+            )
+        except Exception as exc:
+            errors.append(f"{' '.join(cmd[:3])} failed: {exc}")
+
+    message = (
+        "; ".join(errors)
+        if errors
+        else "No Linux Spotify opener command was available."
+    )
+    return ToolResult(
+        False, "open_spotify_uri", message, {"track_uri": track_uri, "errors": errors}
+    )
+
+
+def spotify_uri_to_web_url(track_uri: str) -> str | None:
+    match = re.fullmatch(r"spotify:track:([a-zA-Z0-9]+)", track_uri.strip())
+    if not match:
+        return None
+    return f"https://open.spotify.com/track/{match.group(1)}"
+
+
 def clean_song_query(query: str) -> str:
     query = " ".join(query.strip().split())
 
     strip_words = {
-        "any", "latest", "new", "newest", "some", "a", "the", "recent", "trending",
-        "popular", "song", "track", "music", "artist", "singer", "playlist", "by"
+        "any",
+        "latest",
+        "new",
+        "newest",
+        "some",
+        "a",
+        "the",
+        "recent",
+        "trending",
+        "popular",
+        "song",
+        "track",
+        "music",
+        "artist",
+        "singer",
+        "playlist",
+        "by",
     }
 
     words = query.split()
@@ -393,39 +948,58 @@ def clean_song_query(query: str) -> str:
 
 
 async def resolve_spotify_track_uri(song_name: str) -> str | None:
-    from wil.searxng_client import SearXNGClient
-    from wil.http_fetcher import fetch_html
+    import asyncio
     import urllib.parse
+
+    from wil.http_fetcher import fetch_html
+    from wil.searxng_client import SearXNGClient
 
     cleaned_query = clean_song_query(song_name)
     LOGGER.info(f"Resolving Spotify URI for '{song_name}' (cleaned: '{cleaned_query}')")
 
     queries = [
         f"site:open.spotify.com/track {cleaned_query}",
-        f"{cleaned_query} spotify track"
+        f"{cleaned_query} spotify track",
     ]
 
+    def _extract_track_id(results: list) -> str | None:
+        for r in results:
+            url = r.get("url", "")
+            if "open.spotify.com/track/" in url:
+                m = re.search(r"track/([a-zA-Z0-9]+)", url)
+                if m:
+                    return f"spotify:track:{m.group(1)}"
+        return None
+
+    # Run both SearXNG queries in parallel for speed
     try:
         client = SearXNGClient()
-        for q in queries:
-            results = await client.search_category(q, category="general", limit=5)
-            for r in results:
-                url = r.get("url", "")
-                if "open.spotify.com/track/" in url:
-                    match = re.search(r"track/([a-zA-Z0-9]+)", url)
-                    if match:
-                        return f"spotify:track:{match.group(1)}"
+        all_results = await asyncio.gather(
+            client.search_category(queries[0], category="general", limit=5),
+            client.search_category(queries[1], category="general", limit=5),
+            return_exceptions=True,
+        )
+        for batch in all_results:
+            if isinstance(batch, Exception):
+                continue
+            track_id = _extract_track_id(batch)
+            if track_id:
+                return track_id
     except Exception as e:
         LOGGER.warning(f"SearXNG Spotify search failed: {e}")
 
+    # DDG fallback — still sequential but only reached if SearXNG fails entirely
     for q in queries:
         try:
             query_encoded = urllib.parse.quote(q)
             url = f"https://html.duckduckgo.com/html/?q={query_encoded}"
             html = await fetch_html(url)
+
             if html:
                 unquoted_html = urllib.parse.unquote(html)
-                matches = re.findall(r"open\.spotify\.com/track/([a-zA-Z0-9]+)", unquoted_html)
+                matches = re.findall(
+                    r"open\.spotify\.com/track/([a-zA-Z0-9]+)", unquoted_html
+                )
                 if matches:
                     return f"spotify:track:{matches[0]}"
         except Exception as e:
@@ -493,20 +1067,20 @@ def extract_channel_from_query(query: str) -> str | None:
     cleaned = re.sub(r"^(play\s+youtube|play)\s+", "", cleaned).strip()
     # Remove "on youtube" or "in youtube" if present
     cleaned = re.sub(r"\b(on|in)\s+youtube\b", "", cleaned).strip()
-    
+
     # Try patterns
     p1 = re.search(r"\blatest\s+video\s+of\s+(.+)", cleaned)
     if p1:
         return p1.group(1).strip()
-        
+
     p2 = re.search(r"(.+?)'s?\s+latest\s+video\b", cleaned)
     if p2:
         return p2.group(1).strip()
-        
+
     p3 = re.search(r"\blatest\s+(.+?)\s+video\b", cleaned)
     if p3:
         return p3.group(1).strip()
-        
+
     # Check if the query starts with "latest video" or similar but didn't match patterns
     # or just contains "latest video" and a name, e.g. "mythpat latest video"
     if "latest video" in cleaned:
@@ -514,27 +1088,30 @@ def extract_channel_from_query(query: str) -> str | None:
         temp = re.sub(r"\b(of|from|by|'s)\b", "", temp).strip()
         if temp:
             return temp
-            
+
     return None
 
 
 async def resolve_youtube_video_url(video_query: str) -> str | None:
-    from wil.searxng_client import SearXNGClient
-    from wil.http_fetcher import fetch_html
     import urllib.parse
+
+    from wil.http_fetcher import fetch_html
+    from wil.searxng_client import SearXNGClient
 
     # Try to extract a channel name if it's a "latest video" query
     channel_name = extract_channel_from_query(video_query)
-    
+
     if channel_name:
         LOGGER.info(f"Detected latest video query for channel: '{channel_name}'")
         # 1. Search for the channel on SearXNG
         client = SearXNGClient()
         search_query = f"{channel_name} youtube channel"
         channel_url = None
-        
+
         try:
-            results = await client.search_category(search_query, category="general", limit=5)
+            results = await client.search_category(
+                search_query, category="general", limit=5
+            )
             for r in results:
                 url = r.get("url", "")
                 if "youtube.com/" in url:
@@ -558,7 +1135,7 @@ async def resolve_youtube_video_url(video_query: str) -> str | None:
                         r"youtube\.com/channel/([a-zA-Z0-9_-]+)",
                         r"youtube\.com/(@[a-zA-Z0-9_\.-]+)",
                         r"youtube\.com/c/([a-zA-Z0-9_-]+)",
-                        r"youtube\.com/user/([a-zA-Z0-9_-]+)"
+                        r"youtube\.com/user/([a-zA-Z0-9_-]+)",
                     ]
                     for pattern in patterns:
                         matches = re.findall(pattern, unquoted_html)
@@ -574,13 +1151,15 @@ async def resolve_youtube_video_url(video_query: str) -> str | None:
                                 channel_url = f"https://www.youtube.com/user/{m}"
                             break
             except Exception as e:
-                LOGGER.warning(f"DuckDuckGo fallback search for channel '{channel_name}' failed: {e}")
+                LOGGER.warning(
+                    f"DuckDuckGo fallback search for channel '{channel_name}' failed: {e}"
+                )
 
         # 2. Construct videos page URL and fetch
         if channel_url:
             parsed = urllib.parse.urlparse(channel_url)
             path_parts = [p for p in parsed.path.split("/") if p]
-            
+
             base_path = ""
             if path_parts:
                 if path_parts[0] in ["channel", "user", "c"]:
@@ -588,11 +1167,11 @@ async def resolve_youtube_video_url(video_query: str) -> str | None:
                         base_path = f"/{path_parts[0]}/{path_parts[1]}"
                 elif path_parts[0].startswith("@"):
                     base_path = f"/{path_parts[0]}"
-            
+
             if base_path:
                 videos_url = f"https://www.youtube.com{base_path}/videos"
                 LOGGER.info(f"Resolved videos page URL: {videos_url}")
-                
+
                 try:
                     html = await fetch_html(videos_url)
                     if html:
@@ -600,17 +1179,25 @@ async def resolve_youtube_video_url(video_query: str) -> str | None:
                         match = re.search(pattern, html, re.DOTALL)
                         if match:
                             data = json.loads(match.group(1))
-                            
+
                             # Recursively find lockupViewModel objects to get the first video
                             videos = []
+
                             def search_videos(item):
                                 if isinstance(item, dict):
                                     if "lockupViewModel" in item:
                                         vm = item["lockupViewModel"]
                                         content_id = vm.get("contentId", "")
-                                        on_tap = vm.get("rendererContext", {}).get("commandContext", {}).get("onTap", {}).get("innertubeCommand", {})
+                                        on_tap = (
+                                            vm.get("rendererContext", {})
+                                            .get("commandContext", {})
+                                            .get("onTap", {})
+                                            .get("innertubeCommand", {})
+                                        )
                                         watch_endpoint = on_tap.get("watchEndpoint", {})
-                                        video_id = watch_endpoint.get("videoId", content_id)
+                                        video_id = watch_endpoint.get(
+                                            "videoId", content_id
+                                        )
                                         if video_id:
                                             videos.append(video_id)
                                     for k, v in item.items():
@@ -618,12 +1205,14 @@ async def resolve_youtube_video_url(video_query: str) -> str | None:
                                 elif isinstance(item, list):
                                     for sub in item:
                                         search_videos(sub)
-                                        
+
                             search_videos(data)
                             if videos:
                                 latest_video_id = videos[0]
                                 LOGGER.info(f"Found latest video ID: {latest_video_id}")
-                                return f"https://www.youtube.com/watch?v={latest_video_id}"
+                                return (
+                                    f"https://www.youtube.com/watch?v={latest_video_id}"
+                                )
                 except Exception as e:
                     LOGGER.warning(f"Failed to fetch or parse channel videos page: {e}")
 
@@ -631,7 +1220,9 @@ async def resolve_youtube_video_url(video_query: str) -> str | None:
     LOGGER.info(f"Performing general YouTube video search for query: '{video_query}'")
     try:
         client = SearXNGClient()
-        results = await client.search_category(f"site:youtube.com/watch {video_query}", category="general", limit=5)
+        results = await client.search_category(
+            f"site:youtube.com/watch {video_query}", category="general", limit=5
+        )
         for r in results:
             url = r.get("url", "")
             if "youtube.com/watch?v=" in url or "youtu.be/" in url:
@@ -646,14 +1237,18 @@ async def resolve_youtube_video_url(video_query: str) -> str | None:
         html = await fetch_html(url)
         if html:
             unquoted_html = urllib.parse.unquote(html)
-            matches = re.findall(r"youtube\.com/watch\?v=([a-zA-Z0-9_-]+)", unquoted_html)
+            matches = re.findall(
+                r"youtube\.com/watch\?v=([a-zA-Z0-9_-]+)", unquoted_html
+            )
             if matches:
                 return f"https://www.youtube.com/watch?v={matches[0]}"
             matches_be = re.findall(r"youtu\.be/([a-zA-Z0-9_-]+)", unquoted_html)
             if matches_be:
                 return f"https://www.youtube.com/watch?v={matches_be[0]}"
     except Exception as e:
-        LOGGER.warning(f"DuckDuckGo fallback search for video '{video_query}' failed: {e}")
+        LOGGER.warning(
+            f"DuckDuckGo fallback search for video '{video_query}' failed: {e}"
+        )
 
     return None
 
@@ -671,8 +1266,25 @@ def _check_grim_available() -> bool:
         return _GRIM_AVAILABLE
     try:
         import subprocess
-        result = subprocess.run(["which", "grim"], capture_output=True, timeout=2)
-        _GRIM_AVAILABLE = result.returncode == 0
+        import tempfile
+
+        which_result = subprocess.run(["which", "grim"], capture_output=True, timeout=2)
+        if which_result.returncode != 0:
+            _GRIM_AVAILABLE = False
+            return _GRIM_AVAILABLE
+
+        # grim may be installed but unusable on non-wlroots compositors like KDE/KWin.
+        # Verify it can actually capture before selecting the grim screenshot path.
+        test_path = Path(tempfile.gettempdir()) / f"blinky_grim_probe_{os.getpid()}.png"
+        result = subprocess.run(
+            ["grim", str(test_path)], capture_output=True, timeout=5
+        )
+        _GRIM_AVAILABLE = (
+            result.returncode == 0
+            and test_path.exists()
+            and test_path.stat().st_size > 0
+        )
+        test_path.unlink(missing_ok=True)
     except Exception:
         _GRIM_AVAILABLE = False
     return _GRIM_AVAILABLE
@@ -681,7 +1293,9 @@ def _check_grim_available() -> bool:
 def _detect_desktop_session() -> str:
     session = os.environ.get("XDG_SESSION_TYPE", "").lower().strip()
     grim_ok = _check_grim_available()
-    LOGGER.info("Desktop session: XDG_SESSION_TYPE=%s, grim_available=%s", session, grim_ok)
+    LOGGER.info(
+        "Desktop session: XDG_SESSION_TYPE=%s, grim_available=%s", session, grim_ok
+    )
     if session == "wayland" and grim_ok:
         return "wayland"
     return "x11"
@@ -690,6 +1304,7 @@ def _detect_desktop_session() -> str:
 def _get_linux_mcp():
     try:
         from computer_use.linux_mcp import get_client
+
         return get_client()
     except Exception as e:
         LOGGER.warning("Linux MCP client unavailable: %s", e)
@@ -698,10 +1313,16 @@ def _get_linux_mcp():
 
 def list_windows_tool() -> ToolResult:
     if not IS_LINUX:
-        return ToolResult(False, "list_windows", "Desktop window listing is supported on Linux only.", {})
+        return ToolResult(
+            False,
+            "list_windows",
+            "Desktop window listing is supported on Linux only.",
+            {},
+        )
 
     try:
         from computer_use.linux_mcp import list_windows
+
         windows = list_windows()
         return ToolResult(
             True,
@@ -716,10 +1337,16 @@ def list_windows_tool() -> ToolResult:
 
 def get_app_state_tool(app_name: str) -> ToolResult:
     if not IS_LINUX:
-        return ToolResult(False, "get_app_state", "Desktop app inspection is supported on Linux only.", {"app_name": app_name})
+        return ToolResult(
+            False,
+            "get_app_state",
+            "Desktop app inspection is supported on Linux only.",
+            {"app_name": app_name},
+        )
 
     try:
         from computer_use.linux_mcp import get_app_state
+
         state = get_app_state(app_name=app_name, max_nodes=200, max_depth=4)
         elements = state.get("elements", [])
         windows = state.get("windows", [])
@@ -748,16 +1375,21 @@ def click_element_tool(
     y: int | None = None,
 ) -> ToolResult:
     if not IS_LINUX:
-        return ToolResult(False, "click_element", "Desktop clicking is supported on Linux only.", {})
+        return ToolResult(
+            False, "click_element", "Desktop clicking is supported on Linux only.", {}
+        )
 
     try:
-        from computer_use.linux_mcp import click_element, _check_ok
+        from computer_use.linux_mcp import _check_ok, click_element
+
         result = click_element(index=index, role=role, name=name, x=x, y=y)
         ok = _check_ok(result)
         return ToolResult(
             ok,
             "click_element",
-            "Click executed successfully." if ok else f"Click failed: {result.get('message', 'unknown')}",
+            "Click executed successfully."
+            if ok
+            else f"Click failed: {result.get('message', 'unknown')}",
             {"result": result, "index": index, "role": role, "name": name},
         )
     except Exception as e:
@@ -767,17 +1399,41 @@ def click_element_tool(
 
 def type_text_tool(text: str, target_app: str | None = None) -> ToolResult:
     if not IS_LINUX:
-        return ToolResult(False, "type_text", "Desktop typing is supported on Linux only.", {"text": text})
+        return ToolResult(
+            False,
+            "type_text",
+            "Desktop typing is supported on Linux only.",
+            {"text": text},
+        )
 
     try:
-        from computer_use.linux_mcp import type_text, _check_ok
+        from computer_use.linux_mcp import _check_ok, type_text
+
         result = type_text(text, target_app=target_app)
         ok = _check_ok(result)
+        launch_result = None
+        if (
+            not ok
+            and target_app
+            and "target window could not be focused" in str(result.get("message", ""))
+        ):
+            launch_result = open_app_tool_linux(target_app)
+            if launch_result.success:
+                time.sleep(1.0)
+                result = type_text(text, target_app=target_app)
+                ok = _check_ok(result)
         return ToolResult(
             ok,
             "type_text",
-            f"Typed '{text}' successfully." if ok else f"Failed to type: {result.get('message', 'unknown')}",
-            {"text": text, "target_app": target_app, "result": result},
+            f"Typed '{text}' successfully."
+            if ok
+            else f"Failed to type: {result.get('message', 'unknown')}",
+            {
+                "text": text,
+                "target_app": target_app,
+                "result": result,
+                "launch_result": launch_result.to_dict() if launch_result else None,
+            },
         )
     except Exception as e:
         LOGGER.exception("type_text_tool failed")
@@ -786,17 +1442,41 @@ def type_text_tool(text: str, target_app: str | None = None) -> ToolResult:
 
 def press_key_tool(key: str, target_app: str | None = None) -> ToolResult:
     if not IS_LINUX:
-        return ToolResult(False, "press_key", "Desktop key presses are supported on Linux only.", {"key": key})
+        return ToolResult(
+            False,
+            "press_key",
+            "Desktop key presses are supported on Linux only.",
+            {"key": key},
+        )
 
     try:
-        from computer_use.linux_mcp import press_key, _check_ok
+        from computer_use.linux_mcp import _check_ok, press_key
+
         result = press_key(key, target_app=target_app)
         ok = _check_ok(result)
+        launch_result = None
+        if (
+            not ok
+            and target_app
+            and "target window could not be focused" in str(result.get("message", ""))
+        ):
+            launch_result = open_app_tool_linux(target_app)
+            if launch_result.success:
+                time.sleep(1.0)
+                result = press_key(key, target_app=target_app)
+                ok = _check_ok(result)
         return ToolResult(
             ok,
             "press_key",
-            f"Pressed '{key}' successfully." if ok else f"Failed to press '{key}': {result.get('message', 'unknown')}",
-            {"key": key, "target_app": target_app, "result": result},
+            f"Pressed '{key}' successfully."
+            if ok
+            else f"Failed to press '{key}': {result.get('message', 'unknown')}",
+            {
+                "key": key,
+                "target_app": target_app,
+                "result": result,
+                "launch_result": launch_result.to_dict() if launch_result else None,
+            },
         )
     except Exception as e:
         LOGGER.exception("press_key_tool failed")
@@ -818,15 +1498,21 @@ def mouse_tool(
       scroll  — scroll at current position (scroll_amount: positive=down, negative=up)
     """
     if not IS_LINUX:
-        return ToolResult(False, "mouse", "Mouse control is supported on Linux only.", {})
+        return ToolResult(
+            False, "mouse", "Mouse control is supported on Linux only.", {}
+        )
 
     try:
         import subprocess
 
         # Normalize common action aliases
         _action_aliases = {
-            "left_click": "click", "right_click": "click", "double_click": "click",
-            "leftclick": "click", "rightclick": "click", "middle_click": "click",
+            "left_click": "click",
+            "right_click": "click",
+            "double_click": "click",
+            "leftclick": "click",
+            "rightclick": "click",
+            "middle_click": "click",
         }
         if action in _action_aliases:
             if action in ("right_click", "rightclick"):
@@ -837,17 +1523,31 @@ def mouse_tool(
 
         if action == "move":
             if x is None or y is None:
-                return ToolResult(False, "mouse", "move requires x and y coordinates.", {})
+                return ToolResult(
+                    False, "mouse", "move requires x and y coordinates.", {}
+                )
             vm = VirtualMouse.get_instance()
             vm.move(int(x), int(y))
             LOGGER.info("Mouse move: x=%d, y=%d (via VirtualMouse)", int(x), int(y))
-            return ToolResult(True, "mouse", f"Mouse moved to ({int(x)}, {int(y)}).", {"x": x, "y": y, "action": "move"})
+            return ToolResult(
+                True,
+                "mouse",
+                f"Mouse moved to ({int(x)}, {int(y)}).",
+                {"x": x, "y": y, "action": "move"},
+            )
 
         elif action == "click":
             if x is None or y is None:
-                return ToolResult(False, "mouse", "click requires x and y coordinates.", {})
+                return ToolResult(
+                    False, "mouse", "click requires x and y coordinates.", {}
+                )
             _virtual_mouse_click(int(x), int(y), button)
-            return ToolResult(True, "mouse", f"Clicked ({int(x)}, {int(y)}) with {button}.", {"x": x, "y": y, "button": button, "action": "click"})
+            return ToolResult(
+                True,
+                "mouse",
+                f"Clicked ({int(x)}, {int(y)}) with {button}.",
+                {"x": x, "y": y, "button": button, "action": "click"},
+            )
 
             # ── Visual click indicator: crosshair pattern ──
             _show_click_crosshair(int(x), int(y))
@@ -856,25 +1556,44 @@ def mouse_tool(
             try:
                 raw_path = capture_screenshot()
                 if raw_path:
-                    label = f"click_{int(x)}x{int(y)}_{int(time.time()*1000)}"
+                    label = f"click_{int(x)}x{int(y)}_{int(time.time() * 1000)}"
                     debug_path = str(Path(raw_path).parent / f"debug_{label}.png")
                     os.rename(raw_path, debug_path)
                     LOGGER.info("Click debug screenshot: %s", debug_path)
             except Exception:
                 pass
 
-            return ToolResult(True, "mouse", f"Clicked ({int(x)}, {int(y)}) with {button}.", {"x": x, "y": y, "button": button, "action": "click"})
+            return ToolResult(
+                True,
+                "mouse",
+                f"Clicked ({int(x)}, {int(y)}) with {button}.",
+                {"x": x, "y": y, "button": button, "action": "click"},
+            )
 
         elif action == "scroll":
             direction = "scroll-down" if scroll_amount > 0 else "scroll-up"
             amount = abs(scroll_amount)
             vm = VirtualMouse.get_instance()
             vm.scroll(scroll_amount)
-            LOGGER.info("Mouse scroll: direction=%s, amount=%d (via VirtualMouse)", direction, amount)
-            return ToolResult(True, "mouse", f"Scrolled {direction} by {amount}.", {"direction": direction, "amount": amount, "action": "scroll"})
+            LOGGER.info(
+                "Mouse scroll: direction=%s, amount=%d (via VirtualMouse)",
+                direction,
+                amount,
+            )
+            return ToolResult(
+                True,
+                "mouse",
+                f"Scrolled {direction} by {amount}.",
+                {"direction": direction, "amount": amount, "action": "scroll"},
+            )
 
         else:
-            return ToolResult(False, "mouse", f"Unknown mouse action: {action}. Use move, click, or scroll.", {})
+            return ToolResult(
+                False,
+                "mouse",
+                f"Unknown mouse action: {action}. Use move, click, or scroll.",
+                {},
+            )
 
     except Exception as e:
         LOGGER.exception("mouse_tool failed")
@@ -890,7 +1609,14 @@ def _show_click_crosshair(x: int, y: int) -> None:
     try:
         vm = VirtualMouse.get_instance()
         pattern = [
-            (18,0), (0,0), (-18,0), (0,0), (0,18), (0,0), (0,-18), (0,0),
+            (18, 0),
+            (0, 0),
+            (-18, 0),
+            (0, 0),
+            (0, 18),
+            (0, 0),
+            (0, -18),
+            (0, 0),
         ]
         for dx, dy in pattern:
             vm.move(x + dx, y + dy)
@@ -906,9 +1632,12 @@ def _screenshot_temp_dir() -> Path:
         d.chmod(0o700)
     except Exception:
         import tempfile
+
         temp_dir = Path(tempfile.gettempdir()) / "blinky_grim"
         temp_dir.mkdir(parents=True, exist_ok=True)
-        LOGGER.warning("Falling back to tempfile.gettempdir for grim captures: %s", temp_dir)
+        LOGGER.warning(
+            "Falling back to tempfile.gettempdir for grim captures: %s", temp_dir
+        )
         return temp_dir
     return d
 
@@ -930,7 +1659,9 @@ def _cleanup_old_screenshots(max_age: int = 300, max_files: int = 50) -> None:
 
 def screenshot_tool() -> ToolResult:
     if not IS_LINUX:
-        return ToolResult(False, "screenshot", "Desktop screenshots are supported on Linux only.", {})
+        return ToolResult(
+            False, "screenshot", "Desktop screenshots are supported on Linux only.", {}
+        )
 
     global _SCREENSHOT_COUNTER
     _SCREENSHOT_COUNTER += 1
@@ -943,6 +1674,7 @@ def screenshot_tool() -> ToolResult:
 
     try:
         from ai.client import has_vision_capability
+
         has_vision = has_vision_capability()
     except Exception:
         pass
@@ -951,16 +1683,25 @@ def screenshot_tool() -> ToolResult:
     if mode == "legacy":
         try:
             from computer_use.linux_mcp import screenshot
+
             result = screenshot()
             # Decode base64 image data from MCP response
             content_list = result.get("content", []) if isinstance(result, dict) else []
             decoded_path = None
             for item in content_list:
-                if isinstance(item, dict) and item.get("type") == "image" and item.get("data"):
+                if (
+                    isinstance(item, dict)
+                    and item.get("type") == "image"
+                    and item.get("data")
+                ):
                     import base64 as b64
+
                     _cleanup_old_screenshots()
                     ts = int(time.time() * 1000)
-                    out_path = _screenshot_temp_dir() / f"mcp_legacy_{ts}_{_SCREENSHOT_COUNTER}.png"
+                    out_path = (
+                        _screenshot_temp_dir()
+                        / f"mcp_legacy_{ts}_{_SCREENSHOT_COUNTER}.png"
+                    )
                     out_path.write_bytes(b64.b64decode(item["data"]))
                     decoded_path = str(out_path.resolve())
                     break
@@ -968,8 +1709,13 @@ def screenshot_tool() -> ToolResult:
                 True,
                 "screenshot",
                 "Screenshot captured.",
-                {"result": result, "ocr_items": [], "window_bounds": None, "has_vision": has_vision,
-                 "image_path": decoded_path},
+                {
+                    "result": result,
+                    "ocr_items": [],
+                    "window_bounds": None,
+                    "has_vision": has_vision,
+                    "image_path": decoded_path,
+                },
             )
         except Exception as e:
             LOGGER.exception("screenshot_tool failed")
@@ -978,13 +1724,18 @@ def screenshot_tool() -> ToolResult:
     # OCR mode: grim + OCR
     try:
         session = _detect_desktop_session()
-        LOGGER.info("Screenshot OCR mode: session=%s, wayland_vision=%s", session, _WAYLAND_VISION_AVAILABLE)
+        LOGGER.info(
+            "Screenshot OCR mode: session=%s, wayland_vision=%s",
+            session,
+            _WAYLAND_VISION_AVAILABLE,
+        )
         bounds: dict | None = None
 
         # Get focused window bounds
         if session == "wayland" and _WAYLAND_VISION_AVAILABLE:
             try:
                 from computer_use.linux_mcp import get_focused_window_bounds
+
                 bounds = get_focused_window_bounds()
                 LOGGER.info("Focused window bounds: %s", bounds)
             except Exception as e:
@@ -998,9 +1749,16 @@ def screenshot_tool() -> ToolResult:
             y_v = bounds.get("y")
             w_v = bounds.get("width")
             h_v = bounds.get("height")
-            if (isinstance(x_v, (int, float)) and isinstance(y_v, (int, float))
-                    and isinstance(w_v, (int, float)) and isinstance(h_v, (int, float))
-                    and int(x_v) >= 0 and int(y_v) >= 0 and int(w_v) > 0 and int(h_v) > 0):
+            if (
+                isinstance(x_v, (int, float))
+                and isinstance(y_v, (int, float))
+                and isinstance(w_v, (int, float))
+                and isinstance(h_v, (int, float))
+                and int(x_v) >= 0
+                and int(y_v) >= 0
+                and int(w_v) > 0
+                and int(h_v) > 0
+            ):
                 valid_bounds = True
         LOGGER.info("Bounds validation: valid_bounds=%s", valid_bounds)
 
@@ -1010,18 +1768,26 @@ def screenshot_tool() -> ToolResult:
             try:
                 _cleanup_old_screenshots()
                 ts = int(time.time() * 1000)
-                out_path = _screenshot_temp_dir() / f"grim_{ts}_{_SCREENSHOT_COUNTER}.png"
+                out_path = (
+                    _screenshot_temp_dir() / f"grim_{ts}_{_SCREENSHOT_COUNTER}.png"
+                )
                 _ = capture_window_crop(
-                    {"x": int(bounds["x"]), "y": int(bounds["y"]),
-                     "width": int(bounds["width"]), "height": int(bounds["height"])},
+                    {
+                        "x": int(bounds["x"]),
+                        "y": int(bounds["y"]),
+                        "width": int(bounds["width"]),
+                        "height": int(bounds["height"]),
+                    },
                     str(out_path),
                 )
                 if out_path.exists():
                     image_path = str(out_path.resolve())
                     grim_succeeded = True
                     window_bounds = {
-                        "x": int(bounds["x"]), "y": int(bounds["y"]),
-                        "width": int(bounds["width"]), "height": int(bounds["height"]),
+                        "x": int(bounds["x"]),
+                        "y": int(bounds["y"]),
+                        "width": int(bounds["width"]),
+                        "height": int(bounds["height"]),
                     }
             except Exception:
                 LOGGER.exception("grim capture failed, falling back to MCP screenshot")
@@ -1032,13 +1798,17 @@ def screenshot_tool() -> ToolResult:
             try:
                 _cleanup_old_screenshots()
                 ts = int(time.time() * 1000)
-                out_path = _screenshot_temp_dir() / f"grim_{ts}_{_SCREENSHOT_COUNTER}.png"
+                out_path = (
+                    _screenshot_temp_dir() / f"grim_{ts}_{_SCREENSHOT_COUNTER}.png"
+                )
                 import subprocess as _sp
+
                 _sp.run(["grim", str(out_path)], capture_output=True, timeout=10)
                 if out_path.exists():
                     image_path = str(out_path.resolve())
                     grim_succeeded = True
                     from PIL import Image
+
                     with Image.open(image_path) as _img:
                         _fw, _fh = _img.size
                     window_bounds = {"x": 0, "y": 0, "width": _fw, "height": _fh}
@@ -1052,27 +1822,86 @@ def screenshot_tool() -> ToolResult:
             global _GRIM_AVAILABLE
             _GRIM_AVAILABLE = False
 
-        # Fallback to MCP screenshot if grim failed
+        # KDE/Plasma fallback: grim is wlroots-oriented and often fails on KWin.
+        if not grim_succeeded and shutil.which("spectacle"):
+            try:
+                _cleanup_old_screenshots()
+                ts = int(time.time() * 1000)
+                out_path = (
+                    _screenshot_temp_dir() / f"spectacle_{ts}_{_SCREENSHOT_COUNTER}.png"
+                )
+                import subprocess as _sp
+
+                result = _sp.run(
+                    [
+                        "spectacle",
+                        "--background",
+                        "--nonotify",
+                        "--fullscreen",
+                        "--output",
+                        str(out_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if (
+                    result.returncode == 0
+                    and out_path.exists()
+                    and out_path.stat().st_size > 0
+                ):
+                    image_path = str(out_path.resolve())
+                    grim_succeeded = True
+                    from PIL import Image
+
+                    with Image.open(image_path) as _img:
+                        _fw, _fh = _img.size
+                    window_bounds = {"x": 0, "y": 0, "width": _fw, "height": _fh}
+                    LOGGER.info("Spectacle capture: %s (%dx%d)", image_path, _fw, _fh)
+                else:
+                    LOGGER.warning(
+                        "Spectacle capture failed: %s",
+                        (result.stderr or result.stdout or "").strip(),
+                    )
+            except Exception:
+                LOGGER.exception("Spectacle capture failed")
+
+        # Fallback to MCP screenshot if grim/spectacle failed
         if not grim_succeeded:
-            LOGGER.info("Grim capture not used, falling back to MCP screenshot")
+            LOGGER.info(
+                "Local screenshot tools not used, falling back to MCP screenshot"
+            )
             try:
                 from computer_use.linux_mcp import screenshot
+
                 result = screenshot()
-                LOGGER.info("MCP screenshot result keys: %s", list(result.keys()) if isinstance(result, dict) else type(result))
+                LOGGER.info(
+                    "MCP screenshot result keys: %s",
+                    list(result.keys()) if isinstance(result, dict) else type(result),
+                )
 
                 # MCP returns {"content": [{"type": "image", "data": "<base64>"}], "isError": false}
-                content_list = result.get("content", []) if isinstance(result, dict) else []
+                content_list = (
+                    result.get("content", []) if isinstance(result, dict) else []
+                )
                 img_data = None
                 for item in content_list:
-                    if isinstance(item, dict) and item.get("type") == "image" and item.get("data"):
+                    if (
+                        isinstance(item, dict)
+                        and item.get("type") == "image"
+                        and item.get("data")
+                    ):
                         img_data = item["data"]
                         break
 
                 if img_data:
                     import base64 as b64
+
                     _cleanup_old_screenshots()
                     ts = int(time.time() * 1000)
-                    out_path = _screenshot_temp_dir() / f"mcp_{ts}_{_SCREENSHOT_COUNTER}.png"
+                    out_path = (
+                        _screenshot_temp_dir() / f"mcp_{ts}_{_SCREENSHOT_COUNTER}.png"
+                    )
                     out_path.write_bytes(b64.b64decode(img_data))
                     image_path = str(out_path.resolve())
                     LOGGER.info("MCP screenshot saved to: %s", image_path)
@@ -1081,29 +1910,44 @@ def screenshot_tool() -> ToolResult:
             except Exception:
                 LOGGER.exception("MCP screenshot fallback failed")
                 return ToolResult(
-                    True, "screenshot", "Screenshot captured (no image available).",
-                    {"ocr_items": [], "window_bounds": None, "has_vision": has_vision,
-                     "image_path": None},
+                    True,
+                    "screenshot",
+                    "Screenshot captured (no image available).",
+                    {
+                        "ocr_items": [],
+                        "window_bounds": None,
+                        "has_vision": has_vision,
+                        "image_path": None,
+                    },
                 )
 
         # Run OCR on captured image
         if image_path:
             try:
                 from ocr import extract_visible_text
+
                 items = extract_visible_text(Path(image_path))
                 if items:
                     ocr_items = items
                     # Scale OCR coords from image space to screen space if mismatch
                     try:
                         from PIL import Image
+
                         with Image.open(image_path) as _img:
                             img_w, img_h = _img.size
                         sw, sh = _get_screen_dimensions()
                         if (img_w, img_h) != (sw, sh) and img_w > 0 and img_h > 0:
                             sx = sw / img_w
                             sy = sh / img_h
-                            LOGGER.info("Scaling OCR coords: img=%dx%d screen=%dx%d factors=(%.4f, %.4f)",
-                                       img_w, img_h, sw, sh, sx, sy)
+                            LOGGER.info(
+                                "Scaling OCR coords: img=%dx%d screen=%dx%d factors=(%.4f, %.4f)",
+                                img_w,
+                                img_h,
+                                sw,
+                                sh,
+                                sx,
+                                sy,
+                            )
                             for item in ocr_items:
                                 if "x" in item:
                                     item["x"] = int(item["x"] * sx)
@@ -1134,15 +1978,27 @@ def screenshot_tool() -> ToolResult:
     except Exception as e:
         LOGGER.exception("screenshot_tool(ocr) failed")
         return ToolResult(
-            True, "screenshot", f"Screenshot captured (OCR unavailable: {e})",
-            {"ocr_items": [], "window_bounds": None, "has_vision": has_vision, "image_path": None},
+            True,
+            "screenshot",
+            f"Screenshot captured (OCR unavailable: {e})",
+            {
+                "ocr_items": [],
+                "window_bounds": None,
+                "has_vision": has_vision,
+                "image_path": None,
+            },
         )
 
 
 def open_app_tool_linux(app_name: str) -> ToolResult:
     """Open a desktop application by name on Linux using subprocess.Popen."""
     if not IS_LINUX:
-        return ToolResult(False, "open_app", "App launching is supported on Linux only.", {"app_name": app_name})
+        return ToolResult(
+            False,
+            "open_app",
+            "App launching is supported on Linux only.",
+            {"app_name": app_name},
+        )
 
     app_lower = app_name.lower().strip()
     binary_map = {
@@ -1169,6 +2025,7 @@ def open_app_tool_linux(app_name: str) -> ToolResult:
         "visual studio code": "code",
         "discord": "flatpak run org.equicord.equibop",
         "equibop": "flatpak run org.equicord.equibop",
+        "spotify": "spotify",
     }
 
     binary = binary_map.get(app_lower, app_lower.replace(" ", "-"))
@@ -1176,7 +2033,9 @@ def open_app_tool_linux(app_name: str) -> ToolResult:
     try:
         env = os.environ.copy()
         env.setdefault("GTK_A11Y", "atspi")
-        env.setdefault("AT_SPI_BUS_ADDRESS", f"unix:path=/run/user/{os.getuid()}/at-spi/bus_0")
+        env.setdefault(
+            "AT_SPI_BUS_ADDRESS", f"unix:path=/run/user/{os.getuid()}/at-spi/bus_0"
+        )
         cmd = binary.split() if " " in binary else [binary]
         subprocess.Popen(
             cmd,
@@ -1186,6 +2045,7 @@ def open_app_tool_linux(app_name: str) -> ToolResult:
             env=env,
         )
         import time
+
         time.sleep(0.8)
         return ToolResult(
             True,
@@ -1210,9 +2070,19 @@ def open_app_tool_linux(app_name: str) -> ToolResult:
                 {"app_name": app_name},
             )
         except Exception as e:
-            return ToolResult(False, "open_app", f"Cannot find or launch '{app_name}': {e}", {"app_name": app_name})
+            return ToolResult(
+                False,
+                "open_app",
+                f"Cannot find or launch '{app_name}': {e}",
+                {"app_name": app_name},
+            )
     except Exception as e:
-        return ToolResult(False, "open_app", f"Failed to launch '{app_name}': {e}", {"app_name": app_name})
+        return ToolResult(
+            False,
+            "open_app",
+            f"Failed to launch '{app_name}': {e}",
+            {"app_name": app_name},
+        )
 
 
 def capture_screenshot() -> str | None:
@@ -1223,14 +2093,22 @@ def capture_screenshot() -> str | None:
     """
     try:
         from computer_use.linux_mcp import screenshot
+
         result = screenshot()
         content_list = result.get("content", []) if isinstance(result, dict) else []
         for item in content_list:
-            if isinstance(item, dict) and item.get("type") == "image" and item.get("data"):
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "image"
+                and item.get("data")
+            ):
                 import base64 as b64
+
                 _cleanup_old_screenshots()
                 ts = int(time.time() * 1000)
-                out_path = _screenshot_temp_dir() / f"capture_{ts}_{_SCREENSHOT_COUNTER}.png"
+                out_path = (
+                    _screenshot_temp_dir() / f"capture_{ts}_{_SCREENSHOT_COUNTER}.png"
+                )
                 out_path.write_bytes(b64.b64decode(item["data"]))
                 return str(out_path.resolve())
         # Try grim if MCP didn't return image data
@@ -1239,13 +2117,21 @@ def capture_screenshot() -> str | None:
             try:
                 from computer_use.linux_mcp import get_focused_window_bounds
                 from wayland_vision import capture_window_crop
+
                 bounds = get_focused_window_bounds()
                 if bounds and isinstance(bounds, dict):
                     ts = int(time.time() * 1000)
-                    out_path = _screenshot_temp_dir() / f"capture_grim_{ts}_{_SCREENSHOT_COUNTER}.png"
+                    out_path = (
+                        _screenshot_temp_dir()
+                        / f"capture_grim_{ts}_{_SCREENSHOT_COUNTER}.png"
+                    )
                     _ = capture_window_crop(
-                        {"x": int(bounds["x"]), "y": int(bounds["y"]),
-                         "width": int(bounds["width"]), "height": int(bounds["height"])},
+                        {
+                            "x": int(bounds["x"]),
+                            "y": int(bounds["y"]),
+                            "width": int(bounds["width"]),
+                            "height": int(bounds["height"]),
+                        },
                         str(out_path),
                     )
                     if out_path.exists():
@@ -1307,14 +2193,36 @@ class VirtualMouse:
 
     def _create_device(self) -> None:
         try:
-            from evdev import UInput, ecodes as e, AbsInfo
+            from evdev import AbsInfo, UInput
+            from evdev import ecodes as e
+
             self.e = e
             self._ui = UInput(
                 {
                     e.EV_KEY: [e.BTN_LEFT, e.BTN_RIGHT, e.BTN_MIDDLE],
                     e.EV_ABS: [
-                        (e.ABS_X, AbsInfo(value=self.screen_w // 2, min=0, max=self.screen_w, fuzz=0, flat=0, resolution=100)),
-                        (e.ABS_Y, AbsInfo(value=self.screen_h // 2, min=0, max=self.screen_h, fuzz=0, flat=0, resolution=100)),
+                        (
+                            e.ABS_X,
+                            AbsInfo(
+                                value=self.screen_w // 2,
+                                min=0,
+                                max=self.screen_w,
+                                fuzz=0,
+                                flat=0,
+                                resolution=100,
+                            ),
+                        ),
+                        (
+                            e.ABS_Y,
+                            AbsInfo(
+                                value=self.screen_h // 2,
+                                min=0,
+                                max=self.screen_h,
+                                fuzz=0,
+                                flat=0,
+                                resolution=100,
+                            ),
+                        ),
                     ],
                     e.EV_REL: [e.REL_WHEEL, e.REL_HWHEEL],
                 },
@@ -1351,7 +2259,11 @@ class VirtualMouse:
         try:
             self.move(x, y)
             time.sleep(0.03)
-            btn_map = {"left": self.e.BTN_LEFT, "right": self.e.BTN_RIGHT, "middle": self.e.BTN_MIDDLE}
+            btn_map = {
+                "left": self.e.BTN_LEFT,
+                "right": self.e.BTN_RIGHT,
+                "middle": self.e.BTN_MIDDLE,
+            }
             btn = btn_map.get(button, self.e.BTN_LEFT)
             self._ui.write(self.e.EV_KEY, btn, 1)
             self._ui.syn()
@@ -1386,13 +2298,18 @@ def _get_screen_dimensions() -> tuple[int, int]:
     # 1. xrandr gives actual display resolution (most reliable)
     try:
         import subprocess
+
         r = subprocess.run(["xrandr"], capture_output=True, text=True, timeout=5)
         if r.returncode == 0:
             for line in r.stdout.splitlines():
                 if " connected " in line and "x" in line:
                     parts = line.strip().split()
                     for p in parts:
-                        if "x" in p and "+" in p and p.replace("x", "").replace("+", "").isdigit():
+                        if (
+                            "x" in p
+                            and "+" in p
+                            and p.replace("x", "").replace("+", "").isdigit()
+                        ):
                             res = p.split("+")[0]
                             w_str, h_str = res.split("x", 1)
                             return int(w_str), int(h_str)
@@ -1402,6 +2319,7 @@ def _get_screen_dimensions() -> tuple[int, int]:
     # 2. Fallback: focused window bounds
     try:
         from computer_use.linux_mcp import get_focused_window_bounds
+
         bounds = get_focused_window_bounds()
         if bounds and isinstance(bounds, dict):
             w = bounds.get("width") or 1920
@@ -1435,12 +2353,18 @@ def _virtual_mouse_click(x: int, y: int, button: str = "left") -> None:
         LOGGER.warning("VirtualMouse click failed, falling back to MCP bridge")
         try:
             from computer_use.linux_mcp import get_client
+
             mcp_client = get_client()
             mcp_client.call_tool("click", {"x": x, "y": y})
         except Exception as mcp_err:
             LOGGER.warning("MCP bridge fallback also failed: %s", mcp_err)
             import subprocess as _sp
-            _sp.run(["ydotool", "mousemove", "--absolute", "-x", str(x), "-y", str(y)], capture_output=True, timeout=5)
+
+            _sp.run(
+                ["ydotool", "mousemove", "--absolute", "-x", str(x), "-y", str(y)],
+                capture_output=True,
+                timeout=5,
+            )
             time.sleep(0.05)
             _sp.run(["ydotool", "click", "0xC0"], capture_output=True, timeout=5)
 
@@ -1451,7 +2375,7 @@ def _virtual_mouse_click(x: int, y: int, button: str = "left") -> None:
     try:
         raw_path = capture_screenshot()
         if raw_path:
-            label = f"click_{x}x{y}_{int(time.time()*1000)}"
+            label = f"click_{x}x{y}_{int(time.time() * 1000)}"
             debug_path = str(Path(raw_path).parent / f"debug_{label}.png")
             os.rename(raw_path, debug_path)
             LOGGER.info("Click debug screenshot: %s", debug_path)

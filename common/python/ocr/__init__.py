@@ -99,6 +99,16 @@ def get_ocr_provider() -> OcrProvider:
     if _provider is not None:
         return _provider
 
+    mode = os.environ.get("BLINKY_SCREENSHOT_MODE", "ocr").strip().lower()
+    if mode == "omniparser":
+        try:
+            from ocr.omniparser import OmniParserProvider
+            _provider = OmniParserProvider()
+            LOGGER.info("Using OmniParserProvider for OCR/Screen parsing")
+            return _provider
+        except Exception as exc:
+            LOGGER.error("Failed to initialize OmniParserProvider, falling back to standard OCR: %s", exc)
+
     if os.name == "nt":
         try:
             from winrt_ocr import WinRtOcrProvider

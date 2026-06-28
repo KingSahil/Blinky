@@ -635,6 +635,7 @@ fn start_whatsapp_backend(app: &AppHandle) {
     }
 }
 
+#[allow(dead_code)]
 fn start_ydotoold() {
     #[cfg(target_os = "linux")]
     std::thread::spawn(|| {
