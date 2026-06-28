@@ -133,7 +133,8 @@ Select if your project participates in any track:
 
 - [x] **Expo Track** – Built using Expo  
 - [ ] **Neo4j Track** – Uses AuraDB as primary database  
-- [ ] **Base44 Track** – Prototype/Final Product built using Base44  
+- [ ] **Base44 Track** – Prototype/Final Product built using Base44
+- [x] **Sarvam Track** - TTS & STT
 
 Provide a short note on how you used the partner technology:
 
