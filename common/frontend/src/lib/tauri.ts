@@ -85,3 +85,10 @@ export async function logDebugMessage(message: string): Promise<void> {
   return invoke('log_debug_message', { message });
 }
 
+export async function pauseWakeWord(): Promise<void> {
+  return invoke('pause_wake_word');
+}
+
+export async function resumeWakeWord(): Promise<void> {
+  return invoke('resume_wake_word');
+}

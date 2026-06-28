@@ -650,7 +650,38 @@ fn start_ydotoold() {
     });
 }
 
+struct WakeWordState {
+    stdin: std::sync::Mutex<Option<std::process::ChildStdin>>,
+}
+
+#[tauri::command]
+fn pause_wake_word(state: tauri::State<'_, WakeWordState>) -> Result<(), String> {
+    if let Ok(mut lock) = state.stdin.lock() {
+        if let Some(stdin) = lock.as_mut() {
+            let _ = stdin.write_all(b"PAUSE\n");
+            let _ = stdin.flush();
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn resume_wake_word(state: tauri::State<'_, WakeWordState>) -> Result<(), String> {
+    if let Ok(mut lock) = state.stdin.lock() {
+        if let Some(stdin) = lock.as_mut() {
+            let _ = stdin.write_all(b"RESUME\n");
+            let _ = stdin.flush();
+        }
+    }
+    Ok(())
+}
+
 fn start_wake_word_detector(app: &AppHandle) {
+    let state = WakeWordState {
+        stdin: std::sync::Mutex::new(None),
+    };
+    app.manage(state);
+
     let root = match project_root(app) {
         Ok(root) => root,
         Err(err) => {
@@ -677,7 +708,7 @@ fn start_wake_word_detector(app: &AppHandle) {
         .current_dir(&root)
         .env("PYTHONWARNINGS", "ignore")
         .envs(read_env_file(&root))
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit());
 
@@ -688,6 +719,13 @@ fn start_wake_word_detector(app: &AppHandle) {
 
     match command.spawn() {
         Ok(mut child) => {
+            if let Some(stdin) = child.stdin.take() {
+                if let Some(state) = app.try_state::<WakeWordState>() {
+                    if let Ok(mut lock) = state.stdin.lock() {
+                        *lock = Some(stdin);
+                    }
+                }
+            }
             let stdout = child.stdout.take().expect("Failed to open stdout");
             let app_handle = app.clone();
             
@@ -735,7 +773,9 @@ pub fn run() {
             resize_and_move_command_window,
             get_settings,
             save_settings,
-            log_debug_message
+            log_debug_message,
+            pause_wake_word,
+            resume_wake_word
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {

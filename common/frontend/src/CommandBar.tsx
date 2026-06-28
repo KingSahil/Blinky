@@ -13,7 +13,7 @@ import {
   shouldCompleteStepOnHighlightClick,
   shouldShowSummaryBubble,
 } from './lib/guidance';
-import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickScreenPoint, openUrl, typeText, scrollAtPoint } from './lib/tauri';
+import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord } from './lib/tauri';
 import { linkCitationMarkers } from './lib/citations';
 import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvamErrorMessage } from './lib/tts';
 import { SarvamSpeechToTextStream, SarvamTextToSpeechStream } from './lib/sarvamStream';
@@ -688,6 +688,9 @@ export function CommandBar() {
             activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== source);
             if (activeSourcesRef.current.length === 0 && ttsTextQueueRef.current.length === 0 && !isFetchingTtsRef.current) {
               setIsTtsActive(false);
+              if (!isRunning && !isRecording) {
+                void resumeWakeWord();
+              }
             }
             resolve();
           };
@@ -702,6 +705,9 @@ export function CommandBar() {
     
     if (ttsTextQueueRef.current.length === 0 && !isFetchingTtsRef.current) {
       setIsSpeaking(false);
+      if (!isRunning && !isRecording) {
+        void resumeWakeWord();
+      }
     }
   };
 
@@ -731,6 +737,9 @@ export function CommandBar() {
   const speakResponse = () => {
     if (isSpeaking) {
       stopSpeaking();
+      if (!isRunning && !isRecording) {
+        void resumeWakeWord();
+      }
     } else if (status && status !== defaultStatus) {
       void speakText(status, steps, { includeSteps: !showGuideCompletionSummary });
     }
@@ -771,10 +780,12 @@ export function CommandBar() {
         void executeTutor(transcript, true);
       } else {
         setStatus('Could not hear anything clearly.');
+        void resumeWakeWord();
       }
     } catch (err: any) {
       console.error('STT error:', err);
       setStatus(`Transcription failed: ${err.message}`);
+      void resumeWakeWord();
     }
   };
 
@@ -783,6 +794,7 @@ export function CommandBar() {
       setStatus('Please set your Sarvam AI API Key in settings first.');
       return;
     }
+    void pauseWakeWord();
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -864,6 +876,7 @@ export function CommandBar() {
     } catch (err) {
       console.error('Error starting audio recording:', err);
       setStatus('Microphone access failed or was denied.');
+      void resumeWakeWord();
     }
   };
 
@@ -933,6 +946,7 @@ export function CommandBar() {
       setSteps([]);
     }
     stopSpeaking();
+    void pauseWakeWord();
     
     const currentWindow = getCurrentWindow();
     try {
@@ -1090,6 +1104,9 @@ export function CommandBar() {
       cancelledRunIdsRef.current.delete(runId);
       if (runIdRef.current === runId) {
         setIsRunning(false);
+        if (!shouldSpeakAfter && !isRecording && !isSpeaking) {
+          void resumeWakeWord();
+        }
       }
     }
   }
@@ -1103,6 +1120,9 @@ export function CommandBar() {
     setSteps([]);
     void hideOverlay();
     stopSpeaking();
+    if (!isRecording) {
+      void resumeWakeWord();
+    }
   }
 
   // Load settings on mount
@@ -1194,6 +1214,9 @@ export function CommandBar() {
   useEffect(() => {
     const focusInput = () => {
       stopSpeaking();
+      if (!isRunning && !isRecording) {
+        void resumeWakeWord();
+      }
       window.setTimeout(() => inputRef.current?.focus(), 60);
     };
     focusInput();
@@ -1207,6 +1230,7 @@ export function CommandBar() {
   useEffect(() => {
     const unlisten = listen('blinky://wake-word-detected', () => {
       if (!mediaRecorderRef.current) {
+        void pauseWakeWord();
         if (!audioCtxRef.current) {
           audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
         } else if (audioCtxRef.current.state === 'suspended') {

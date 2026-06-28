@@ -2,6 +2,7 @@ import argparse
 import time
 import sys
 import os
+import threading
 
 # Configure ONNX Runtime and OpenMP to be passive and single-threaded to prevent CPU starvation of Ollama
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -16,7 +17,24 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-def start_wake_word_detector(model_name="hey_blinky.onnx"):
+is_paused = False
+
+def stdin_listener():
+    global is_paused
+    try:
+        for line in sys.stdin:
+            command = line.strip().upper()
+            if command == "PAUSE":
+                is_paused = True
+                print("[WakeWord] Paused via stdin", file=sys.stderr, flush=True)
+            elif command == "RESUME":
+                is_paused = False
+                print("[WakeWord] Resumed via stdin", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"Error in stdin listener: {e}", file=sys.stderr)
+
+def start_wake_word_detector(model_name="hey_blinky.onnx", threshold=0.25):
+    threading.Thread(target=stdin_listener, daemon=True).start()
     try:
         # pyrefly: ignore [missing-import]
         import sounddevice as sd
@@ -54,6 +72,8 @@ def start_wake_word_detector(model_name="hey_blinky.onnx"):
         def audio_callback(indata, frames, time_info, status):
             if status:
                 print(status, file=sys.stderr)
+            if is_paused:
+                return
             # The indata is float32 between -1 and 1. OpenWakeWord expects int16.
             audio_data = (indata[:, 0] * 32767).astype(np.int16)
             audio_queue.append(audio_data)
@@ -64,19 +84,42 @@ def start_wake_word_detector(model_name="hey_blinky.onnx"):
         # OpenWakeWord expects 16kHz, 1-channel, 16-bit PCM audio
         stream = sd.InputStream(samplerate=16000, blocksize=1280, channels=1, dtype='float32', callback=audio_callback)
         
+        last_debug_time = time.time()
+
         with stream:
             while True:
+                if is_paused:
+                    if len(audio_queue) > 0:
+                        audio_queue.clear()
+                    time.sleep(0.1)
+                    continue
+
                 if len(audio_queue) > 0:
                     audio_chunk = audio_queue.pop(0)
                     
-                    prediction = owwModel.predict(audio_chunk)
+                    # Gate 1: Calculate Root Mean Square (RMS) energy to check if there is actual sound/speech
+                    rms = np.sqrt(np.mean(audio_chunk.astype(np.float32)**2))
                     
-                    for mdl, score in prediction.items():
-                        if score > 0.5:  # Threshold can be adjusted
-                            print("WAKE_WORD_DETECTED", flush=True)
-                            owwModel.reset()
-                            audio_queue.clear()
-                            time.sleep(2)
+                    # Run prediction if rms > 50.0 (lowered threshold to ensure speech is caught)
+                    score = 0.0
+                    if rms > 50.0:
+                        prediction = owwModel.predict(audio_chunk)
+                        
+                        for mdl, s in prediction.items():
+                            score = s
+                            if s > threshold:
+                                print(f"[WakeWord] DETECTED! Score: {s:.4f} | RMS: {rms:.1f}", file=sys.stderr, flush=True)
+                                print("WAKE_WORD_DETECTED", flush=True)
+                                owwModel.reset()
+                                audio_queue.clear()
+                                time.sleep(2)
+                                break
+                    
+                    # Print live debugging messages to sys.stderr every 1 second
+                    now = time.time()
+                    if now - last_debug_time >= 1.0:
+                        print(f"[WakeWord Debug] Mic RMS: {rms:.1f} | Score: {score:.4f} (Threshold: {threshold}) | Queue Backlog: {len(audio_queue)}", file=sys.stderr, flush=True)
+                        last_debug_time = now
                     
                     # Yield CPU briefly so Ollama and Tauri threads are not starved
                     time.sleep(0.005)
@@ -92,6 +135,7 @@ def start_wake_word_detector(model_name="hey_blinky.onnx"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OpenWakeWord Detector")
     parser.add_argument("--model", type=str, default="hey_blinky.onnx", help="Built-in model name or path to a custom .onnx model (e.g., hey_blinky.onnx)")
+    parser.add_argument("--threshold", type=float, default=0.25, help="Confidence threshold for wake word detection")
     args = parser.parse_args()
     
-    start_wake_word_detector(args.model)
+    start_wake_word_detector(args.model, args.threshold)

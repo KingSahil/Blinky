@@ -96,7 +96,7 @@ def test_model_loading():
         print(f"[FAIL] Model loading or inference failed: {e}")
         return False
 
-def test_live_detection(duration=30):
+def test_live_detection(duration=30, threshold=0.25):
     print_header("Test 4: Live Wake Word Detection & Score Monitoring")
     import sounddevice as sd
     import numpy as np
@@ -111,7 +111,7 @@ def test_live_detection(duration=30):
         audio_data = (indata[:, 0] * 32767).astype(np.int16)
         audio_queue.append(audio_data)
         
-    print(f"Listening for 'Hey Blinky' for {duration} seconds... (Speak now to see real-time scores)")
+    print(f"Listening for 'Hey Blinky' for {duration} seconds... (Speak now to see real-time scores, Threshold: {threshold})")
     print(f"{'Time':<8} | {'Audio RMS':<12} | {'Wake Word Score':<18} | {'Status'}")
     print("-" * 65)
     
@@ -127,11 +127,11 @@ def test_live_detection(duration=30):
                     score = list(prediction.values())[0] if prediction else 0.0
                     elapsed = int(time.time() - start_time)
                     
-                    status_text = "!!! WAKE_WORD_DETECTED !!!" if score > 0.5 else ("Hearing speech..." if rms > 500 else "Listening...")
+                    status_text = f"!!! WAKE_WORD_DETECTED (>{threshold}) !!!" if score > threshold else ("Hearing speech..." if rms > 500 else "Listening...")
                     
                     # Print real-time updates
                     print(f"{elapsed:>5}s  | {rms:>10.1f}   | {score:>16.4f}   | {status_text}", flush=True)
-                    if score > 0.5:
+                    if score > threshold:
                         oww_model.reset()
                         time.sleep(1) # Pause briefly after detection
                 else:
@@ -144,6 +144,7 @@ def test_live_detection(duration=30):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Wake Word Diagnostic Tests")
     parser.add_argument("--live-duration", type=int, default=30, help="Duration in seconds for the live listening test.")
+    parser.add_argument("--threshold", type=float, default=0.25, help="Confidence threshold for wake word detection")
     args = parser.parse_args()
     
     deps_ok = test_dependencies()
@@ -162,4 +163,4 @@ if __name__ == "__main__":
         sys.exit(1)
         
     print("\nAll pre-checks passed! Starting live detection test...")
-    test_live_detection(args.live_duration)
+    test_live_detection(args.live_duration, args.threshold)
