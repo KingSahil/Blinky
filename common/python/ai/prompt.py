@@ -126,9 +126,6 @@ def build_prompt(
         # Skip if the item matches any Blinky UI text
         if any(term in text for term in blinky_ignored_terms):
             continue
-        # Skip Blinky's input text box content matching the user's question
-        if item.get("source") != "uia" and cleaned_question and text == cleaned_question:
-            continue
         filtered_items.append(item)
 
     ref_items = assign_screen_element_refs(filtered_items)
