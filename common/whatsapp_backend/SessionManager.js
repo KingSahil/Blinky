@@ -10,6 +10,8 @@ const sessions = new Map();
 
 let _io = null;
 
+const DEFAULT_SESSION_ID = 'blinky-default-session';
+
 async function loadSessionRegistry() {
     try {
         const raw = await readFile(SESSIONS_FILE, 'utf-8');
@@ -25,18 +27,15 @@ async function saveSessionRegistry(registry) {
 }
 
 /**
- * Called once at server startup — restores any previously registered sessions.
+ * Called once at server startup — restores ONLY the default session.
  */
 export async function initSessionManager(io) {
     _io = io;
-    const registry = await loadSessionRegistry();
-    for (const [sessionId] of Object.entries(registry)) {
-        console.log(`[SessionManager] Restoring session ${sessionId.slice(0, 8)}...`);
-        const session = new WaUserSession(sessionId, _io);
-        sessions.set(sessionId, session);
-        await session.start();
-    }
-    console.log(`[SessionManager] ${sessions.size} session(s) restored.`);
+    console.log(`[SessionManager] Restoring only default session ${DEFAULT_SESSION_ID.slice(0, 8)}...`);
+    const session = new WaUserSession(DEFAULT_SESSION_ID, _io);
+    sessions.set(DEFAULT_SESSION_ID, session);
+    await session.start();
+    console.log(`[SessionManager] Default session restored.`);
 }
 
 /**

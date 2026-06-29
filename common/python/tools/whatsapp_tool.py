@@ -72,7 +72,7 @@ def run_chats(base_url):
     """List recent WhatsApp chats."""
     headers = get_headers()
     try:
-        resp = requests.get(f"{base_url}/api/chats", headers=headers, timeout=10.0)
+        resp = requests.get(f"{base_url}/api/chats", headers=headers, timeout=30.0)
         if resp.status_code == 200:
             return {"chats": resp.json()}
         else:

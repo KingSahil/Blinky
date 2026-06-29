@@ -27,6 +27,8 @@ app.use(cors({
 }));
 app.use(express.json());
 
+const DEFAULT_SESSION_ID = 'blinky-default-session';
+
 // Serve built frontend
 const frontendDistCandidates = [
     path.join(__dirname, 'frontend', 'dist'),
@@ -47,10 +49,7 @@ function isValidSessionId(id) {
 }
 
 function requireSession(req, res, next) {
-    const sessionId = req.headers['x-session-id'];
-    if (!isValidSessionId(sessionId)) {
-        return res.status(400).json({ error: 'Missing or invalid X-Session-Id header' });
-    }
+    const sessionId = DEFAULT_SESSION_ID;
     const session = getSession(sessionId);
     if (!session) {
         return res.status(404).json({ error: 'Session not found. Reconnect to create one.' });
@@ -62,41 +61,38 @@ function requireSession(req, res, next) {
 // ── REST API ──────────────────────────────────────────────────────────────────
 
 // Register / ensure a session exists.
-// Called by the frontend on first load with a client-generated UUID.
+// Always use the default session ID to share between app and web
 app.post('/api/sessions', async (req, res) => {
-    try {
-        const { sessionId } = req.body || {};
-        if (!isValidSessionId(sessionId)) {
-            return res.status(400).json({ error: 'Invalid sessionId' });
-        }
-        const { isNew } = await getOrCreateSession(sessionId);
-        res.json({ sessionId, isNew });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+  try {
+    const sessionId = DEFAULT_SESSION_ID;
+    const { isNew } = await getOrCreateSession(sessionId);
+    res.json({ sessionId, isNew });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/status', requireSession, (req, res) => {
-    res.json(req.session.getStatus());
+  res.json(req.session.getStatus());
 });
 
 app.get('/api/chats', requireSession, async (req, res) => {
-    try {
-        const { status } = req.session.getStatus();
-        if (status !== 'connected') return res.status(503).json({ error: 'WhatsApp not connected yet' });
-        const chats = await req.session.client.getChats();
-        const payload = chats.slice(0, 100).map(c => ({
-            id: c.id._serialized,
-            name: c.name || c.id.user,
-            isGroup: c.isGroup,
-            unreadCount: c.unreadCount,
-            lastMessage: c.lastMessage?.body?.slice(0, 80) || '',
-            timestamp: c.timestamp,
-        }));
-        res.json(payload);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+  try {
+    const { status } = req.session.getStatus();
+    if (status !== 'connected') return res.status(503).json({ error: 'WhatsApp not connected yet' });
+    const chats = await req.session.client.getChats();
+    const payload = chats.slice(0, 100).map(c => ({
+      id: c.id._serialized,
+      name: c.name || c.id.user,
+      isGroup: c.isGroup,
+      unreadCount: c.unreadCount,
+      lastMessage: c.lastMessage?.body?.slice(0, 80) || '',
+      timestamp: c.timestamp,
+    }));
+    res.json(payload);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/chats/:id/read', requireSession, async (req, res) => {
@@ -160,11 +156,7 @@ app.use((req, res) => {
 // ── Socket.io ─────────────────────────────────────────────────────────────────
 // Each socket joins its own session room; events are scoped per-user.
 io.on('connection', async (socket) => {
-    const sessionId = socket.handshake.auth?.sessionId;
-    if (!isValidSessionId(sessionId)) {
-        socket.disconnect();
-        return;
-    }
+    const sessionId = DEFAULT_SESSION_ID;
 
     socket.join(sessionId);
     console.log(`[WS] Socket ${socket.id} joined session ${sessionId.slice(0, 8)}...`);
