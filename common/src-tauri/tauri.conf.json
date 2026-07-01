@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "command",
-        "title": "Blinky Command",
+        "title": "Recording Toolbar",
         "url": "/command",
         "width": 760,
         "height": 580,
@@ -25,12 +25,12 @@
         "transparent": true,
         "visible": false,
         "alwaysOnTop": true,
-        "skipTaskbar": false,
+        "skipTaskbar": true,
         "shadow": false
       },
       {
         "label": "overlay",
-        "title": "Blinky Overlay",
+        "title": "Recording Toolbar",
         "url": "/overlay",
         "fullscreen": false,
         "alwaysOnTop": true,
