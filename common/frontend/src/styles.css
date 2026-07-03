@@ -2218,3 +2218,53 @@ h3 {
   background: var(--bg-1);
   color: var(--text-strong);
 }
+
+/* Siri-style VAD Edge Lighting */
+.siri-edge-lighting-container {
+  position: absolute;
+  inset: -8px;
+  border-radius: 20px;
+  pointer-events: none;
+  z-index: -1;
+  overflow: hidden;
+  opacity: var(--vad-opacity, 0);
+  transition: opacity 0.3s ease;
+}
+
+.siri-edge-lighting-gradient {
+  position: absolute;
+  inset: -50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    #06B6D4 60deg,
+    #d946ef 120deg,
+    transparent 180deg,
+    #3b82f6 240deg,
+    #22D3EE 300deg,
+    transparent 360deg
+  );
+  filter: blur(20px);
+  transform: scale(var(--glow-scale, 1));
+  animation: spin var(--glow-speed, 4s) linear infinite;
+  transition: transform 0.1s ease, filter 0.1s ease;
+  will-change: transform, filter;
+}
+
+.siri-edge-lighting-gradient::after {
+  content: "";
+  position: absolute;
+  inset: 15%;
+  background: var(--bg-1);
+  border-radius: inherit;
+  filter: blur(25px);
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg) scale(var(--glow-scale, 1));
+  }
+  to {
+    transform: rotate(360deg) scale(var(--glow-scale, 1));
+  }
+}

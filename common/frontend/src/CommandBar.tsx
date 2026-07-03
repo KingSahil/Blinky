@@ -830,6 +830,13 @@ export function CommandBar() {
         }
         const rms = Math.sqrt(sum / inputData.length);
 
+        if (glowContainerRef.current) {
+          const normalizedVolume = Math.min(1, rms * 15);
+          glowContainerRef.current.style.setProperty('--vad-opacity', (0.1 + normalizedVolume * 0.9).toString());
+          glowContainerRef.current.style.setProperty('--glow-scale', (1 + normalizedVolume * 0.2).toString());
+          glowContainerRef.current.style.setProperty('--glow-speed', `${4 - normalizedVolume * 2.5}s`);
+        }
+
         if (rms > SPEECH_THRESHOLD) {
           if (!hasSpoken) {
             hasSpoken = true;
@@ -887,6 +894,10 @@ export function CommandBar() {
       } catch {}
       mediaRecorderRef.current = null;
       setIsRecording(false);
+
+      if (glowContainerRef.current) {
+        glowContainerRef.current.style.setProperty('--vad-opacity', '0');
+      }
     }
   };
 
@@ -1197,6 +1208,7 @@ export function CommandBar() {
   };
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const glowContainerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
   const toggleButtonRef = useRef<HTMLButtonElement | null>(null);
   const formRef = useRef<HTMLFormElement | null>(null);
@@ -1476,6 +1488,9 @@ export function CommandBar() {
 
   return (
     <main className="command-window">
+      <div className="siri-edge-lighting-container" ref={glowContainerRef}>
+        <div className="siri-edge-lighting-gradient" />
+      </div>
       <form
         ref={formRef}
         className="command-popup command-mini"
