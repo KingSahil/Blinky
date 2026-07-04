@@ -304,6 +304,52 @@ export class WaUserSession {
         }
     }
 
+    async getCachedChatsForApi() {
+        const memory = await this.loadSummaryMemory();
+        const directory = memory.chatDirectory || {};
+        return Object.values(directory)
+            .filter(entry => entry?.chatId)
+            .sort((a, b) => new Date(b?.updatedAt || 0) - new Date(a?.updatedAt || 0))
+            .map(entry => ({
+                id: entry.chatId,
+                name: entry.chatName || entry.chatId,
+                isGroup: !!entry.isGroup,
+                unreadCount: 0,
+                lastMessage: '',
+                timestamp: entry.updatedAt || null,
+            }));
+    }
+
+    async getChatsForApi() {
+        if (this.status !== 'connected') {
+            return { chats: [], status: 'disconnected' };
+        }
+
+        try {
+            const chats = await withTimeout(this.client.getChats(), 15_000, 'api getChats');
+            const payload = chats.slice(0, 100).map(c => ({
+                id: c.id._serialized,
+                name: c.name || c.id.user,
+                isGroup: c.isGroup,
+                unreadCount: c.unreadCount,
+                lastMessage: c.lastMessage?.body?.slice(0, 80) || '',
+                timestamp: c.timestamp,
+            }));
+
+            void Promise.all(chats.map(ch => this.rememberChatDirectory(ch, []))).catch(() => {});
+
+            return { chats: payload, status: 'connected', stale: false };
+        } catch (err) {
+            this.emit('error', `[API] getChats failed, using cached chat directory: ${err.message}`);
+            const cachedChats = await this.getCachedChatsForApi();
+            return {
+                chats: cachedChats,
+                status: 'connected',
+                stale: true,
+            };
+        }
+    }
+
     async saveSummaryMemory(memory) {
         await mkdir(dirname(this.summaryMemoryFile), { recursive: true });
         await writeFile(this.summaryMemoryFile, JSON.stringify(memory, null, 2), 'utf-8');

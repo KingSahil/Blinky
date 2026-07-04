@@ -78,18 +78,11 @@ app.get('/api/status', requireSession, (req, res) => {
 
 app.get('/api/chats', requireSession, async (req, res) => {
   try {
-    const { status } = req.session.getStatus();
-    if (status !== 'connected') return res.status(503).json({ error: 'WhatsApp not connected yet' });
-    const chats = await req.session.client.getChats();
-    const payload = chats.slice(0, 100).map(c => ({
-      id: c.id._serialized,
-      name: c.name || c.id.user,
-      isGroup: c.isGroup,
-      unreadCount: c.unreadCount,
-      lastMessage: c.lastMessage?.body?.slice(0, 80) || '',
-      timestamp: c.timestamp,
-    }));
-    res.json(payload);
+        const result = await req.session.getChatsForApi();
+        if (result?.status === 'disconnected') {
+            return res.status(503).json({ error: 'WhatsApp not connected yet' });
+        }
+        res.json(result.chats || []);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

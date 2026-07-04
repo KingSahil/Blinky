@@ -169,17 +169,17 @@ export function CommandBar() {
     return 'http://localhost:3000';
   };
 
-  const connectWhatsApp = async () => {
+  const connectWhatsApp = async (backendUrl = waBackendUrl) => {
     setIsWaActionLoading(true);
     setWaError('');
     try {
-      const res = await fetch(`${waBackendUrl}/api/sessions`, {
+      const res = await fetch(`${backendUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: SESSION_ID })
       });
       if (res.ok) {
-        const statusRes = await fetch(`${waBackendUrl}/api/status`, {
+        const statusRes = await fetch(`${backendUrl}/api/status`, {
           headers: { 'X-Session-Id': SESSION_ID }
         });
         if (statusRes.ok) {
@@ -212,7 +212,7 @@ export function CommandBar() {
         }
       });
       if (res.ok) {
-        setWaStatus('disconnected');
+        setWaStatus('loading');
         setWaQr('');
       } else {
         const data = await res.json().catch(() => ({}));
@@ -227,17 +227,23 @@ export function CommandBar() {
 
   // Discover WhatsApp backend port on mount
   useEffect(() => {
+    let active = true;
+
     async function discover() {
       const url = await findWaBackendUrl();
+      if (!active) return;
       setWaBackendUrl(url);
+      void connectWhatsApp(url);
     }
+
     void discover();
+    return () => {
+      active = false;
+    };
   }, []);
 
-  // Poll WhatsApp status when settings dropdown or WhatsApp modal is open
+  // Keep WhatsApp status fresh so startup state and logout state update without user interaction.
   useEffect(() => {
-    if (!showSettings && !showWaModal) return;
-
     let active = true;
     const fetchStatus = async () => {
       try {
@@ -1846,9 +1852,19 @@ export function CommandBar() {
             </div>
             <div className="wa-modal-content">
               {waStatus === 'loading' && (
-                <div className="wa-loader">
-                  <Loader2 className="spin" size={16} />
-                  <span>Loading WhatsApp status...</span>
+                <div className="wa-disconnected">
+                  <div className="wa-loader">
+                    <Loader2 className="spin" size={16} />
+                    <span>Loading WhatsApp status...</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-logout"
+                    onClick={logoutWhatsApp}
+                    disabled={isWaActionLoading}
+                  >
+                    {isWaActionLoading ? <Loader2 className="spin" size={14} /> : 'Logout WhatsApp'}
+                  </button>
                 </div>
               )}
 
