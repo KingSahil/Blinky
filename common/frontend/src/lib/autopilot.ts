@@ -96,9 +96,16 @@ function isConfidentAutopilotMatch(step: TutorStep): boolean {
       const textSimilarity = match.text_similarity ?? 0;
       return candidateCount <= 2 && (score >= 0.62 || textSimilarity >= 0.62);
     }
-    return match.is_exact_text === true && (match.ambiguous_candidate_count ?? 1) <= 1;
+    const score = match.score ?? 0;
+    const textSimilarity = match.text_similarity ?? 0;
+    const ambiguousCandidateCount = match.ambiguous_candidate_count ?? 1;
+    return (match.is_exact_text === true && ambiguousCandidateCount <= 1) ||
+           (score >= 0.82 || textSimilarity >= 0.86);
   }
-  return match.is_exact_text === true && (match.ambiguous_candidate_count ?? 1) <= 1;
+  const score = match.score ?? 0;
+  const textSimilarity = match.text_similarity ?? 0;
+  return (match.is_exact_text === true && (match.ambiguous_candidate_count ?? 1) <= 1) ||
+         (score >= 0.82 || textSimilarity >= 0.86);
 }
 
 function isTextEntryStep(step: TutorStep): boolean {
@@ -204,4 +211,9 @@ export function getScrollDirection(instruction: string): 'down' | 'up' {
     return 'up';
   }
   return 'down';
+}
+
+export function isClickInstruction(instruction: string): boolean {
+  const norm = normalize(instruction);
+  return SAFE_ACTION_HINTS.some((hint) => norm.startsWith(hint));
 }

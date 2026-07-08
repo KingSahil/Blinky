@@ -4,7 +4,7 @@ import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import QRCode from 'qrcode';
-import { runAutopilotLoop, extractTextToType, shouldPressEnterAfterTyping, isScrollAction, getScrollDirection } from './lib/autopilot';
+import { runAutopilotLoop, extractTextToType, shouldPressEnterAfterTyping, isScrollAction, getScrollDirection, isClickInstruction } from './lib/autopilot';
 import {
   getCurrentGuideSteps,
   getDisplaySteps,
@@ -169,17 +169,17 @@ export function CommandBar() {
     return 'http://localhost:3000';
   };
 
-  const connectWhatsApp = async () => {
+  const connectWhatsApp = async (backendUrl = waBackendUrl) => {
     setIsWaActionLoading(true);
     setWaError('');
     try {
-      const res = await fetch(`${waBackendUrl}/api/sessions`, {
+      const res = await fetch(`${backendUrl}/api/sessions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: SESSION_ID })
       });
       if (res.ok) {
-        const statusRes = await fetch(`${waBackendUrl}/api/status`, {
+        const statusRes = await fetch(`${backendUrl}/api/status`, {
           headers: { 'X-Session-Id': SESSION_ID }
         });
         if (statusRes.ok) {
@@ -212,7 +212,7 @@ export function CommandBar() {
         }
       });
       if (res.ok) {
-        setWaStatus('disconnected');
+        setWaStatus('loading');
         setWaQr('');
       } else {
         const data = await res.json().catch(() => ({}));
@@ -227,17 +227,23 @@ export function CommandBar() {
 
   // Discover WhatsApp backend port on mount
   useEffect(() => {
+    let active = true;
+
     async function discover() {
       const url = await findWaBackendUrl();
+      if (!active) return;
       setWaBackendUrl(url);
+      void connectWhatsApp(url);
     }
+
     void discover();
+    return () => {
+      active = false;
+    };
   }, []);
 
-  // Poll WhatsApp status when settings dropdown or WhatsApp modal is open
+  // Keep WhatsApp status fresh so startup state and logout state update without user interaction.
   useEffect(() => {
-    if (!showSettings && !showWaModal) return;
-
     let active = true;
     const fetchStatus = async () => {
       try {
@@ -1085,6 +1091,27 @@ export function CommandBar() {
         }
       } else {
         result = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, webSearchEnabled);
+
+        // Auto-trigger autopilot click for locator fast path results with click instructions
+        const clickStep = result.steps?.find((s) => s.instruction && s.match);
+        if (clickStep && isClickInstruction(clickStep.instruction)) {
+          const autopilot = await runAutopilotLoop({
+            maxAttempts: 1,
+            observeAfterAction: false,
+            observe: async () => result,
+            act: async (point, step) => {
+              setStatus(`Clicking (${point.x}, ${point.y})...`);
+              await clickScreenPoint(point.x, point.y);
+            },
+          });
+          if (autopilot.stopReason === 'complete' || autopilot.attempts > 0) {
+            result = {
+              ...result,
+              summary: `Clicked ${clickStep.target_text || 'the target'}.`,
+              steps: [],
+            };
+          }
+        }
       }
       if (cancelledRunIdsRef.current.has(runId)) {
         return;
@@ -1886,9 +1913,19 @@ export function CommandBar() {
             </div>
             <div className="wa-modal-content">
               {waStatus === 'loading' && (
-                <div className="wa-loader">
-                  <Loader2 className="spin" size={16} />
-                  <span>Loading WhatsApp status...</span>
+                <div className="wa-disconnected">
+                  <div className="wa-loader">
+                    <Loader2 className="spin" size={16} />
+                    <span>Loading WhatsApp status...</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-logout"
+                    onClick={logoutWhatsApp}
+                    disabled={isWaActionLoading}
+                  >
+                    {isWaActionLoading ? <Loader2 className="spin" size={14} /> : 'Logout WhatsApp'}
+                  </button>
                 </div>
               )}
 

@@ -33,7 +33,7 @@ def stdin_listener():
     except Exception as e:
         print(f"Error in stdin listener: {e}", file=sys.stderr)
 
-def start_wake_word_detector(model_name="hey_blinky.onnx", threshold=0.25):
+def start_wake_word_detector(model_name="hey_blinky.onnx", threshold=0.25, verbose=False):
     threading.Thread(target=stdin_listener, daemon=True).start()
     try:
         # pyrefly: ignore [missing-import]
@@ -66,8 +66,9 @@ def start_wake_word_detector(model_name="hey_blinky.onnx", threshold=0.25):
             owwModel = Model(wakeword_models=[model_name])
             
         print(f"Model loaded successfully. Listening for wake word... (Model: {os.path.basename(model_name)}, Threshold: {threshold})", file=sys.stderr, flush=True)
-        print(f"{'Time':<8} | {'Audio RMS':<12} | {'Wake Word Score':<18} | {'Status'}", file=sys.stderr, flush=True)
-        print("-" * 75, file=sys.stderr, flush=True)
+        if verbose:
+            print(f"{'Time':<8} | {'Audio RMS':<12} | {'Wake Word Score':<18} | {'Status'}", file=sys.stderr, flush=True)
+            print("-" * 75, file=sys.stderr, flush=True)
 
         audio_queue = []
 
@@ -146,7 +147,7 @@ def start_wake_word_detector(model_name="hey_blinky.onnx", threshold=0.25):
                     
                     # Print live debugging messages to sys.stderr every 1 second in beautiful descriptive table format
                     now = time.time()
-                    if now - last_debug_time >= 1.0:
+                    if verbose and now - last_debug_time >= 1.0:
                         elapsed = int(now - start_time)
                         status_text = "Hearing speech..." if rms > 200 else ("Background noise" if rms > 50 else "Listening (silence)...")
                         print(f"{elapsed:>5}s  | {rms:>10.1f}   | {score:>16.4f}   | {status_text} (Threshold: {threshold})", file=sys.stderr, flush=True)
@@ -167,6 +168,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OpenWakeWord Detector")
     parser.add_argument("--model", type=str, default="hey_blinky.onnx", help="Built-in model name or path to a custom .onnx model (e.g., hey_blinky.onnx)")
     parser.add_argument("--threshold", type=float, default=0.25, help="Confidence threshold for wake word detection")
+    parser.add_argument("--verbose", action="store_true", help="Show live audio debug logs")
     args = parser.parse_args()
     
-    start_wake_word_detector(args.model, args.threshold)
+    start_wake_word_detector(args.model, args.threshold, args.verbose)

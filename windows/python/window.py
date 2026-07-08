@@ -8,10 +8,19 @@ LOGGER = get_logger("blinky.window")
 
 IGNORED_OVERLAY_PROCESSES = {
     "snippingtool.exe",
+    "nvidia overlay.exe",
+    "nvidiaoverlay.exe",
+    "trae.exe",
+    "blinky.exe",
+    "nvsphelper64.exe",
+    "nvcontainer.exe",
 }
 
 IGNORED_OVERLAY_TITLE_HINTS = {
     "recording toolbar",
+    "blinky",
+    "command",
+    "overlay",
 }
 
 IGNORED_SYSTEM_PROCESSES = {
@@ -25,6 +34,8 @@ IGNORED_SYSTEM_PROCESSES = {
     "dwm.exe",
     "ctfmon.exe",
     "runtimebroker.exe",
+    "trae.exe",
+    "blinky.exe",
 }
 
 # explorer.exe hosts both real File-Explorer windows (which have a title like
@@ -36,6 +47,7 @@ EXPLORER_SHELL_WINDOW_CLASSES = {
     "workerw",
     "button",          # Start button in some Windows versions
     "toplevelhwnd",
+    "taskbar",
 }
 
 
@@ -138,13 +150,18 @@ def _get_target_window_element_impl(window=None, target_pid: int | None = None):
                     next_hwnd = user32.GetWindow(next_hwnd, 2)
                     continue
                     
-                # Get window title
+                # Get window title FIRST before any checks that need it!
                 length = user32.GetWindowTextLengthW(next_hwnd)
                 title = ""
                 if length > 0:
                     buffer = ctypes.create_unicode_buffer(length + 1)
                     user32.GetWindowTextW(next_hwnd, buffer, length + 1)
                     title = buffer.value
+                    
+                # Skip ignored overlay processes
+                if _is_ignored_overlay_window(process_name, title):
+                    next_hwnd = user32.GetWindow(next_hwnd, 2)
+                    continue
                 
                 # Skip explorer.exe shell chrome (desktop, taskbar, tray).
                 # Real File-Explorer windows always have a non-empty title.
@@ -218,6 +235,9 @@ def _get_target_window_element_impl(window=None, target_pid: int | None = None):
                     
                 process_name = psutil.Process(process_id).name().lower()
                 if "blinky" in process_name or "tauri" in process_name or (title and "blinky" in title.lower()):
+                    continue
+                    
+                if _is_ignored_overlay_window(process_name, title):
                     continue
                     
                 if process_name in IGNORED_SYSTEM_PROCESSES:

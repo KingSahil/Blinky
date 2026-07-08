@@ -4,7 +4,7 @@ import platform
 import re
 from typing import Any
 
-from .tools import ToolResult, open_app_tool, open_web_destination_tool, shortcut_tool
+from .tools import ToolResult, open_app_tool, open_web_destination_tool, shortcut_tool, normalize_app_name, APP_PROTOCOLS, APP_NAME_ALIASES
 
 
 WEB_DESTINATION_NAMES = {
@@ -19,7 +19,6 @@ WEB_DESTINATION_NAMES = {
     "google docs",
     "google sheets",
     "google slides",
-    "whatsapp",
     "whatsapp web",
     "facebook",
     "instagram",
@@ -231,6 +230,11 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
     if match:
         app = cleanup_app_name(match.group("app"))
         if app and app not in {"help", "settings", "menu"}:
+            normalized = normalize_app_name(app)
+            # Check if it's a known desktop app first
+            is_known_app = normalized in APP_PROTOCOLS or normalized in APP_NAME_ALIASES
+            if is_known_app:
+                return open_app_tool(app)
             if is_web_destination(app):
                 if observation is not None:
                     return open_web_destination_tool(app)

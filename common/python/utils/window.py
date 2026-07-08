@@ -21,14 +21,27 @@ SUPPORTED_PROCESSES = {
     "antigravity-ide.exe",
     "antigravity ide",
     "antigravity-ide",
+    "systemsettings.exe",
+    "systemsettings",
+    "settings.exe",
+    "settings",
 }
 
 IGNORED_OVERLAY_PROCESSES = {
     "snippingtool.exe",
+    "nvidia overlay.exe",
+    "nvidiaoverlay.exe",
+    "trae.exe",
+    "blinky.exe",
+    "nvsphelper64.exe",
+    "nvcontainer.exe",
 }
 
 IGNORED_OVERLAY_TITLE_HINTS = {
     "recording toolbar",
+    "blinky",
+    "command",
+    "overlay",
 }
 
 

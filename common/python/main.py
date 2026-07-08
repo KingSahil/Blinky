@@ -44,6 +44,7 @@ def _has_computer_use_action(question: str) -> bool:
 from app_context import get_app_context
 from capture import capture_screen
 from computer_use import try_run_agent_action, is_web_destination, looks_like_app_name
+from computer_use.tools import normalize_app_name, APP_PROTOCOLS, APP_NAME_ALIASES
 from ocr import extract_visible_text
 from utils.logging import get_logger
 from utils.matching import attach_matches, find_best_match_with_score
@@ -274,7 +275,12 @@ def run(
         elif intent == "OPEN_APP":
             app = extracted_params.get("app_name")
             if app:
-                if is_web_destination(app) or is_in_app_action(app) or not looks_like_app_name(app):
+                normalized = normalize_app_name(app)
+                is_known_app = normalized in APP_PROTOCOLS or normalized in APP_NAME_ALIASES
+                if is_known_app:
+                    from computer_use.tools import open_app_tool
+                    direct_agent_result = open_app_tool(app)
+                elif is_web_destination(app) or is_in_app_action(app) or not looks_like_app_name(app):
                     # Web destinations or in-app actions are handled directly via try_run_agent_action fallback.
                     pass
                 else:
@@ -595,11 +601,16 @@ def classify_request(
     
     # Safety check: if intent is OPEN_APP but targets web UI, an in-app
     # feature/action, or a query, override to DESKTOP_AUTOMATION (only if not in agent_mode).
+    # But if it's a known app (has app protocol or is in app name aliases), don't override!
     if intent == "OPEN_APP" and not agent_mode:
         app_name = extracted_params.get("app_name", "")
-        if app_name and (is_web_destination(app_name) or is_in_app_action(app_name) or not looks_like_app_name(app_name)):
-            LOGGER.info("Overriding OPEN_APP intent with app_name '%s' to DESKTOP_AUTOMATION", app_name)
-            intent = "DESKTOP_AUTOMATION"
+        if app_name:
+            normalized = normalize_app_name(app_name)
+            # Check if it's a known desktop app first
+            is_known_app = normalized in APP_PROTOCOLS or normalized in APP_NAME_ALIASES
+            if not is_known_app and (is_web_destination(app_name) or is_in_app_action(app_name) or not looks_like_app_name(app_name)):
+                LOGGER.info("Overriding OPEN_APP intent with app_name '%s' to DESKTOP_AUTOMATION", app_name)
+                intent = "DESKTOP_AUTOMATION"
 
     if intent:
         needs_screen = intent == "DESKTOP_AUTOMATION"
