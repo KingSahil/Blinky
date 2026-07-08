@@ -319,6 +319,7 @@ export function CommandBar() {
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const transportManagerRef = useRef<AdaptiveTransportManager | null>(null);
   const transportStateRef = useRef<'WEBTRANSPORT' | 'WEBSOCKET'>('WEBTRANSPORT');
+  const ttsAnalyserRef = useRef<AnalyserNode | null>(null);
 
   // TTS Streaming state
   const speechBufferRef = useRef<string>('');
@@ -533,7 +534,11 @@ export function CommandBar() {
 
       const source = audioCtxRef.current.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(audioCtxRef.current.destination);
+      if (!ttsAnalyserRef.current) {
+        ttsAnalyserRef.current = audioCtxRef.current.createAnalyser();
+        ttsAnalyserRef.current.connect(audioCtxRef.current.destination);
+      }
+      source.connect(ttsAnalyserRef.current);
 
       const startTime = Math.max(audioCtxRef.current.currentTime, nextPlayTimeRef.current);
       source.start(startTime);
@@ -651,7 +656,11 @@ export function CommandBar() {
         await new Promise<void>((resolve) => {
           const source = ctx.createBufferSource();
           source.buffer = audioBuffer;
-          source.connect(ctx.destination);
+          if (!ttsAnalyserRef.current) {
+            ttsAnalyserRef.current = ctx.createAnalyser();
+            ttsAnalyserRef.current.connect(ctx.destination);
+          }
+          source.connect(ttsAnalyserRef.current);
           activeSourcesRef.current.push(source);
           
           const startTime = Math.max(ctx.currentTime, nextPlayTimeRef.current);
@@ -744,6 +753,40 @@ export function CommandBar() {
       void speakText(status, steps, { includeSteps: !showGuideCompletionSummary });
     }
   };
+
+  useEffect(() => {
+    let rafId: number;
+    const loop = () => {
+      if (isSpeaking && ttsAnalyserRef.current && glowContainerRef.current) {
+        const dataArray = new Uint8Array(ttsAnalyserRef.current.frequencyBinCount);
+        ttsAnalyserRef.current.getByteTimeDomainData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const val = (dataArray[i] - 128) / 128;
+          sum += val * val;
+        }
+        const rms = Math.sqrt(sum / dataArray.length);
+        const normalizedVolume = Math.min(1, rms * 8); // Multiplier tunes glow sensitivity to TTS
+
+        glowContainerRef.current.style.setProperty('--vad-opacity', (0.1 + normalizedVolume * 0.9).toString());
+        glowContainerRef.current.style.setProperty('--glow-scale', (1 + normalizedVolume * 0.2).toString());
+        glowContainerRef.current.style.setProperty('--glow-speed', `${4 - normalizedVolume * 2.5}s`);
+        void emit('blinky://vad-update', { volume: normalizedVolume });
+        
+        rafId = requestAnimationFrame(loop);
+      } else if (!isSpeaking && !isRecording && glowContainerRef.current) {
+        glowContainerRef.current.style.setProperty('--vad-opacity', '0');
+        void emit('blinky://vad-update', { volume: 0 });
+      }
+    };
+
+    if (isSpeaking) {
+      rafId = requestAnimationFrame(loop);
+    }
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [isSpeaking, isRecording]);
 
   const handleAudioTranscription = async (blob: Blob) => {
     if (!sarvamApiKey) {

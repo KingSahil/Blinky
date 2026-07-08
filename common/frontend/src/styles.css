@@ -2278,6 +2278,14 @@ h3 {
   overflow: hidden;
   opacity: var(--vad-opacity, 0);
   transition: opacity 0.3s ease;
+  
+  /* Mask to create a hollow center with a thin 12px glowing border */
+  padding: 12px;
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
 }
 
 .fullscreen-edge-lighting-gradient {
@@ -2294,18 +2302,9 @@ h3 {
     #22D3EE 300deg,
     transparent 360deg
   );
-  filter: blur(80px); /* Heavy blur for full screen */
+  filter: blur(40px); /* Reduced blur for a sharper edge glow */
   transform: scale(var(--glow-scale, 1));
   animation: spin var(--glow-speed, 4s) linear infinite;
   transition: transform 0.1s ease, filter 0.1s ease;
   will-change: transform, filter;
-}
-
-.fullscreen-edge-lighting-gradient::after {
-  content: "";
-  position: absolute;
-  inset: 2%; /* Create the hollow center for the screen */
-  background: transparent;
-  box-shadow: inset 0 0 100px 100px rgba(0,0,0,1); /* Black out the center so the glow is only on edges */
-  border-radius: 40px;
 }
