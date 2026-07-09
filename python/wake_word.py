@@ -112,18 +112,45 @@ def start_wake_word_detector(model_name="hey_blinky.onnx", threshold=0.25, verbo
             if len(audio_queue) > 30:
                 audio_queue.clear()
 
-        stream = sd.InputStream(samplerate=native_sr, blocksize=native_blocksize, channels=native_channels, dtype='float32', callback=audio_callback)
-        
+        stream = None
+
+        def start_stream():
+            nonlocal stream
+            if stream is None:
+                try:
+                    stream = sd.InputStream(samplerate=native_sr, blocksize=native_blocksize, channels=native_channels, dtype='float32', callback=audio_callback)
+                    stream.start()
+                except Exception as e:
+                    print(f"Error starting audio stream: {e}", file=sys.stderr)
+
+        def stop_stream():
+            nonlocal stream
+            if stream is not None:
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception:
+                    pass
+                stream = None
+
         start_time = time.time()
         last_debug_time = start_time
 
-        with stream:
+        start_stream()
+
+        try:
             while True:
                 if is_paused:
+                    if stream is not None:
+                        stop_stream()
                     if len(audio_queue) > 0:
                         audio_queue.clear()
                     time.sleep(0.1)
                     continue
+                else:
+                    if stream is None:
+                        start_stream()
+                        audio_queue.clear()
 
                 if len(audio_queue) > 0:
                     audio_chunk = audio_queue.pop(0)
@@ -157,6 +184,8 @@ def start_wake_word_detector(model_name="hey_blinky.onnx", threshold=0.25, verbo
                     time.sleep(0.005)
                 else:
                     time.sleep(0.01)
+        finally:
+            stop_stream()
 
     except KeyboardInterrupt:
         print("Stopping wake word detector.", file=sys.stderr)

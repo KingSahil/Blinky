@@ -316,6 +316,7 @@ export function CommandBar() {
   const runIdRef = useRef(0);
   const cancelledRunIdsRef = useRef<Set<number>>(new Set());
   const latestTranscriptRef = useRef<string>('');
+  const isStartingRecordingRef = useRef(false);
 
   // WebTransport and WebSocket streaming refs
   const sttStreamRef = useRef<SarvamSpeechToTextStream | null>(null);
@@ -839,15 +840,21 @@ export function CommandBar() {
   };
 
   const startRecording = async () => {
+    if (isStartingRecordingRef.current) return;
+    isStartingRecordingRef.current = true;
+
     if (!sarvamApiKey) {
       setStatus('Please set your Sarvam AI API Key in settings first.');
+      isStartingRecordingRef.current = false;
       return;
     }
-    void pauseWakeWord();
+    await pauseWakeWord();
+    await new Promise(resolve => setTimeout(resolve, 300));
     void showOverlay();
 
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       (mediaRecorderRef as any).current = mediaRecorder;
       
@@ -914,7 +921,9 @@ export function CommandBar() {
       processor.connect(audioCtx.destination);
 
       mediaRecorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+        }
         try { processor.disconnect(); source.disconnect(); } catch {}
         const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
         void handleAudioTranscription(audioBlob);
@@ -934,7 +943,12 @@ export function CommandBar() {
     } catch (err) {
       console.error('Error starting audio recording:', err);
       setStatus('Microphone access failed or was denied.');
+      if (stream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
       void resumeWakeWord();
+    } finally {
+      isStartingRecordingRef.current = false;
     }
   };
 
@@ -1935,7 +1949,7 @@ export function CommandBar() {
                   <button
                     type="button"
                     className="wa-btn wa-btn-connect"
-                    onClick={connectWhatsApp}
+                    onClick={() => connectWhatsApp()}
                     disabled={isWaActionLoading}
                   >
                     {isWaActionLoading ? <Loader2 className="spin" size={14} /> : 'Connect WhatsApp'}
@@ -1988,7 +2002,7 @@ export function CommandBar() {
                   <button
                     type="button"
                     className="wa-btn wa-btn-retry"
-                    onClick={connectWhatsApp}
+                    onClick={() => connectWhatsApp()}
                     disabled={isWaActionLoading}
                   >
                     Retry Connection

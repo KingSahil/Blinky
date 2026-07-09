@@ -748,7 +748,7 @@ export function App() {
                   <button
                     type="button"
                     className="wa-btn wa-btn-connect"
-                    onClick={connectWhatsApp}
+                    onClick={() => connectWhatsApp()}
                     disabled={isWaActionLoading}
                   >
                     {isWaActionLoading ? <Loader2 className="spin" size={14} /> : 'Connect WhatsApp'}
@@ -801,7 +801,7 @@ export function App() {
                   <button
                     type="button"
                     className="wa-btn wa-btn-retry"
-                    onClick={connectWhatsApp}
+                    onClick={() => connectWhatsApp()}
                     disabled={isWaActionLoading}
                   >
                     Retry Connection
