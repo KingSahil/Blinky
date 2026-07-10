@@ -1,3 +1,4 @@
+import { emit } from '@tauri-apps/api/event';
 import type { TutorResult, TutorStep } from './types';
 
 export interface ScreenPoint {
@@ -47,7 +48,12 @@ export async function runAutopilotLoop({
     }
 
     const beforeSignature = getStepSignature(nextStep);
+    const logicalPoint = getClickablePoint(nextStep);
     const point = getPhysicalClickablePoint(nextStep, current);
+    
+    // Emit cursor move event so Overlay can animate the AI cursor
+    await emit('blinky://agent-cursor-move', { x: logicalPoint.x, y: logicalPoint.y, instruction: nextStep.instruction });
+
     await act(point, nextStep);
     attempts += 1;
 

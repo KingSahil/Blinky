@@ -30,6 +30,9 @@ export function Overlay() {
   const [dismissedKeys, setDismissedKeys] = useState<Set<string>>(() => new Set());
   const [offsets, setOffsets] = useState({ x: 0, y: 0 });
 
+  const [agentCursorTarget, setAgentCursorTarget] = useState<{ x: number, y: number } | null>(null);
+  const [agentCursorVisible, setAgentCursorVisible] = useState(false);
+
   const glowContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -42,8 +45,21 @@ export function Overlay() {
       }
     });
 
+    const unlistenVis = listen<{ visible: boolean }>('blinky://agent-cursor-visibility', (event) => {
+      setAgentCursorVisible(event.payload.visible);
+      if (!event.payload.visible) {
+        setAgentCursorTarget(null);
+      }
+    });
+
+    const unlistenMove = listen<{ x: number, y: number }>('blinky://agent-cursor-move', (event) => {
+      setAgentCursorTarget({ x: event.payload.x, y: event.payload.y });
+    });
+
     return () => {
       unlisten.then((dispose) => dispose());
+      unlistenVis.then((dispose) => dispose());
+      unlistenMove.then((dispose) => dispose());
     };
   }, []);
 
@@ -272,6 +288,26 @@ export function Overlay() {
       <div className="fullscreen-edge-lighting-container" ref={glowContainerRef}>
         <div className="fullscreen-edge-lighting-gradient" />
       </div>
+
+      {agentCursorVisible && agentCursorTarget && (
+        <div 
+          className="agent-cursor-wrapper"
+          style={{
+            left: (agentCursorTarget.x * scaleX) - offsets.x,
+            top: (agentCursorTarget.y * scaleY) - offsets.y,
+          }}
+        >
+          <svg className="agent-cursor" viewBox="0 0 24 24" width="28" height="28" fill="var(--accent-strong)" xmlns="http://www.w3.org/2000/svg" style={{ filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.5))' }}>
+            <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z"/>
+          </svg>
+          <div className="agent-visualizer">
+            <div className="bar" />
+            <div className="bar" />
+            <div className="bar" />
+          </div>
+        </div>
+      )}
+
       {frames.map((frame) => {
         if (dismissedKeys.has(frame.key)) return null;
         return (

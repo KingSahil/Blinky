@@ -1236,6 +1236,11 @@ export function CommandBar() {
     };
   }, []);
 
+  // Emit cursor visibility when Agent Mode is toggled
+  useEffect(() => {
+    void emit('blinky://agent-cursor-visibility', { visible: agentModeEnabled });
+  }, [agentModeEnabled]);
+
   const updateProvider = async (newProvider: string) => {
     const cleanProvider = newProvider.toLowerCase().trim();
     setProvider(cleanProvider);

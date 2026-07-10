@@ -2308,3 +2308,54 @@ h3 {
   transition: transform 0.1s ease, filter 0.1s ease;
   will-change: transform, filter;
 }
+
+/* Agent Custom Cursor and Visualizer */
+.agent-cursor-wrapper {
+  position: absolute;
+  pointer-events: none;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  transition: left 0.3s cubic-bezier(0.16, 1, 0.3, 1), top 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.agent-cursor {
+  /* Using standard system cursor offset trick if we want to visually align it perfectly, 
+     but 0,0 is the tip of the SVG */
+  filter: drop-shadow(0px 2px 8px rgba(34, 211, 238, 0.4));
+  transform-origin: top left;
+  animation: cursorBob 2s ease-in-out infinite;
+}
+
+@keyframes cursorBob {
+  0%, 100% { transform: scale(1) translate(0, 0); }
+  50% { transform: scale(1.05) translate(-1px, -1px); }
+}
+
+.agent-visualizer {
+  display: flex;
+  gap: 3px;
+  margin-left: 8px;
+  align-items: center;
+  height: 20px;
+}
+
+.agent-visualizer .bar {
+  width: 4px;
+  background: var(--accent-strong);
+  border-radius: 2px;
+  /* Use VAD opacity to scale height. Base height is 4px, up to 20px */
+  height: calc(4px + (16px * var(--vad-opacity, 0)));
+  transition: height 0.05s ease-out;
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+.agent-visualizer .bar:nth-child(2) {
+  height: calc(6px + (14px * var(--vad-opacity, 0)));
+  transition-delay: 0.02s;
+}
+
+.agent-visualizer .bar:nth-child(3) {
+  height: calc(4px + (12px * var(--vad-opacity, 0)));
+  transition-delay: 0.04s;
+}
