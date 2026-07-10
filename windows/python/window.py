@@ -103,20 +103,15 @@ def _get_target_window_element_impl(window=None, target_pid: int | None = None):
         
         user32 = ctypes.windll.user32
         
-        # Get Blinky window (which is currently active)
-        active_hwnd = user32.GetForegroundWindow()
-        blinky_pid = None
-        if active_hwnd:
-            pid_val = ctypes.c_ulong()
-            user32.GetWindowThreadProcessId(active_hwnd, ctypes.byref(pid_val))
-            blinky_pid = pid_val.value
+        # Get Blinky processes (current python process and parent tauri process)
+        blinky_pids = {os.getpid(), os.getppid()}
             
-        next_hwnd = active_hwnd if active_hwnd else user32.GetTopWindow(None)
+        next_hwnd = user32.GetForegroundWindow() if user32.GetForegroundWindow() else user32.GetTopWindow(None)
         
         fallback_hwnd = None
         fallback_title = ""
         fallback_process_name = ""
-
+ 
         # GW_HWNDNEXT = 2
         while next_hwnd:
             if user32.IsWindowVisible(next_hwnd) and not user32.IsIconic(next_hwnd) and not _is_window_cloaked(next_hwnd):
@@ -129,9 +124,9 @@ def _get_target_window_element_impl(window=None, target_pid: int | None = None):
                 if _is_system_session(pid):
                     next_hwnd = user32.GetWindow(next_hwnd, 2)
                     continue
-
+ 
                 # Skip Blinky's own windows
-                if blinky_pid and pid == blinky_pid:
+                if pid in blinky_pids:
                     next_hwnd = user32.GetWindow(next_hwnd, 2)
                     continue
                     

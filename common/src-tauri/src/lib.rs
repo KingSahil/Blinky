@@ -91,6 +91,7 @@ fn show_overlay(app: AppHandle) -> Result<(), String> {
     if let Some(overlay) = app.get_webview_window("overlay") {
         overlay.show().map_err(|err| err.to_string())?;
         configure_overlay_passthrough(&overlay);
+        let _ = overlay.set_always_on_top(true);
     }
     Ok(())
 }

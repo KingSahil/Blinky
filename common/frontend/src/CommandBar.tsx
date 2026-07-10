@@ -13,7 +13,7 @@ import {
   shouldCompleteStepOnHighlightClick,
   shouldShowSummaryBubble,
 } from './lib/guidance';
-import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord } from './lib/tauri';
+import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage } from './lib/tauri';
 import { linkCitationMarkers } from './lib/citations';
 import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvamErrorMessage } from './lib/tts';
 import { SarvamSpeechToTextStream, SarvamTextToSpeechStream } from './lib/sarvamStream';
@@ -983,6 +983,9 @@ export function CommandBar() {
     options: TutorRunOptions = {},
   ) {
     if (isRunning) return;
+    queryText = queryText.trim().replace(/^(hey\s+)?blinky[\s,.:;!?]*/i, '').trim();
+    if (!queryText) return;
+
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
 
@@ -1094,19 +1097,33 @@ export function CommandBar() {
       } else {
         result = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, webSearchEnabled);
 
+        await logDebugMessage(`[executeTutor] (Standard) Received result from backend. Steps count: ${result.steps?.length || 0}`);
+        if (result.steps && result.steps.length > 0) {
+          const step = result.steps[0];
+          await logDebugMessage(`[executeTutor] (Standard) Step 1: instruction="${step.instruction}", target_ref="${step.target_ref}", target_text="${step.target_text}", hasMatch=${!!step.match}`);
+        }
+
         // Auto-trigger autopilot click for locator fast path results with click instructions
         const clickStep = result.steps?.find((s) => s.instruction && s.match);
+        if (clickStep) {
+          const isClick = isClickInstruction(clickStep.instruction);
+          await logDebugMessage(`[executeTutor] (Standard) Click step candidate: instruction="${clickStep.instruction}", isClickInstruction=${isClick}`);
+        }
+
         if (clickStep && isClickInstruction(clickStep.instruction)) {
+          await logDebugMessage(`[executeTutor] (Standard) Triggering autopilot click at physical match x=${clickStep.match?.x}, y=${clickStep.match?.y}`);
           const autopilot = await runAutopilotLoop({
             maxAttempts: 1,
             observeAfterAction: false,
             observe: async () => result,
             act: async (point, step) => {
+              await logDebugMessage(`[executeTutor] (Standard) Autopilot act: clicking point x=${point.x}, y=${point.y}`);
               setStatus(`Clicking (${point.x}, ${point.y})...`);
               await clickScreenPoint(point.x, point.y);
             },
           });
           if (autopilot.stopReason === 'complete' || autopilot.attempts > 0) {
+            await logDebugMessage(`[executeTutor] (Standard) Autopilot completed with stopReason=${autopilot.stopReason}`);
             result = {
               ...result,
               summary: `Clicked ${clickStep.target_text || 'the target'}.`,
@@ -1240,6 +1257,16 @@ export function CommandBar() {
   useEffect(() => {
     void emit('blinky://agent-cursor-visibility', { visible: agentModeEnabled });
   }, [agentModeEnabled]);
+
+  // Synchronize wake word detector state with the application state centrally
+  useEffect(() => {
+    const shouldPause = isRunning || isRecording || isSpeaking || isTtsActive;
+    if (shouldPause) {
+      void pauseWakeWord();
+    } else {
+      void resumeWakeWord();
+    }
+  }, [isRunning, isRecording, isSpeaking, isTtsActive]);
 
   const updateProvider = async (newProvider: string) => {
     const cleanProvider = newProvider.toLowerCase().trim();

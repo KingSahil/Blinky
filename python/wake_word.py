@@ -3,6 +3,10 @@ import time
 import sys
 import os
 import threading
+import logging
+
+# Suppress tflite/openwakeword warning logs at startup
+logging.getLogger().setLevel(logging.ERROR)
 
 # Configure ONNX Runtime and OpenMP to be passive and single-threaded to prevent CPU starvation of Ollama
 os.environ["OMP_NUM_THREADS"] = "1"

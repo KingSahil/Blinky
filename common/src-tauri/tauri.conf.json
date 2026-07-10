@@ -29,7 +29,7 @@
       },
       {
         "label": "overlay",
-        "title": "Recording Toolbar",
+        "title": "Blinky Highlight Overlay",
         "url": "/overlay",
         "fullscreen": false,
         "alwaysOnTop": true,

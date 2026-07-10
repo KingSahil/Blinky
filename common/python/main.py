@@ -186,6 +186,10 @@ def run(
     started = time.perf_counter()
     warnings: list[str] = []
 
+    # Clean wake word prefixes from the incoming question (e.g., "Hey Blinky", "Blinky")
+    question = question.strip()
+    question = re.sub(r"^(?:hey\s+)?blinky[\s,.:;!?]*", "", question, flags=re.IGNORECASE).strip()
+
     if ignored_rects:
         from utils.window import set_ignored_overlay_rects
         set_ignored_overlay_rects(ignored_rects)

@@ -98,6 +98,9 @@ def get_ignored_overlay_rects() -> list[dict[str, int]]:
                 if not w.is_visible():
                     continue
                 title = w.window_text()
+                # Skip the fullscreen highlight overlay window to prevent filtering out all elements on the screen
+                if "highlight overlay" in title.lower():
+                    continue
                 process_name = psutil.Process(w.process_id()).name().lower()
                 if not is_ignored_overlay_window(process_name, title):
                     continue

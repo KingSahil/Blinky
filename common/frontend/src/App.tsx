@@ -436,7 +436,7 @@ export function App() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const trimmed = question.trim();
+    let trimmed = question.trim().replace(/^(hey\s+)?blinky[\s,.:;!?]*/i, '').trim();
     if (!trimmed || isRunning) return;
 
     setIsRunning(true);

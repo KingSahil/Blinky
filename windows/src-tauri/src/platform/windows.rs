@@ -368,6 +368,7 @@ pub fn configure_overlay_passthrough(window: &WebviewWindow) {
                 style | WS_EX_TRANSPARENT as i32 | WS_EX_LAYERED as i32 | WS_EX_TOOLWINDOW as i32,
             );
         }
+        let _ = window.set_always_on_top(true);
     }
 }
 
