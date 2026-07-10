@@ -22,10 +22,60 @@ class BrowserController:
             self._playwright = await async_playwright().start()
 
         if self._browser is None or not self._browser.is_connected():
-            self._browser = await self._playwright.chromium.launch(
-                channel=self.channel,
-                headless=self.headless,
-            )
+            try:
+                self._browser = await self._playwright.chromium.launch(
+                    channel=self.channel,
+                    headless=self.headless,
+                )
+            except Exception as e:
+                err_msg = str(e)
+                if any(k in err_msg for k in ["Executable doesn't exist", "run the command", "playwright install"]):
+                    print("Playwright chromium browser not found. Installing chromium...", flush=True)
+                    import subprocess
+                    import sys
+                    try:
+                        subprocess.run(
+                            [sys.executable, "-m", "playwright", "install", "chromium"],
+                            check=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE
+                        )
+                        self._browser = await self._playwright.chromium.launch(
+                            channel=self.channel,
+                            headless=self.headless,
+                        )
+                    except Exception as install_err:
+                        print(f"Error installing/launching chromium: {install_err}", flush=True)
+                        raise install_err
+                elif self.channel == "msedge":
+                    print("Edge browser not found or failed to launch. Falling back to default Chromium...", flush=True)
+                    try:
+                        self._browser = await self._playwright.chromium.launch(
+                            headless=self.headless,
+                        )
+                    except Exception as fb_err:
+                        fb_err_msg = str(fb_err)
+                        if any(k in fb_err_msg for k in ["Executable doesn't exist", "run the command", "playwright install"]):
+                            print("Playwright chromium browser not found during fallback. Installing chromium...", flush=True)
+                            import subprocess
+                            import sys
+                            try:
+                                subprocess.run(
+                                    [sys.executable, "-m", "playwright", "install", "chromium"],
+                                    check=True,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE
+                                )
+                                self._browser = await self._playwright.chromium.launch(
+                                    headless=self.headless,
+                                )
+                            except Exception as fb_install_err:
+                                print(f"Error installing/launching default chromium: {fb_install_err}", flush=True)
+                                raise fb_install_err
+                        else:
+                            raise fb_err
+                else:
+                    raise e
 
         self._page = await self._browser.new_page()
         self._page.set_default_timeout(10000)

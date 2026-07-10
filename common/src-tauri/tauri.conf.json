@@ -57,6 +57,11 @@
       "../../common/python/": "common/python/",
       "../../common/whatsapp_backend/": "common/whatsapp_backend/",
       "../../windows/requirements.txt": "windows/requirements.txt"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "hooks.nsi"
+      }
     }
   }
 }

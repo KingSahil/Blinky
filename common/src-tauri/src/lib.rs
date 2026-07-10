@@ -526,11 +526,15 @@ fn python_executable(root: &PathBuf) -> PathBuf {
     for venv in candidates {
         let bin_path = venv.join("bin").join("python");
         let scripts_path = venv.join("Scripts").join("python.exe");
+        let direct_path = venv.join("python.exe");
         if bin_path.exists() {
             return bin_path;
         }
         if scripts_path.exists() {
             return scripts_path;
+        }
+        if direct_path.exists() {
+            return direct_path;
         }
     }
 

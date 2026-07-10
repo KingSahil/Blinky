@@ -445,7 +445,27 @@ async def run_playwright_health_check() -> tuple[bool, str]:
     browser = None
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+            try:
+                browser = await p.chromium.launch(headless=True)
+            except Exception as e:
+                err_msg = str(e)
+                if any(k in err_msg for k in ["Executable doesn't exist", "run the command", "playwright install"]):
+                    print("Playwright chromium browser not found during health check. Installing chromium...", flush=True)
+                    import subprocess
+                    import sys
+                    try:
+                        subprocess.run(
+                            [sys.executable, "-m", "playwright", "install", "chromium"],
+                            check=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE
+                        )
+                        browser = await p.chromium.launch(headless=True)
+                    except Exception as install_err:
+                        return False, f"Playwright chromium installation failed: {install_err}"
+                else:
+                    return False, f"Playwright chromium launch failed: {e}"
+
             page = await browser.new_page()
             page.set_default_timeout(5000)
             await page.goto(
