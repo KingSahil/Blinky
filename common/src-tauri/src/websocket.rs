@@ -113,21 +113,44 @@ fn project_root() -> PathBuf {
 }
 
 fn python_executable(root: &PathBuf) -> PathBuf {
-    let bin_path = root.join(".venv").join("bin").join("python");
-    let scripts_path = root.join(".venv").join("Scripts").join("python.exe");
-    if bin_path.exists() {
-        bin_path
-    } else if scripts_path.exists() {
-        scripts_path
-    } else {
-        #[cfg(target_os = "windows")]
-        {
-            PathBuf::from("python")
+    let mut candidates = vec![root.join("python_runtime").join("Python313"), root.join(".venv")];
+
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut dir = Some(cwd.as_path());
+        while let Some(path) = dir {
+            candidates.push(path.join(".venv"));
+            dir = path.parent();
         }
-        #[cfg(not(target_os = "windows"))]
-        {
-            PathBuf::from("python3")
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let mut dir = Some(exe_dir);
+            while let Some(path) = dir {
+                candidates.push(path.join(".venv"));
+                dir = path.parent();
+            }
         }
+    }
+
+    for venv in candidates {
+        let bin_path = venv.join("bin").join("python");
+        let scripts_path = venv.join("Scripts").join("python.exe");
+        if bin_path.exists() {
+            return bin_path;
+        }
+        if scripts_path.exists() {
+            return scripts_path;
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from("py")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        PathBuf::from("python3")
     }
 }
 

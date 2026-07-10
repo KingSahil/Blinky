@@ -15,4 +15,5 @@ typing-extensions>=4.15.0
 pytesseract>=0.3.10; sys_platform != 'win32'
 PyYAML>=6.0.1
 openwakeword>=0.1.0
-sounddevice>=0.4.6
+scipy>=1.11.0
+sounddevice>=0.5.1

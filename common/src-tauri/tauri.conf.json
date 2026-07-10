@@ -5,7 +5,7 @@
   "identifier": "app.blinky.tutor",
   "build": {
     "beforeDevCommand": "vite --config common/frontend/vite.config.ts",
-    "beforeBuildCommand": "vite build --config common/frontend/vite.config.ts",
+    "beforeBuildCommand": "bun common/scripts/prepare-python-runtime.mjs && vite build --config common/frontend/vite.config.ts",
     "devUrl": "http://localhost:5173",
     "frontendDist": "../frontend/dist"
   },
@@ -51,9 +51,11 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
-    "resources": [
-      "../python",
-      "../../windows/requirements.txt"
-    ]
+    "resources": {
+      "../../common/python_runtime/Python313/": "python_runtime/Python313/",
+      "../../common/python/": "common/python/",
+      "../../common/whatsapp_backend/": "common/whatsapp_backend/",
+      "../../windows/requirements.txt": "windows/requirements.txt"
+    }
   }
 }

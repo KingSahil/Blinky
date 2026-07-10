@@ -502,21 +502,44 @@ fn project_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn python_executable(root: &PathBuf) -> PathBuf {
-    let bin_path = root.join(".venv").join("bin").join("python");
-    let scripts_path = root.join(".venv").join("Scripts").join("python.exe");
-    if bin_path.exists() {
-        bin_path
-    } else if scripts_path.exists() {
-        scripts_path
-    } else {
-        #[cfg(target_os = "windows")]
-        {
-            PathBuf::from("python")
+    let mut candidates = vec![root.join("python_runtime").join("Python313"), root.join(".venv")];
+
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut dir = Some(cwd.as_path());
+        while let Some(path) = dir {
+            candidates.push(path.join(".venv"));
+            dir = path.parent();
         }
-        #[cfg(not(target_os = "windows"))]
-        {
-            PathBuf::from("python3")
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let mut dir = Some(exe_dir);
+            while let Some(path) = dir {
+                candidates.push(path.join(".venv"));
+                dir = path.parent();
+            }
         }
+    }
+
+    for venv in candidates {
+        let bin_path = venv.join("bin").join("python");
+        let scripts_path = venv.join("Scripts").join("python.exe");
+        if bin_path.exists() {
+            return bin_path;
+        }
+        if scripts_path.exists() {
+            return scripts_path;
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from("py")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        PathBuf::from("python3")
     }
 }
 
@@ -690,7 +713,14 @@ fn start_wake_word_detector(app: &AppHandle) {
             return;
         }
     };
-    let script = root.join("python").join("wake_word.py");
+    let script_candidates = [
+        root.join("python").join("wake_word.py"),
+        root.join("common").join("python").join("wake_word.py"),
+    ];
+    let script = script_candidates
+        .into_iter()
+        .find(|path| path.exists())
+        .unwrap_or_else(|| root.join("python").join("wake_word.py"));
     if !script.exists() {
         eprintln!(
             "Warning: Wake word script was not found: {}",
@@ -699,7 +729,14 @@ fn start_wake_word_detector(app: &AppHandle) {
         return;
     }
 
-    let model_path = root.join("python").join("hey_blinky.onnx");
+    let model_candidates = [
+        root.join("python").join("hey_blinky.onnx"),
+        root.join("common").join("python").join("hey_blinky.onnx"),
+    ];
+    let model_path = model_candidates
+        .into_iter()
+        .find(|path| path.exists())
+        .unwrap_or_else(|| root.join("python").join("hey_blinky.onnx"));
 
     let mut command = Command::new(python_executable(&root));
     command
