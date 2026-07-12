@@ -120,16 +120,10 @@ def find_start_app_impl(app_name: str) -> dict[str, Any] | None:
     if not safe_query:
         return None
 
-    command = "\n".join(
-        [
-            "$query = $args[0]",
-            "$apps = Get-StartApps | Where-Object { $_.Name -like \"*$query*\" } | Select-Object -First 1 Name,AppID",
-            "if ($apps) { $apps | ConvertTo-Json -Compress }",
-        ]
-    )
+    command = "& { param($query); $apps = Get-StartApps | Where-Object { $_.Name -like \"*$query*\" } | Select-Object -First 1 Name,AppID; if ($apps) { $apps | ConvertTo-Json -Compress } }"
     try:
         completed = subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command, safe_query],
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command, f'"{safe_query}"'],
             capture_output=True,
             text=True,
             timeout=5,

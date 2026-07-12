@@ -363,13 +363,7 @@ def _find_start_app_windows(app_name: str) -> dict[str, Any] | None:
     safe_query = normalize_app_name(app_name)
     if not safe_query:
         return None
-    command = "\n".join(
-        [
-            "$query = $args[0]",
-            '$apps = Get-StartApps | Where-Object { $_.Name -like "*$query*" } | Select-Object -First 1 Name,AppID',
-            "if ($apps) { $apps | ConvertTo-Json -Compress }",
-        ]
-    )
+    command = "& { param($query); $apps = Get-StartApps | Where-Object { $_.Name -like \"*$query*\" } | Select-Object -First 1 Name,AppID; if ($apps) { $apps | ConvertTo-Json -Compress } }"
     try:
         completed = subprocess.run(
             [
@@ -379,7 +373,7 @@ def _find_start_app_windows(app_name: str) -> dict[str, Any] | None:
                 "Bypass",
                 "-Command",
                 command,
-                safe_query,
+                f'"{safe_query}"',
             ],
             capture_output=True,
             text=True,
@@ -1221,7 +1215,7 @@ async def resolve_youtube_video_url(video_query: str) -> str | None:
     try:
         client = SearXNGClient()
         results = await client.search_category(
-            f"site:youtube.com/watch {video_query}", category="general", limit=5
+            f"{video_query} youtube watch", category="general", limit=5
         )
         for r in results:
             url = r.get("url", "")

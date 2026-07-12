@@ -1,5 +1,5 @@
 import { existsSync } from 'fs';
-import { mkdir, readFile, rm } from 'fs/promises';
+import { mkdir, readFile, rm, copyFile } from 'fs/promises';
 import { execFileSync, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import path from 'path';
@@ -49,6 +49,28 @@ if (!existsSync(runtimePython)) {
   console.error(`Portable Python was not created at ${runtimePython}`);
   process.exit(1);
 }
+
+// ── 1.1 Copy System C++ Runtime DLLs (MSVC Redistributable) ──────────────────
+// This ensures C++ compiled extensions like winrt and cv2 load successfully
+// on clean target machines that don't have Visual C++ Redistributables installed.
+console.log('Copying MSVC runtime DLLs (msvcp140.dll/msvcp140_1.dll)...');
+const system32Dir = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
+const msvcDlls = ['msvcp140.dll', 'msvcp140_1.dll'];
+for (const dll of msvcDlls) {
+  const srcPath = path.join(system32Dir, dll);
+  const destPath = path.join(runtimeDir, dll);
+  if (existsSync(srcPath)) {
+    try {
+      await copyFile(srcPath, destPath);
+      console.log(`  Copied ${dll} to python root.`);
+    } catch (err) {
+      console.warn(`  Failed to copy ${dll}: ${err.message}`);
+    }
+  } else {
+    console.warn(`  Warning: System DLL ${dll} not found in System32!`);
+  }
+}
+
 
 // ── 2. Wipe pre-existing site-packages (from system Python) ──────────────────
 const libDir = path.join(runtimeDir, 'Lib');

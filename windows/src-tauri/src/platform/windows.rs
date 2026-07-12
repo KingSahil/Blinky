@@ -105,7 +105,7 @@ pub fn scroll_at_point_impl(x: i32, y: i32, direction: &str, amount: i32) -> Res
         wheel_delta * amount
     };
 
-    let mut inputs = [
+    let mut move_input = [
         INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
@@ -119,6 +119,22 @@ pub fn scroll_at_point_impl(x: i32, y: i32, direction: &str, amount: i32) -> Res
                 },
             },
         },
+    ];
+
+    let sent_move = unsafe {
+        SendInput(
+            move_input.len() as u32,
+            move_input.as_mut_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        )
+    };
+    if sent_move != move_input.len() as u32 {
+        return Err(format!("SendInput move event failed (sent {sent_move})"));
+    }
+
+    thread::sleep(Duration::from_millis(50));
+
+    let mut wheel_input = [
         INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
@@ -134,15 +150,15 @@ pub fn scroll_at_point_impl(x: i32, y: i32, direction: &str, amount: i32) -> Res
         },
     ];
 
-    let sent = unsafe {
+    let sent_wheel = unsafe {
         SendInput(
-            inputs.len() as u32,
-            inputs.as_mut_ptr(),
+            wheel_input.len() as u32,
+            wheel_input.as_mut_ptr(),
             std::mem::size_of::<INPUT>() as i32,
         )
     };
-    if sent != inputs.len() as u32 {
-        return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
+    if sent_wheel != wheel_input.len() as u32 {
+        return Err(format!("SendInput wheel event failed (sent {sent_wheel})"));
     }
     Ok(())
 }

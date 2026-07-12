@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import * as Network from 'expo-network';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { usePCWebSocket, ConnectionStatus } from './usePCWebSocket';
@@ -45,11 +46,90 @@ const getExpoHostIp = (): string | null => {
   return host || null;
 };
 
+const checkIpAddress = (ip: string, port = 9001, timeoutMs = 800): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    let ws: WebSocket | null = null;
+    const timer = setTimeout(() => {
+      if (ws) {
+        try {
+          ws.close();
+        } catch (e) {}
+      }
+      reject(new Error('Timeout'));
+    }, timeoutMs);
+
+    try {
+      ws = new WebSocket(`ws://${ip}:${port}`);
+      
+      ws.onopen = () => {
+        clearTimeout(timer);
+        try {
+          ws.close();
+        } catch (e) {}
+        resolve(ip);
+      };
+      
+      ws.onerror = () => {
+        clearTimeout(timer);
+        try {
+          ws.close();
+        } catch (e) {}
+        reject(new Error('Connection error'));
+      };
+      
+      ws.onclose = () => {
+        clearTimeout(timer);
+      };
+    } catch (e) {
+      clearTimeout(timer);
+      reject(e);
+    }
+  });
+};
+
+const scanSubnet = async (
+  subnet: string,
+  onProgress?: (msg: string) => void
+): Promise<string | null> => {
+  const port = 9001;
+  const timeoutMs = 600; // 600ms is a sweet spot for local Wi-Fi pings
+  const concurrency = 35; // Parallel checks
+  
+  const ips: string[] = [];
+  for (let i = 1; i <= 254; i++) {
+    ips.push(`${subnet}.${i}`);
+  }
+
+  // Scan in parallel batches
+  for (let i = 0; i < ips.length; i += concurrency) {
+    const batch = ips.slice(i, i + concurrency);
+    if (onProgress) {
+      onProgress(`Searching subnet (checking IPs ${i + 1} to ${Math.min(i + concurrency, 254)})...`);
+    }
+    
+    const promises = batch.map(ip => 
+      checkIpAddress(ip, port, timeoutMs)
+        .then(foundIp => foundIp)
+        .catch(() => null)
+    );
+    
+    const results = await Promise.all(promises);
+    const found = results.find(res => res !== null);
+    if (found) {
+      return found;
+    }
+  }
+  
+  return null;
+};
+
 export default function App() {
   const [ipAddress, setIpAddress] = useState('');
   const { status, errorMsg, latestResponse, connect, disconnect, sendCommand, sendQuery } = usePCWebSocket();
   const isConnected = status === 'connected';
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [discoveryProgress, setDiscoveryProgress] = useState<string | null>(null);
 
   const [queryText, setQueryText] = useState('');
   const [agentStatus, setAgentStatus] = useState<'idle' | 'processing' | 'success' | 'error'>('idle');
@@ -122,14 +202,41 @@ export default function App() {
       try {
         const savedIp = await AsyncStorage.getItem(STORAGE_KEY);
         const detectedIp = getExpoHostIp();
-        setIpAddress(savedIp || detectedIp || '');
+        const initialIp = savedIp || detectedIp || 'localhost';
+        setIpAddress(initialIp);
+        connect(initialIp);
       } catch (e) {
         console.error('Failed to load host IP address', e);
-        setIpAddress(getExpoHostIp() || '');
+        const fallback = getExpoHostIp() || 'localhost';
+        setIpAddress(fallback);
+        connect(fallback);
       }
     }
     loadIp();
   }, []);
+
+  // Quietly auto-discover and connect on start if connection fails and device is on Wi-Fi
+  useEffect(() => {
+    let active = true;
+    if (status === 'disconnected' || status === 'error') {
+      const timer = setTimeout(async () => {
+        if (!active) return;
+        try {
+          const deviceIp = await Network.getIpAddressAsync();
+          if (deviceIp && deviceIp !== '0.0.0.0' && deviceIp !== '127.0.0.1') {
+            console.log('Connection failed and Wi-Fi IP detected. Starting auto-discovery...');
+            handleAutoDiscover();
+          }
+        } catch (e) {
+          // No local network IP, ignore auto-discovery
+        }
+      }, 2500);
+      return () => {
+        active = false;
+        clearTimeout(timer);
+      };
+    }
+  }, [status]);
 
   // Listen to physical volume keys when connected
   useEffect(() => {
@@ -202,6 +309,47 @@ export default function App() {
     }
 
     connect(ipAddress);
+  };
+
+  const handleAutoDiscover = async () => {
+    setIsDiscovering(true);
+    setDiscoveryProgress('Getting network details...');
+    try {
+      const ip = await Network.getIpAddressAsync();
+      if (!ip || ip === '0.0.0.0') {
+        Alert.alert('Discovery Failed', 'Could not get device IP address. Make sure Wi-Fi is enabled.');
+        setIsDiscovering(false);
+        setDiscoveryProgress(null);
+        return;
+      }
+
+      const ipParts = ip.split('.');
+      if (ipParts.length !== 4) {
+        Alert.alert('Discovery Failed', `Unsupported network IP format: ${ip}`);
+        setIsDiscovering(false);
+        setDiscoveryProgress(null);
+        return;
+      }
+
+      const subnet = `${ipParts[0]}.${ipParts[1]}.${ipParts[2]}`;
+      const foundIp = await scanSubnet(subnet, (msg) => {
+        setDiscoveryProgress(msg);
+      });
+      
+      if (foundIp) {
+        setIpAddress(foundIp);
+        await AsyncStorage.setItem(STORAGE_KEY, foundIp);
+        connect(foundIp);
+      } else {
+        Alert.alert('Blinky Not Found', 'Could not auto-detect Blinky on this network. Make sure the desktop app is running and connected to the same Wi-Fi.');
+      }
+    } catch (err: any) {
+      console.error('Discovery error:', err);
+      Alert.alert('Error', `Discovery failed: ${err.message || err}`);
+    } finally {
+      setIsDiscovering(false);
+      setDiscoveryProgress(null);
+    }
   };
 
   const triggerCommand = (command: 'power_off' | 'restart' | 'sleep', label: string) => {
@@ -329,16 +477,32 @@ export default function App() {
 
               <View style={styles.actionRow}>
                 {status !== 'connected' && status !== 'connecting' ? (
-                  <TouchableOpacity style={styles.connectBtn} onPress={handleConnect} activeOpacity={0.8}>
-                    <LinearGradient
-                      colors={['#3B82F6', '#1D4ED8']}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={styles.gradientBtn}
-                    >
-                      <Text style={styles.btnText}>Establish Link</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
+                  <>
+                    <TouchableOpacity style={styles.connectBtn} onPress={handleConnect} activeOpacity={0.8} disabled={isDiscovering}>
+                      <LinearGradient
+                        colors={isDiscovering ? ['#4B5563', '#374151'] : ['#3B82F6', '#1D4ED8']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.gradientBtn}
+                      >
+                        <Text style={styles.btnText}>Establish Link</Text>
+                      </LinearGradient>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity style={styles.discoverBtn} onPress={handleAutoDiscover} activeOpacity={0.8} disabled={isDiscovering}>
+                      <LinearGradient
+                        colors={isDiscovering ? ['#4B5563', '#374151'] : ['#8B5CF6', '#6D28D9']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.gradientBtn}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Ionicons name="scan-outline" size={16} color="#FFF" style={{ marginRight: 6 }} />
+                          <Text style={styles.btnText}>Auto Discover</Text>
+                        </View>
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  </>
                 ) : (
                   <TouchableOpacity style={styles.disconnectBtn} onPress={disconnect} activeOpacity={0.8}>
                     <Text style={styles.disconnectBtnText}>
@@ -347,6 +511,13 @@ export default function App() {
                   </TouchableOpacity>
                 )}
               </View>
+
+              {discoveryProgress && (
+                <View style={styles.discoveryProgressContainer}>
+                  <ActivityIndicator size="small" color="#8B5CF6" style={{ marginRight: 8 }} />
+                  <Text style={styles.discoveryProgressText}>{discoveryProgress}</Text>
+                </View>
+              )}
 
               {errorMsg && (
                 <View style={styles.errorContainer}>
@@ -728,6 +899,12 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
   },
+  discoverBtn: {
+    flex: 1,
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginLeft: 10,
+  },
   gradientBtn: {
     height: 52,
     justifyContent: 'center',
@@ -785,6 +962,22 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: '#EF4444',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  discoveryProgressContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(139, 92, 246, 0.08)',
+    borderColor: 'rgba(139, 92, 246, 0.18)',
+    borderWidth: 1,
+    padding: 10,
+    borderRadius: 12,
+    marginTop: 14,
+  },
+  discoveryProgressText: {
+    color: '#C084FC',
     fontSize: 13,
     fontWeight: '600',
   },

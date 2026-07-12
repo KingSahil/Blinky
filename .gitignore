@@ -9,6 +9,10 @@
 .venv/
 env/
 venv/
+Lib/
+Scripts/
+Include/
+pyvenv.cfg
 node_modules/
 __pycache__/
 *.pyc
@@ -43,3 +47,4 @@ data
 data/users/blinky-default-session/summary-memory.json
 .wwebjs_cache
 screenshots_parsed
+landing

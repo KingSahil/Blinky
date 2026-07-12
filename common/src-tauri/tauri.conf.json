@@ -58,7 +58,9 @@
       "../../python/": "python/",
       "../../windows/python/": "windows/python/",
       "../../common/whatsapp_backend/": "common/whatsapp_backend/",
-      "../../windows/requirements.txt": "windows/requirements.txt"
+      "../../windows/requirements.txt": "windows/requirements.txt",
+      "../../common/docker-compose.yml": "common/docker-compose.yml",
+      "../../common/searxng/": "common/searxng/"
     },
     "windows": {
       "nsis": {
