@@ -196,17 +196,18 @@ For any app Blinky hasn't seen before, `app_context/registry.py` now **auto-gene
 
 ## 📽️ Demo & Deliverables
 
-- **Demo Video Link (Mandatory):** _[Paste YouTube/Loom Link]_  
-- **Deployment Link (Recommended):** [blinky.base44.app](https://blinky.base44.app) (Landing Page & Releases)  
-- **Pitch Deck / PPT (Optional):** _[Paste Canva/Google Slides Link]_  
+- **Demo Video Link (Mandatory):** : [Youtube Video](https://youtu.be/CHFF9J_Jqgw)
+- **Deployment Link (Recommended):** : [blinky.base44.app](https://blinky.base44.app) (Landing Page & Releases) 
+- **Pitch Deck / PPT (Optional):** : [Blinky Deck](https://docs.google.com/presentation/d/10isbvsbzb3Xm2RzeHyaA_FQqcjUTUzRipflrhuyABRY/edit?slide=id.g3f49da6dcbc_0_157#slide=id.g3f49da6dcbc_0_157)
+-  **Blog** : [Building Blinky: Fighting CAPTCHAs, Invisible Windows, and the Agony of Visualizing AI](https://medium.com/@khannasparsh0001/building-blinky-fighting-captchas-invisible-windows-and-the-agony-of-visualizing-ai-b1247b9fc324?sharedUserId=khannasparsh0001) 
 
 ---
 
 ## ✅ Tasks & Bonus Checklist
 
-- [ ] All team members completed the mandatory social task  
-- [ ] Bonus Task 1 – Badge sharing  
-- [ ] Bonus Task 2 – Blog/article  
+- [x] All team members completed the mandatory social task  
+- [x] Bonus Task 1 – Badge sharing  
+- [x] Bonus Task 2 – Blog/article  
 
 ---
 
