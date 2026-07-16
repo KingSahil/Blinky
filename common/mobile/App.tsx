@@ -234,15 +234,16 @@ export default function App() {
           const next = prev + 1;
           // Live update timer duration & smooth real progress percentage on the active message
           if (activeBlinkyMsgIdRef.current) {
-            const dynamicPercent = Math.min(94, Math.max(15, Math.floor(15 + (next * 8))));
             setMessages(currentMessages =>
               currentMessages.map(m => {
                 if (m.id === activeBlinkyMsgIdRef.current) {
+                  const currentPercent = m.progress?.percent || 15;
+                  const crawlPercent = currentPercent < 94 ? Math.min(94, currentPercent + 1) : currentPercent;
                   return {
                     ...m,
                     progress: {
                       ...m.progress!,
-                      percent: dynamicPercent,
+                      percent: crawlPercent,
                       duration: next,
                     }
                   };
@@ -279,19 +280,39 @@ export default function App() {
 
       const { status: respStatus, data, error } = latestResponse;
       const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const currentActiveId = activeBlinkyMsgIdRef.current;
 
       if (respStatus === 'processing') {
         setAgentStatus('processing');
         
         // Update active blinky message
-        if (activeBlinkyMsgIdRef.current) {
+        if (currentActiveId) {
           setMessages(prev => prev.map(m => {
-            if (m.id === activeBlinkyMsgIdRef.current) {
+            if (m.id === currentActiveId) {
               const prevMsg = m.progress?.statusText || '';
               const newMsg = data?.is_chunk ? (prevMsg + (data?.message || '')) : (data?.message || 'Processing...');
-              const dynamicPercent = data?.confidence !== undefined && data.confidence > 0
-                ? data.confidence
-                : Math.min(94, Math.max(15, Math.floor(15 + (timerSeconds * 8))));
+              
+              let dynamicPercent = 15;
+              if (data?.percent !== undefined) {
+                dynamicPercent = data.percent;
+              } else if (data?.confidence !== undefined && data.confidence > 0) {
+                dynamicPercent = data.confidence;
+              } else {
+                const currentPercent = m.progress?.percent || 15;
+                const lowerMsg = newMsg.toLowerCase();
+                if (lowerMsg.includes('analyzing') || lowerMsg.includes('speech')) {
+                  dynamicPercent = 15;
+                } else if (lowerMsg.includes('screenshot') || lowerMsg.includes('capturing')) {
+                  dynamicPercent = 50;
+                } else if (lowerMsg.includes('opening') || lowerMsg.includes('triggering')) {
+                  dynamicPercent = 60;
+                } else if (lowerMsg.includes('testing playwright')) {
+                  dynamicPercent = 55;
+                } else {
+                  dynamicPercent = Math.min(94, Math.max(currentPercent, Math.floor(15 + (timerSeconds * 8))));
+                }
+              }
+
               return {
                 ...m,
                 text: "I'm on it. Locating the request...",
@@ -309,9 +330,9 @@ export default function App() {
         setAgentStatus('idle');
         
         // Freeze active message at 100%
-        if (activeBlinkyMsgIdRef.current) {
+        if (currentActiveId) {
           setMessages(prev => prev.map(m => {
-            if (m.id === activeBlinkyMsgIdRef.current) {
+            if (m.id === currentActiveId) {
               return {
                 ...m,
                 progress: {
@@ -342,9 +363,9 @@ export default function App() {
         setAgentStatus('error');
         
         // Mark active message as failed
-        if (activeBlinkyMsgIdRef.current) {
+        if (currentActiveId) {
           setMessages(prev => prev.map(m => {
-            if (m.id === activeBlinkyMsgIdRef.current) {
+            if (m.id === currentActiveId) {
               return {
                 ...m,
                 progress: {
@@ -654,9 +675,10 @@ export default function App() {
     setAgentStatus('idle');
     setRunningQuery('');
     setQueryText('');
-    if (activeBlinkyMsgIdRef.current) {
+    const currentActiveId = activeBlinkyMsgIdRef.current;
+    if (currentActiveId) {
       setMessages(prev => prev.map(m => {
-        if (m.id === activeBlinkyMsgIdRef.current) {
+        if (m.id === currentActiveId) {
           return {
             ...m,
             progress: {

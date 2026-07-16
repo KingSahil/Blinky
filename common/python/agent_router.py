@@ -633,16 +633,22 @@ async def handle_request(line):
     request_id = req.get("requestId", "unknown")
     query = req.get("query", "").strip()
 
+    from utils.logging import get_logger
+    logger = get_logger("blinky.agent_router")
+    logger.info(f"handle_request received request_id={request_id} query='{query}'")
+
     if not query:
+        logger.warning(f"Empty query received for request_id={request_id}")
         send_response(request_id, "error", error={"code": "INVALID_QUERY", "message": "Query text cannot be empty", "details": ""})
         return
 
-    send_response(request_id, "processing", data={"message": "Analyzing query and routing..."})
+    logger.info(f"Sending processing response for request_id={request_id}")
+    send_response(request_id, "processing", data={"message": "Analyzing query and routing...", "percent": 15})
 
     # ── Instant PC Screenshot Handler ──
     cleaned_query = query.lower().strip()
     if any(k in cleaned_query for k in {"capture screenshot", "take screenshot", "get screenshot", "capture current pc screen", "capture screen", "pc screenshot"}):
-        send_response(request_id, "processing", data={"message": "Capturing PC screenshot..."})
+        send_response(request_id, "processing", data={"message": "Capturing PC screenshot...", "percent": 50})
         try:
             from capture import capture_screen
             import base64
@@ -695,26 +701,30 @@ async def handle_request(line):
             direct_result = None
             from computer_use.agent import STOP_SPOTIFY_RE
             if STOP_SPOTIFY_RE.match(query.strip().rstrip("?.!,;:")):
-                send_response(request_id, "processing", data={"message": "Toggling media playback..."})
+                send_response(request_id, "processing", data={"message": "Toggling media playback...", "percent": 50})
                 direct_result = shortcut_tool("media_play_pause")
             elif intent == "MEDIA_PLAYBACK":
                 from computer_use.agent import handle_media_playback_action
                 direct_result = handle_media_playback_action(extracted_params, query)
             elif intent == "OPEN_APP":
                 app = extracted_params.get("app_name")
-                if app and not (is_web_destination(app) or is_in_app_action(app) or not looks_like_app_name(app)):
-                    send_response(request_id, "processing", data={"message": f"Opening {app}..."})
-                    direct_result = open_app_tool(app)
+                if app:
+                    from computer_use.tools import APP_PROTOCOLS, APP_NAME_ALIASES, normalize_app_name
+                    normalized = normalize_app_name(app)
+                    is_known_app = normalized in APP_PROTOCOLS or normalized in APP_NAME_ALIASES
+                    if is_known_app or not (is_web_destination(app) or is_in_app_action(app) or not looks_like_app_name(app)):
+                        send_response(request_id, "processing", data={"message": f"Opening {app}...", "percent": 60})
+                        direct_result = open_app_tool(app)
             elif intent == "SYSTEM_SHORTCUT":
                 shortcut = extracted_params.get("shortcut")
                 if shortcut:
-                    send_response(request_id, "processing", data={"message": f"Triggering shortcut {shortcut}..."})
+                    send_response(request_id, "processing", data={"message": f"Triggering shortcut {shortcut}...", "percent": 60})
                     direct_result = shortcut_tool(shortcut)
             elif intent == "COMPUTER_USE":
                 # Only run the full computer use loop if on Linux
                 if platform.system() == "Linux":
                     from computer_use.loop import run_computer_use_loop
-                    send_response(request_id, "processing", data={"message": "Running desktop automation loop..."})
+                    send_response(request_id, "processing", data={"message": "Running desktop automation loop...", "percent": 60})
                     loop_result = run_computer_use_loop(query)
                     if loop_result.get("success"):
                         send_response(request_id, "success", data={"response": loop_result.get("answer", "Task completed.")})
@@ -746,7 +756,7 @@ async def handle_request(line):
                 return any(k in lowered for k in screen_keywords)
 
             if is_screen_query(query, intent):
-                send_response(request_id, "processing", data={"message": "Inspecting PC screen..."})
+                send_response(request_id, "processing", data={"message": "Inspecting PC screen...", "percent": 50})
                 from utils.screen_annotator import annotate_screenshot
                 
                 payload_in = {
@@ -780,20 +790,20 @@ async def handle_request(line):
     except Exception as ex:
         import logging
         logging.getLogger("blinky.agent_router").warning(f"Error during local desktop routing check: {ex}")
-
+ 
     if is_playwright_health_check_request(query):
-        send_response(request_id, "processing", data={"message": "Testing Playwright locally..."})
+        send_response(request_id, "processing", data={"message": "Testing Playwright locally...", "percent": 55})
         ok, message = await run_playwright_health_check()
         if ok:
             send_response(request_id, "success", data={"response": message})
         else:
             send_response(request_id, "error", error={"code": "PLAYWRIGHT_HEALTHCHECK_FAILED", "message": "Playwright health check failed", "details": message})
         return
-
+ 
     open_url = resolve_open_url_request(query)
     if open_url:
         label, url = open_url
-        send_response(request_id, "processing", data={"message": f"Opening {label}..."})
+        send_response(request_id, "processing", data={"message": f"Opening {label}...", "percent": 60})
         try:
             opened = await asyncio.to_thread(webbrowser.open, url)
             if not opened:
@@ -802,11 +812,11 @@ async def handle_request(line):
         except Exception as e:
             send_response(request_id, "error", error={"code": "OPEN_URL_FAILED", "message": f"Failed to open {label}", "details": str(e)})
         return
-
+ 
     youtube_search = resolve_youtube_search_request(query)
     if youtube_search:
         terms, url = youtube_search
-        send_response(request_id, "processing", data={"message": f"Searching YouTube for {terms}..."})
+        send_response(request_id, "processing", data={"message": f"Searching YouTube for {terms}...", "percent": 50})
         try:
             from computer_use.tools import extract_channel_from_query, resolve_youtube_video_url
             msg = f"Searched YouTube for {terms}."
@@ -826,11 +836,11 @@ async def handle_request(line):
         except Exception as e:
             send_response(request_id, "error", error={"code": "YOUTUBE_SEARCH_FAILED", "message": f"Failed to search YouTube for {terms}", "details": str(e)})
         return
-
+ 
     web_search = resolve_web_search_request(query)
     if web_search:
         terms, url = web_search
-        send_response(request_id, "processing", data={"message": f"Searching for {terms}..."})
+        send_response(request_id, "processing", data={"message": f"Searching for {terms}...", "percent": 50})
         try:
             opened = await asyncio.to_thread(webbrowser.open, url)
             if not opened:
@@ -839,11 +849,11 @@ async def handle_request(line):
         except Exception as e:
             send_response(request_id, "error", error={"code": "WEB_SEARCH_FAILED", "message": f"Failed to search for {terms}", "details": str(e)})
         return
-
+ 
     ai_open_url = resolve_ai_open_url_request(query)
     if ai_open_url:
         label, url = ai_open_url
-        send_response(request_id, "processing", data={"message": f"Opening {label}..."})
+        send_response(request_id, "processing", data={"message": f"Opening {label}...", "percent": 60})
         try:
             opened = await asyncio.to_thread(webbrowser.open, url)
             if not opened:
@@ -852,20 +862,22 @@ async def handle_request(line):
         except Exception as e:
             send_response(request_id, "error", error={"code": "AI_OPEN_URL_FAILED", "message": f"Failed to open {label}", "details": str(e)})
         return
-
+ 
     browser_plan = plan_browser_action(query)
     if browser_plan.get("match"):
         send_response(request_id, "processing", data={
             "message": "Planning safe browser action...",
             "action": browser_plan.get("action", ""),
             "confidence": browser_plan.get("confidence", 0),
+            "percent": 35,
         })
         try:
             result = await run_browser_plan(browser_plan)
             send_response(request_id, "success", data=result)
+            return
         except Exception as e:
             send_response(request_id, "error", error={"code": "BROWSER_PLAN_FAILED", "message": "Failed to run browser action", "details": str(e)})
-        return
+            return
 
     registry = await load_registry_async()
     
@@ -961,7 +973,8 @@ Respond ONLY with valid JSON.
         send_response(request_id, "processing", data={
             "message": f"Routing to {len(tool_calls)} tool call(s) (Confidence: {confidence}%)...",
             "confidence": confidence,
-            "reasoning": reasoning
+            "reasoning": reasoning,
+            "percent": 50
         })
         
         semaphore = asyncio.Semaphore(3)
@@ -1007,7 +1020,8 @@ Respond ONLY with valid JSON.
             send_response(request_id, "processing", data={
                 "message": "No matching tools. Retrieving web intelligence...",
                 "confidence": confidence,
-                "reasoning": reasoning
+                "reasoning": reasoning,
+                "percent": 25
             })
             
             from wil.pipeline import WILPipeline
@@ -1015,10 +1029,19 @@ Respond ONLY with valid JSON.
 
             def on_status(phase: str, status_data: dict) -> None:
                 msg = status_data.get("message", f"Web search stage: {phase}")
+                phase_percents = {
+                    "planning": 30,
+                    "retrieving": 50,
+                    "acquiring": 70,
+                    "processing": 85,
+                    "reasoning": 90,
+                }
+                percent = phase_percents.get(phase, 25)
                 send_response(request_id, "processing", data={
                     "message": msg,
                     "confidence": confidence,
-                    "reasoning": reasoning
+                    "reasoning": reasoning,
+                    "percent": percent
                 })
 
             send_response(request_id, "processing", data={"message": "", "is_chunk": True})

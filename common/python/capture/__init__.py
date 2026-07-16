@@ -45,16 +45,23 @@ def capture_screen() -> Screenshot:
     image = None
     if os.name == "nt":
         try:
-            from dxcam_capture import DXCamCaptureStrategy
-
-            strategy = DXCamCaptureStrategy()
-            image = strategy.capture()
-            LOGGER.info("Captured screen with DXCamCaptureStrategy")
+            start_time = time.perf_counter()
+            # Try PIL ImageGrab first as it is extremely reliable, instantaneous,
+            # and does not lock up the DirectX duplication pipeline.
+            image = ImageGrab.grab(all_screens=False)
+            LOGGER.info("Captured screen with PIL ImageGrab in %.2fms", (time.perf_counter() - start_time) * 1000)
         except Exception as exc:
             LOGGER.warning(
-                "DXCamCaptureStrategy failed, falling back to PIL ImageGrab: %s", exc
+                "PIL ImageGrab failed, falling back to DXCamCaptureStrategy: %s", exc
             )
-            image = ImageGrab.grab(all_screens=False)
+            try:
+                from dxcam_capture import DXCamCaptureStrategy
+                strategy = DXCamCaptureStrategy()
+                image = strategy.capture()
+                LOGGER.info("Captured screen with DXCamCaptureStrategy")
+            except Exception as dxcam_exc:
+                LOGGER.exception("DXCamCaptureStrategy failed too")
+                raise CaptureError(f"Windows screen capture failed: {dxcam_exc}") from dxcam_exc
     else:
         try:
             from linux_capture import LinuxCaptureStrategyFactory
