@@ -14,8 +14,13 @@ from utils.logging import get_logger
 LOGGER = get_logger("blinky.groq")
 
 DEFAULT_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
-DECOMMISSIONED_GROQ_MODELS = {"llama-3.2-90b-vision-preview"}
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_VISION_MODEL = "qwen/qwen3.6-27b"
+DECOMMISSIONED_GROQ_MODELS = {
+    "llama-3.2-90b-vision-preview",
+    "llama-3.2-11b-vision-preview",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+}
 
 
 def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
@@ -23,7 +28,7 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is required when BLINKY_AI_PROVIDER=groq.")
 
-    model = _active_groq_model()
+    model = _active_groq_vision_model()
     groq_url = os.getenv("BLINKY_GROQ_URL", DEFAULT_GROQ_URL).strip() or DEFAULT_GROQ_URL
     
     # Allow configuring timeout via environment variable, defaulting to 90s for slower networks/heavy API load
@@ -155,6 +160,13 @@ def _active_groq_model() -> str:
     if model in DECOMMISSIONED_GROQ_MODELS:
         LOGGER.warning("Ignoring decommissioned Groq model %s; using %s", model, DEFAULT_GROQ_MODEL)
         return DEFAULT_GROQ_MODEL
+    return model
+
+
+def _active_groq_vision_model() -> str:
+    model = os.getenv("BLINKY_GROQ_VISION_MODEL", "").strip() or os.getenv("BLINKY_GROQ_MODEL", "").strip()
+    if not model or model in DECOMMISSIONED_GROQ_MODELS or model == "llama-3.3-70b-versatile":
+        return DEFAULT_GROQ_VISION_MODEL
     return model
 
 

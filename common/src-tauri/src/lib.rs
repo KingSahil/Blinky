@@ -974,10 +974,10 @@ mod tests {
     #[test]
     fn parses_env_line_with_quoted_value() {
         assert_eq!(
-            parse_env_line(r#"BLINKY_GROQ_MODEL="meta-llama/llama-4-scout-17b-16e-instruct""#),
+            parse_env_line(r#"BLINKY_GROQ_MODEL="llama-3.3-70b-versatile""#),
             Some((
                 "BLINKY_GROQ_MODEL".to_string(),
-                "meta-llama/llama-4-scout-17b-16e-instruct".to_string()
+                "llama-3.3-70b-versatile".to_string()
             ))
         );
     }

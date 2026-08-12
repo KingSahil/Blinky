@@ -101,7 +101,7 @@ Source: `common/python/ai/groq_client.py`
 | URL env | `BLINKY_GROQ_URL` |
 | Default URL | `https://api.groq.com/openai/v1/chat/completions` |
 | Model env | `BLINKY_GROQ_MODEL` |
-| Default model | `meta-llama/llama-4-scout-17b-16e-instruct` |
+| Default model | `llama-3.3-70b-versatile` |
 | Timeout env | `BLINKY_GROQ_TIMEOUT` |
 | Default timeout | `90` seconds |
 | Main output cap | `max_tokens: 350` |

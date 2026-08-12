@@ -77,7 +77,7 @@ npm run start
 | AI provider default in Rust settings | `groq` |
 | AI provider default in Python client | `ollama` if env is absent |
 | Ollama model | `gemma4:e4b` |
-| Groq model | `meta-llama/llama-4-scout-17b-16e-instruct` |
+| Groq model | `llama-3.3-70b-versatile` |
 | Sarvam TTS/STT | `bulbul:v3` / `saaras:v3` |
 | Browser controller | Playwright `chromium.launch(channel="msedge", headless=false)` by default |
 | SearXNG URL | `http://localhost:8888` |

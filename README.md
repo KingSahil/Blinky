@@ -108,7 +108,7 @@ Blinky serves students, developers, and general users learning to navigate deskt
 | **Backend Runtime**                  | Python 3.11+                                       |
 | **AI Runtime**                       | Ollama (Local)                                     |
 | **AI Model**                         | `gemma4:e4b`                                       |
-| **Cloud AI (optional)**              | Groq — `meta-llama/llama-4-scout-17b-16e-instruct` |
+| **Cloud AI (optional)**              | Groq — `llama-3.3-70b-versatile` |
 | **OCR**                              | Windows OCR API (WinRT), Falls back to pytesseract  |
 | **Screen Capture**                   | `dxcam` (DirectX-based high-frame capture)         |
 | **Window Detection**                 | `pywinauto`                                        |

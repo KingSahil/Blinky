@@ -29,7 +29,7 @@ Avoid mentioning system internal details (like "Playwright script output", "retr
 
         if provider == "groq":
             api_key = os.getenv("GROQ_API_KEY", "").strip()
-            model = os.getenv("BLINKY_GROQ_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct").strip()
+            model = os.getenv("BLINKY_GROQ_MODEL", "llama-3.3-70b-versatile").strip()
             groq_url = os.getenv("BLINKY_GROQ_URL", "https://api.groq.com/openai/v1/chat/completions").strip()
             
             try:

@@ -151,7 +151,7 @@ Settings are persisted to `.env` through `get_settings` / `save_settings` in Rus
 | `BLINKY_OLLAMA_MODEL` | Python | Defaults to `gemma4:e4b`. |
 | `BLINKY_OLLAMA_TIMEOUT` | Python | Defaults to `35` seconds. |
 | `BLINKY_GROQ_URL` | Python | Defaults to OpenAI-compatible Groq chat completions URL. |
-| `BLINKY_GROQ_MODEL` | Python | Defaults to `meta-llama/llama-4-scout-17b-16e-instruct`. |
+| `BLINKY_GROQ_MODEL` | Python | Defaults to `llama-3.3-70b-versatile`. |
 | `BLINKY_GROQ_TIMEOUT` | Python | Defaults to `90` seconds. |
 | `GROQ_API_KEY` | Python/Rust settings | Required for Groq. |
 | `SARVAM_API_KEY` | Frontend/Rust settings | Required for voice features. |
