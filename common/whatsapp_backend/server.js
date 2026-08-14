@@ -202,3 +202,22 @@ httpServer.on('error', (err) => {
 });
 
 initSessionManager(io).catch(err => console.error('[SERVER] Failed to init session manager:', err));
+
+// ── Graceful shutdown ────────────────────────────────────────────────────────
+async function cleanupAndExit() {
+    console.log('[SERVER] Shutting down WhatsApp backend...');
+    try {
+        const session = getSession(DEFAULT_SESSION_ID);
+        if (session?.client) {
+            try { await session.client.destroy(); } catch {}
+        }
+        if (session) {
+            try { await session.killOrphanedBrowsers(); } catch {}
+        }
+    } catch {}
+    process.exit(0);
+}
+
+process.on('SIGINT', cleanupAndExit);
+process.on('SIGTERM', cleanupAndExit);
+

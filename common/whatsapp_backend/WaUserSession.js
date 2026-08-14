@@ -6,12 +6,13 @@ import axios from 'axios';
 import { readFile, writeFile, unlink, mkdir, appendFile, rm } from 'fs/promises';
 import { join, dirname } from 'path';
 import { existsSync } from 'fs';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import systemPrompt from './generated-prompt.cjs';
 
 const { Client, LocalAuth } = pkg;
 
 // ── Module-level constants (system-wide, not per-user) ────────────────────────
+const AUTH_DIR = process.env.WWEBJS_AUTH_DIR || join(process.cwd(), '.wwebjs_auth');
 const WATCHDOG_INTERVAL    = 2 * 60 * 1000;
 const WATCHDOG_TIMEOUT     = 30 * 1000;
 const UNREAD_SYNC_INTERVAL = 30 * 1000;
@@ -393,21 +394,28 @@ export class WaUserSession {
     async killOrphanedBrowsers() {
         if (process.platform !== 'win32') return;
         return new Promise((resolve) => {
-            const cmd = `powershell -Command "Get-CimInstance Win32_Process -Filter \\"Name = 'msedge.exe' AND CommandLine LIKE '%session-${this.sessionId}%'\\" | Remove-CimInstance"`;
-            exec(cmd, () => resolve());
+            const psScript = `
+Get-CimInstance Win32_Process | Where-Object {
+    ($_.Name -eq 'msedge.exe' -or $_.Name -eq 'chrome.exe') -and ($_.CommandLine -like '*session-${this.sessionId}*')
+} | ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+}
+`;
+            execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psScript], () => resolve());
         });
     }
 
     async cleanupChromiumSingletonFiles() {
         try { await this.killOrphanedBrowsers(); } catch {}
-        const sessionDir = join(process.cwd(), '.wwebjs_auth', `session-${this.sessionId}`);
+        const sessionDir = join(AUTH_DIR, `session-${this.sessionId}`);
         for (const file of ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'lock']) {
             try { await unlink(join(sessionDir, file)); } catch {}
         }
     }
 
     async clearAuthStorageWithRetries(maxAttempts = 10) {
-        const userAuthDir = join(process.cwd(), '.wwebjs_auth', `session-${this.sessionId}`);
+        try { await this.killOrphanedBrowsers(); } catch {}
+        const userAuthDir = join(AUTH_DIR, `session-${this.sessionId}`);
         let lastError = null;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
@@ -829,7 +837,10 @@ export class WaUserSession {
         const self = this;
         let sessionIsAuthenticated = false;
         const c = new Client({
-            authStrategy: new LocalAuth({ clientId: this.sessionId }),
+            authStrategy: new LocalAuth({
+                clientId: this.sessionId,
+                dataPath: AUTH_DIR,
+            }),
             webVersion: '2.3000.1043123085',
             webVersionCache: {
                 type: 'remote',
@@ -842,8 +853,11 @@ export class WaUserSession {
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
-                    '--disable-gpu',
+                    '--disable-accelerated-2d-canvas',
                     '--no-first-run',
+                    '--no-zygote',
+                    '--disable-gpu',
+                    '--disable-extensions',
                 ],
             },
         });

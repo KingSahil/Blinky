@@ -134,9 +134,19 @@ def save_parsed_ui_screenshot(screenshot_path: str, ref_items: list[dict]) -> st
             # Neon Green/Lime for UIA, Cyan/DeepSkyBlue for OmniParser/OCR
             color = "#39FF14" if source == "uia" else "#00E5FF"
             
+            # Ensure valid bounding box coordinates
+            box_x0 = min(x, x + max(0, w))
+            box_y0 = min(y, y + max(0, h))
+            box_x1 = max(x, x + max(0, w))
+            box_y1 = max(y, y + max(0, h))
+            if box_x1 <= box_x0:
+                box_x1 = box_x0 + 1
+            if box_y1 <= box_y0:
+                box_y1 = box_y0 + 1
+
             # Draw bounding box
             draw.rectangle(
-                [x, y, x + w, y + h],
+                [box_x0, box_y0, box_x1, box_y1],
                 outline=color,
                 width=2
             )
@@ -150,14 +160,23 @@ def save_parsed_ui_screenshot(screenshot_path: str, ref_items: list[dict]) -> st
             except Exception:
                 pass
             
-            # Background rect for badge
-            badge_y = max(0, y - 18)
+            # Background rect for badge (draw above if space, otherwise inside/below)
+            badge_h = 18
+            badge_x0 = box_x0
+            badge_x1 = box_x0 + text_w + 4
+            if box_y0 >= badge_h:
+                badge_y0 = box_y0 - badge_h
+                badge_y1 = box_y0
+            else:
+                badge_y0 = box_y0
+                badge_y1 = box_y0 + badge_h
+
             draw.rectangle(
-                [x, badge_y, x + text_w + 4, y],
+                [badge_x0, badge_y0, badge_x1, badge_y1],
                 fill=color
             )
             # Text label
-            draw.text((x + 2, badge_y + 1), text, fill="black", font=font)
+            draw.text((badge_x0 + 2, badge_y0 + 1), text, fill="black", font=font)
 
         # Create screenshots_parsed folder in the parent directory of screenshots
         screenshot_path_obj = Path(screenshot_path)

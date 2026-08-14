@@ -113,10 +113,36 @@ def ask_mimo_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
     return _parse_json(content)
 
 
-def _image_to_data_url(screenshot_path: Path) -> str:
-    raw = screenshot_path.read_bytes()
-    encoded = base64.b64encode(raw).decode("ascii")
-    return f"data:image/jpeg;base64,{encoded}"
+import io
+from PIL import Image
+
+
+def _image_to_data_url(screenshot_path: Path | str, max_dimension: int = 1024, quality: int = 80) -> str:
+    path_obj = Path(screenshot_path) if isinstance(screenshot_path, str) else screenshot_path
+    try:
+        with Image.open(path_obj) as img:
+            if img.mode in ("RGBA", "LA", "P"):
+                rgb_img = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                rgb_img.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+            else:
+                rgb_img = img.convert("RGB")
+
+            w, h = rgb_img.size
+            if max(w, h) > max_dimension:
+                resample_method = getattr(getattr(Image, "Resampling", Image), "LANCZOS", getattr(Image, "LANCZOS", Image.BICUBIC))
+                rgb_img.thumbnail((max_dimension, max_dimension), resample_method)
+
+            buffer = io.BytesIO()
+            rgb_img.save(buffer, format="JPEG", quality=quality, optimize=True)
+            encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+            return f"data:image/jpeg;base64,{encoded}"
+    except Exception as exc:
+        LOGGER.warning("PIL optimization failed for %s (%s); falling back to raw file encoding", path_obj, exc)
+        raw = path_obj.read_bytes()
+        encoded = base64.b64encode(raw).decode("ascii")
+        return f"data:image/jpeg;base64,{encoded}"
 
 
 def _extract_content(payload: dict[str, Any]) -> str:
