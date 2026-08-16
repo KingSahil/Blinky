@@ -59,9 +59,12 @@ def _get_app_inventory() -> list[str]:
     return _APP_INVENTORY or []
 
 
-def _emit_status(phase: str, message: str) -> None:
+def _emit_status(phase: str, message: str, data: dict | None = None) -> None:
     out = sys.__stdout__ if hasattr(sys, "__stdout__") else sys.stdout
-    print(json.dumps({"type": "status", "phase": phase, "message": message}), flush=True, file=out)
+    payload: dict = {"type": "status", "phase": phase, "message": message}
+    if data:
+        payload["data"] = data
+    print(json.dumps(payload), flush=True, file=out)
 
 
 # ── Tool definitions ────────────────────────────────────────────
@@ -125,13 +128,13 @@ def _essential_tool_schemas() -> list[dict]:
          "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}},
         {"name": "press_key", "description": "Press a keyboard key: enter, escape, tab",
          "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}}, "required": ["key"]}},
-        {"name": "screenshot", "description": "Take a screenshot — returns OCR text items with relative coordinates and window bounds. Use after typing/clicking to confirm the result.",
+        {"name": "screenshot", "description": "Take a screenshot — returns OCR text items with coordinates in NATIVE screen pixels (e.g. 2560x1440) and window bounds. Use after typing/clicking to confirm the result.",
          "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "mouse", "description": "Virtual mouse control. Move cursor, click, or scroll at absolute screen coordinates.",
+        {"name": "mouse", "description": "Virtual mouse control. Move cursor, click, or scroll at absolute screen coordinates (NATIVE pixels, same space as OCR coordinates).",
          "inputSchema": {"type": "object", "properties": {
              "action": {"type": "string", "enum": ["move", "click", "scroll"], "description": "move=cursor, click=click at xy, scroll=scroll wheel"},
-             "x": {"type": "integer", "description": "X coordinate (for move/click)"},
-             "y": {"type": "integer", "description": "Y coordinate (for move/click)"},
+             "x": {"type": "integer", "description": "X coordinate in native pixels (for move/click)"},
+             "y": {"type": "integer", "description": "Y coordinate in native pixels (for move/click)"},
              "button": {"type": "string", "enum": ["left", "right", "middle"], "description": "Mouse button for click (default: left)"},
              "scroll_amount": {"type": "integer", "description": "Scroll amount: positive=down, negative=up (default: 3)"},
          }, "required": ["action"]}},
@@ -167,6 +170,15 @@ def build_system_prompt(
     # Build the system prompt from the template
     system_template = prompts.get("system", "")
     prompt = system_template.format(tools=tools_str)
+
+    # Inject the DE-agnostic system profile (detected at runtime — never
+    # hardcoded, so the same prompts work on Hyprland/GNOME/KDE/X11).
+    try:
+        from backend.system import get_system_profile_cached
+
+        prompt += "\n\n" + get_system_profile_cached().to_prompt_block()
+    except Exception:
+        pass  # profile is advisory; never break the loop on detection failure
 
     # Append app inventory if provided
     if app_inventory:
@@ -252,6 +264,20 @@ def _is_successful_completion(answer: str, steps: list[dict[str, Any]]) -> bool:
 # ── Tool calling ────────────────────────────────────────────────
 
 _last_window_bounds: dict[str, Any] | None = None
+
+
+def _backend_list_windows_cheap() -> list[Any]:
+    """Direct backend window list (no TOOL_MAP wrapper, no logging noise).
+
+    Used for cheap post-launch verification of open_app — avoids the full
+    tool-call + OCR machinery.
+    """
+    try:
+        from backend.window import list_windows
+
+        return list_windows()
+    except Exception:
+        return []
 
 
 def _get_fresh_window_bounds() -> dict[str, Any] | None:
@@ -408,13 +434,19 @@ def run_computer_use_loop(
     matched_recipe_id: str | None = None
     registry = _get_recipe_registry()
     if registry:
-        matches = registry.match_query(question)
+        matches = registry.match_query(question, limit=2)
         if matches:
             matched_recipe_id = matches[0][0]
             recipe_context = registry.get_context(matched_recipe_id)
+            # Inject the second-best context too when it's close — gives the
+            # LLM more prior experience to synthesize from.
+            if len(matches) > 1 and matches[1][1] >= matches[0][1] - 0.1:
+                second_context = registry.get_context(matches[1][0])
+                if second_context:
+                    recipe_context = (recipe_context or "") + "\n" + second_context
             if recipe_context:
                 _emit_status("analyzing", "Applying learned knowledge...")
-                LOGGER.info("Injecting recipe knowledge from %s", matched_recipe_id)
+                LOGGER.info("Injecting recipe knowledge from %d match(es)", len(matches))
 
     app_inventory = _get_app_inventory()
     has_vision = has_vision_capability()
@@ -482,7 +514,7 @@ def run_computer_use_loop(
         LOGGER.debug("Prompt to LLM (%d chars): %.200s...", len(prompt), prompt)
 
         try:
-            response = ask_text_model(prompt, max_tokens=500)
+            response = ask_text_model(prompt, max_tokens=2048)
             LOGGER.info("LLM response: %s", json.dumps(response, default=str)[:500])
         except Exception as exc:
             LOGGER.exception("LLM call failed on iteration %d", iteration)
@@ -649,8 +681,33 @@ def run_computer_use_loop(
                 conversation.append(f"TOOL DATA: {d[:1000]}")
 
             # ── Vision-guided verification after visual actions only ──
-            ACTION_TOOLS = {"open_app", "click_element"}
-            if tool_name in ACTION_TOOLS:
+            # open_app is verified cheaply via list_windows (the launch result
+            # is already known-good); vision polling after launch is expensive
+            # and unnecessary. click_element/mouse need pixel verification.
+            ACTION_TOOLS = {"click_element", "mouse"}
+            if tool_name == "open_app" and result.success:
+                # Cheap verification: confirm the app actually appeared as a
+                # window. No screenshots, no vision calls.
+                try:
+                    windows = _backend_list_windows_cheap()
+                    app_hint = str(args.get("app_name", "")).lower()[:20]
+                    appeared = any(
+                        app_hint in w.process.lower() or app_hint in w.title.lower()
+                        for w in windows
+                    )
+                    if appeared:
+                        LOGGER.info("open_app verified via list_windows (app present)")
+                        conversation.append(
+                            f"TOOL DATA: app window confirmed present after launch."
+                        )
+                    else:
+                        LOGGER.info("open_app launched, window not yet visible in list_windows")
+                        conversation.append(
+                            f"TOOL DATA: app launched successfully; window may take a moment to appear."
+                        )
+                except Exception as exc:
+                    LOGGER.debug("open_app cheap verification skipped: %s", exc)
+            elif tool_name in ACTION_TOOLS:
                 _emit_status("analyzing", "Verifying action with vision...")
 
                 stable_path = None
@@ -832,17 +889,39 @@ def run_computer_use_loop(
                 LOGGER.info("  Step %d: %s(%s) -> success=%s", i+1, s.get("tool"), s.get("args"), s.get("success"))
             _emit_status("complete", "Task complete")
 
-            recipe_saved = False
+            # Stage a sanitized workflow recipe and ASK the user to save it —
+            # never auto-persist. The frontend confirms via confirm_pending.
+            pending_recipe = None
+            recipe_staged = False
             if registry and _is_successful_completion(final, steps_taken):
-                rid = registry.save(question, steps_taken, final)
-                recipe_saved = rid is not None
-                LOGGER.info("Recipe saved: %s (id=%s)", recipe_saved, rid)
+                pending_recipe = registry.save_pending(question, steps_taken, final)
+                recipe_staged = pending_recipe is not None
+                if recipe_staged:
+                    _emit_status(
+                        "recipe_prompt",
+                        "Would you like to save this workflow for future tasks?",
+                        data={
+                            "recipe_id": pending_recipe["recipe_id"],
+                            "preview": pending_recipe["preview"],
+                            "intent": pending_recipe["intent"],
+                        },
+                    )
+                    LOGGER.info("Recipe staged for user confirmation: %s", pending_recipe["recipe_id"])
+                else:
+                    LOGGER.info("Recipe NOT staged: no reusable steps (completion=%s)",
+                                _is_successful_completion(final, steps_taken))
             else:
-                LOGGER.info("Recipe NOT saved: completion=%s, registry=%s",
+                LOGGER.info("Recipe NOT staged: completion=%s, registry=%s",
                            _is_successful_completion(final, steps_taken), registry is not None)
 
             LOGGER.info("=== AGENT LOOP END ===")
-            return {"success": True, "answer": final, "steps": steps_taken, "recipe_saved": recipe_saved}
+            return {
+                "success": True,
+                "answer": final,
+                "steps": steps_taken,
+                "recipe_staged": recipe_staged,
+                "pending_recipe": pending_recipe,
+            }
 
         else:
             conversation.append(f"ASSISTANT: {json.dumps(response)}")

@@ -59,6 +59,7 @@ export const triggerHaptic = (style: 'light' | 'medium' | 'heavy' | 'selection' 
 };
 
 const STORAGE_KEY = '@blinky_pc_ip';
+const TOKEN_STORAGE_KEY = '@blinky_pc_token';
 
 let VolumeManager: any = null;
 try {
@@ -388,6 +389,7 @@ const PinchableImageViewer: React.FC<PinchableImageViewerProps> = ({ uri, onClos
 
 export default function App() {
   const [ipAddress, setIpAddress] = useState('');
+  const [remoteToken, setRemoteToken] = useState('');
   const { status, errorMsg, latestResponse, connect, disconnect, sendCommand, sendQuery } = usePCWebSocket();
   const isConnected = status === 'connected';
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
@@ -932,20 +934,24 @@ export default function App() {
     return `${pad(mins)}:${pad(secs)}`;
   };
 
-  // Load saved IP address on launch
+  // Load saved IP address + remote token on launch
   useEffect(() => {
     async function loadIp() {
       try {
-        const savedIp = await AsyncStorage.getItem(STORAGE_KEY);
+        const [savedIp, savedToken] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_KEY),
+          AsyncStorage.getItem(TOKEN_STORAGE_KEY),
+        ]);
         const detectedIp = getExpoHostIp();
         const initialIp = savedIp || detectedIp || 'localhost';
         setIpAddress(initialIp);
-        connect(initialIp);
+        if (savedToken) setRemoteToken(savedToken);
+        connect(initialIp, savedToken || undefined);
       } catch (e) {
         console.error('Failed to load host IP address', e);
         const fallback = getExpoHostIp() || 'localhost';
         setIpAddress(fallback);
-        connect(fallback);
+        connect(fallback, undefined);
       }
     }
     loadIp();
@@ -983,7 +989,7 @@ export default function App() {
       if (foundIp) {
         setIpAddress(foundIp);
         await AsyncStorage.setItem(STORAGE_KEY, foundIp);
-        connect(foundIp);
+        connect(foundIp, remoteToken || undefined);
       }
     } catch (err) {}
   };
@@ -1003,9 +1009,12 @@ export default function App() {
       return;
     }
     try {
-      await AsyncStorage.setItem(STORAGE_KEY, ipAddress.trim());
+      await Promise.all([
+        AsyncStorage.setItem(STORAGE_KEY, ipAddress.trim()),
+        AsyncStorage.setItem(TOKEN_STORAGE_KEY, remoteToken.trim()),
+      ]);
     } catch (e) {}
-    connect(ipAddress);
+    connect(ipAddress, remoteToken || undefined);
   };
 
   const handleAutoDiscover = async () => {
@@ -1026,7 +1035,7 @@ export default function App() {
       if (foundIp) {
         setIpAddress(foundIp);
         await AsyncStorage.setItem(STORAGE_KEY, foundIp);
-        connect(foundIp);
+        connect(foundIp, remoteToken || undefined);
       } else {
         Alert.alert('Blinky Not Found', 'Make sure the desktop app is running and connected.');
       }
@@ -1160,6 +1169,20 @@ export default function App() {
                   keyboardType="numeric"
                   autoCapitalize="none"
                   autoCorrect={false}
+                />
+              </View>
+              <View style={styles.inputWrapper}>
+                <Ionicons name="key-outline" size={20} color="#6C6985" style={styles.inputIcon} />
+                <TextInput
+                  style={[styles.input, isConnected && styles.inputDisabled]}
+                  placeholder="Remote token (from desktop .env)"
+                  placeholderTextColor="#6C6985"
+                  value={remoteToken}
+                  onChangeText={setRemoteToken}
+                  editable={!isConnected && status !== 'connecting'}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  secureTextEntry
                 />
               </View>
               <View style={styles.actionRow}>

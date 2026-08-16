@@ -1015,6 +1015,70 @@ h3 {
   flex: 1 1 100%;
 }
 
+/* Workflow-save prompt banner (agent loop completed a task) */
+.recipe-prompt-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 16px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--bg-2, rgba(255, 255, 255, 0.05));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+}
+
+.recipe-prompt-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong, #fff);
+}
+
+.recipe-prompt-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.recipe-prompt-step {
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--bg-1, rgba(0, 0, 0, 0.3));
+  color: var(--text-muted, #b9aeb4);
+}
+
+.recipe-prompt-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.recipe-prompt-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  background: transparent;
+  color: var(--text-strong, #fff);
+  cursor: pointer;
+}
+
+.recipe-prompt-btn.primary {
+  background: #3b82f6;
+  border-color: #3b82f6;
+}
+
+.recipe-prompt-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .command-input {
   display: flex;
   flex-direction: column;

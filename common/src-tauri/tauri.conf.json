@@ -42,7 +42,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:9001 wss://api.sarvam.ai ws://localhost:5173 http://localhost:5173"
     }
   },
   "bundle": {

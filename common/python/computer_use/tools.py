@@ -220,17 +220,37 @@ def open_web_destination_tool(destination: str) -> ToolResult:
 
 
 def shortcut_tool(shortcut: str) -> ToolResult:
-    try:
-        from tools_win import shortcut_tool_impl
+    if os.name == "nt":
+        try:
+            from tools_win import shortcut_tool_impl
 
-        return shortcut_tool_impl(shortcut)
-    except ImportError:
-        return ToolResult(
-            False,
-            "shortcut",
-            "Keyboard shortcuts are currently supported on Windows only.",
-            {"shortcut": shortcut},
-        )
+            return shortcut_tool_impl(shortcut)
+        except ImportError:
+            return ToolResult(
+                False,
+                "shortcut",
+                "Keyboard shortcuts are currently supported on Windows only.",
+                {"shortcut": shortcut},
+            )
+
+    # Linux: compositor-agnostic injection via backend input (wtype/ydotool)
+    if IS_LINUX:
+        from backend.input import key as backend_key
+
+        normalized = normalize_shortcut_linux(shortcut)
+        if not normalized:
+            return ToolResult(False, "shortcut", "I could not understand that shortcut.", {"shortcut": shortcut})
+        result = backend_key(normalized)
+        if result.ok:
+            return ToolResult(True, "shortcut", f"Pressed {shortcut}.", {"shortcut": shortcut, "keys": normalized})
+        return ToolResult(False, "shortcut", f"I couldn't press {shortcut}: {result.message}", {"shortcut": shortcut})
+
+    return ToolResult(
+        False,
+        "shortcut",
+        "Keyboard shortcuts are currently supported on Windows and Linux only.",
+        {"shortcut": shortcut},
+    )
 
 
 def find_start_app(app_name: str) -> dict[str, Any] | None:
@@ -404,9 +424,22 @@ def _open_app_via_windows_search_windows(app_name: str) -> ToolResult:
     try:
         from pywinauto.keyboard import send_keys
 
+        # Security: pywinauto's send_keys interprets `{...}`, `^`, `%`, `+`, `~`
+        # as key/modifier syntax. Typing a raw app name could inject keystrokes
+        # (e.g. `{ENTER}`, `^s`). Strip those metacharacters — app names do not
+        # need them and a search query is only used for matching.
+        safe_query = re.sub(r"[{}\^%~]", "", app_name).strip()
+        if not safe_query:
+            return ToolResult(
+                False,
+                "open_app",
+                "App name contains only characters that cannot be typed safely.",
+                {"app_name": app_name},
+            )
+
         send_keys("{VK_LWIN down}s{VK_LWIN up}")
         time.sleep(0.4)
-        send_keys(app_name, with_spaces=True)
+        send_keys(safe_query, with_spaces=True)
         time.sleep(0.8)
         match = find_windows_search_result(app_name)
         if match:
@@ -544,6 +577,75 @@ def normalize_shortcut(shortcut: str) -> str:
     if any(modifier in {"win", "windows", "super"} for modifier in modifiers):
         output += "{VK_LWIN up}"
     return output
+
+
+def normalize_shortcut_linux(shortcut: str) -> str:
+    """Normalize a shortcut for the Linux backend (wtype/ydotool vocabulary).
+
+    Returns either a modifier combo like 'ctrl+s' (wtype) or a media key name
+    like 'play'/'next' (ydotool keycodes). Media names are the source of truth
+    in computer_use/agent.py (shortcut_tool('media_play_pause') etc.).
+    """
+    parts = [
+        part.strip().lower() for part in re.split(r"[+ ]+", shortcut) if part.strip()
+    ]
+    if not parts:
+        return ""
+
+    key = parts[-1]
+    modifiers = parts[:-1]
+
+    # Media keys (no modifiers) → backend media map
+    media = {
+        "media_play_pause": "play",
+        "media_stop": "stop",
+        "media_next": "next",
+        "media_prev": "prev",
+        "play": "play",
+        "pause": "pause",
+        "next": "next",
+        "prev": "prev",
+        "previous": "prev",
+        "volume_up": "volume_up",
+        "volume_down": "volume_down",
+        "mute": "mute",
+    }
+    if not modifiers and key in media:
+        return media[key]
+
+    valid_mods = {
+        "ctrl": "ctrl",
+        "control": "ctrl",
+        "alt": "alt",
+        "shift": "shift",
+        "super": "super",
+        "win": "super",
+        "windows": "super",
+    }
+    mods = []
+    for modifier in modifiers:
+        if modifier not in valid_mods:
+            return ""
+        mods.append(valid_mods[modifier])
+    if not mods:
+        return ""
+
+    key_map = {
+        "enter": "Return",
+        "return": "Return",
+        "tab": "Tab",
+        "escape": "Escape",
+        "esc": "Escape",
+        "space": "space",
+        "backspace": "BackSpace",
+        "delete": "Delete",
+        "del": "Delete",
+    }
+    key_out = key_map.get(key, key if len(key) == 1 else "")
+    if not key_out:
+        return ""
+
+    return "+".join([*mods, key_out])
 
 
 def play_spotify_track_tool(song_name: str) -> ToolResult:
@@ -1675,38 +1777,25 @@ def screenshot_tool() -> ToolResult:
     except Exception:
         pass
 
-    # In legacy mode, use MCP screenshot directly
+    # Legacy mode: backend grim capture (MCP layer is gone)
     if mode == "legacy":
         try:
-            from computer_use.linux_mcp import screenshot
+            from backend.capture import GrimFullscreenCaptureStrategy
 
-            result = screenshot()
-            # Decode base64 image data from MCP response
-            content_list = result.get("content", []) if isinstance(result, dict) else []
-            decoded_path = None
-            for item in content_list:
-                if (
-                    isinstance(item, dict)
-                    and item.get("type") == "image"
-                    and item.get("data")
-                ):
-                    import base64 as b64
-
-                    _cleanup_old_screenshots()
-                    ts = int(time.time() * 1000)
-                    out_path = (
-                        _screenshot_temp_dir()
-                        / f"mcp_legacy_{ts}_{_SCREENSHOT_COUNTER}.png"
-                    )
-                    out_path.write_bytes(b64.b64decode(item["data"]))
-                    decoded_path = str(out_path.resolve())
-                    break
+            _cleanup_old_screenshots()
+            ts = int(time.time() * 1000)
+            out_path = (
+                _screenshot_temp_dir() / f"capture_{ts}_{_SCREENSHOT_COUNTER}.png"
+            )
+            image = GrimFullscreenCaptureStrategy().capture()
+            image.save(out_path, format="PNG")
+            decoded_path = str(out_path.resolve())
             return ToolResult(
                 True,
                 "screenshot",
                 "Screenshot captured.",
                 {
-                    "result": result,
+                    "result": {"ok": True, "image_path": decoded_path},
                     "ocr_items": [],
                     "window_bounds": None,
                     "has_vision": has_vision,
@@ -1727,13 +1816,20 @@ def screenshot_tool() -> ToolResult:
         )
         bounds: dict | None = None
 
-        # Get focused window bounds
+        # Get focused window bounds (backend, not MCP)
         if session == "wayland" and _WAYLAND_VISION_AVAILABLE:
             try:
-                from computer_use.linux_mcp import get_focused_window_bounds
+                from backend.window import get_active_window
 
-                bounds = get_focused_window_bounds()
-                LOGGER.info("Focused window bounds: %s", bounds)
+                win = get_active_window()
+                if win is not None:
+                    bounds = {
+                        "x": win.x,
+                        "y": win.y,
+                        "width": win.width,
+                        "height": win.height,
+                    }
+                    LOGGER.info("Focused window bounds: %s", bounds)
             except Exception as e:
                 LOGGER.warning("get_focused_window_bounds failed: %s", e)
                 pass
@@ -1862,49 +1958,23 @@ def screenshot_tool() -> ToolResult:
             except Exception:
                 LOGGER.exception("Spectacle capture failed")
 
-        # Fallback to MCP screenshot if grim/spectacle failed
+        # Fallback to backend grim capture if the strategies above failed
         if not grim_succeeded:
-            LOGGER.info(
-                "Local screenshot tools not used, falling back to MCP screenshot"
-            )
+            LOGGER.info("Local screenshot strategies failed, falling back to backend grim")
             try:
-                from computer_use.linux_mcp import screenshot
+                from backend.capture import GrimFullscreenCaptureStrategy
 
-                result = screenshot()
-                LOGGER.info(
-                    "MCP screenshot result keys: %s",
-                    list(result.keys()) if isinstance(result, dict) else type(result),
+                _cleanup_old_screenshots()
+                ts = int(time.time() * 1000)
+                out_path = (
+                    _screenshot_temp_dir() / f"capture_{ts}_{_SCREENSHOT_COUNTER}.png"
                 )
-
-                # MCP returns {"content": [{"type": "image", "data": "<base64>"}], "isError": false}
-                content_list = (
-                    result.get("content", []) if isinstance(result, dict) else []
-                )
-                img_data = None
-                for item in content_list:
-                    if (
-                        isinstance(item, dict)
-                        and item.get("type") == "image"
-                        and item.get("data")
-                    ):
-                        img_data = item["data"]
-                        break
-
-                if img_data:
-                    import base64 as b64
-
-                    _cleanup_old_screenshots()
-                    ts = int(time.time() * 1000)
-                    out_path = (
-                        _screenshot_temp_dir() / f"mcp_{ts}_{_SCREENSHOT_COUNTER}.png"
-                    )
-                    out_path.write_bytes(b64.b64decode(img_data))
-                    image_path = str(out_path.resolve())
-                    LOGGER.info("MCP screenshot saved to: %s", image_path)
-                else:
-                    LOGGER.warning("MCP screenshot: no image data in content list")
+                image = GrimFullscreenCaptureStrategy().capture()
+                image.save(out_path, format="PNG")
+                image_path = str(out_path.resolve())
+                grim_succeeded = True
             except Exception:
-                LOGGER.exception("MCP screenshot fallback failed")
+                LOGGER.exception("Backend grim fallback failed")
                 return ToolResult(
                     True,
                     "screenshot",
@@ -1987,7 +2057,12 @@ def screenshot_tool() -> ToolResult:
 
 
 def open_app_tool_linux(app_name: str) -> ToolResult:
-    """Open a desktop application by name on Linux using subprocess.Popen."""
+    """Open a desktop application by name on Linux.
+
+    Primary path: .desktop registry scan → `gio launch` (handles flatpak,
+    native, snap — the Exec line encodes the install method). Fallback:
+    legacy binary_map + Popen for apps without .desktop entries.
+    """
     if not IS_LINUX:
         return ToolResult(
             False,
@@ -1995,6 +2070,29 @@ def open_app_tool_linux(app_name: str) -> ToolResult:
             "App launching is supported on Linux only.",
             {"app_name": app_name},
         )
+
+    # 1. .desktop registry (DE-agnostic, flatpak-aware)
+    try:
+        from backend.apps import find_entry, launch_entry
+
+        entry = find_entry(app_name)
+        if entry is not None:
+            result = launch_entry(entry)
+            if result.ok:
+                return ToolResult(
+                    True,
+                    "open_app",
+                    result.message,
+                    {
+                        "app_name": entry.name,
+                        "desktop_id": entry.desktop_id,
+                        "method": "desktop_entry",
+                        "source": entry.source,
+                    },
+                )
+            # Entry found but launch failed — fall through to binary map
+    except ImportError:
+        pass
 
     app_lower = app_name.lower().strip()
     binary_map = {
@@ -2084,58 +2182,20 @@ def open_app_tool_linux(app_name: str) -> ToolResult:
 def capture_screenshot() -> str | None:
     """Take a screenshot and return the image path, or None on failure.
 
-    Reuses the MCP base64 decode logic from screenshot_tool fallback.
-    Never raises — logs and returns None on failure.
+    Backend-first: grim direct capture (headless, native res). Never raises —
+    logs and returns None on failure.
     """
     try:
-        from computer_use.linux_mcp import screenshot
+        from backend.capture import GrimFullscreenCaptureStrategy
 
-        result = screenshot()
-        content_list = result.get("content", []) if isinstance(result, dict) else []
-        for item in content_list:
-            if (
-                isinstance(item, dict)
-                and item.get("type") == "image"
-                and item.get("data")
-            ):
-                import base64 as b64
-
-                _cleanup_old_screenshots()
-                ts = int(time.time() * 1000)
-                out_path = (
-                    _screenshot_temp_dir() / f"capture_{ts}_{_SCREENSHOT_COUNTER}.png"
-                )
-                out_path.write_bytes(b64.b64decode(item["data"]))
-                return str(out_path.resolve())
-        # Try grim if MCP didn't return image data
-        session = _detect_desktop_session()
-        if session == "wayland" and _WAYLAND_VISION_AVAILABLE:
-            try:
-                from computer_use.linux_mcp import get_focused_window_bounds
-                from wayland_vision import capture_window_crop
-
-                bounds = get_focused_window_bounds()
-                if bounds and isinstance(bounds, dict):
-                    ts = int(time.time() * 1000)
-                    out_path = (
-                        _screenshot_temp_dir()
-                        / f"capture_grim_{ts}_{_SCREENSHOT_COUNTER}.png"
-                    )
-                    _ = capture_window_crop(
-                        {
-                            "x": int(bounds["x"]),
-                            "y": int(bounds["y"]),
-                            "width": int(bounds["width"]),
-                            "height": int(bounds["height"]),
-                        },
-                        str(out_path),
-                    )
-                    if out_path.exists():
-                        return str(out_path.resolve())
-            except Exception:
-                pass
-        LOGGER.warning("capture_screenshot: no image data from MCP or grim")
-        return None
+        _cleanup_old_screenshots()
+        ts = int(time.time() * 1000)
+        out_path = (
+            _screenshot_temp_dir() / f"capture_{ts}_{_SCREENSHOT_COUNTER}.png"
+        )
+        image = GrimFullscreenCaptureStrategy().capture()
+        image.save(out_path, format="PNG")
+        return str(out_path.resolve())
     except Exception:
         LOGGER.exception("capture_screenshot failed")
         return None
@@ -2312,14 +2372,14 @@ def _get_screen_dimensions() -> tuple[int, int]:
     except Exception:
         pass
 
-    # 2. Fallback: focused window bounds
+    # 2. Fallback: focused window bounds (backend)
     try:
-        from computer_use.linux_mcp import get_focused_window_bounds
+        from backend.window import get_active_window
 
-        bounds = get_focused_window_bounds()
-        if bounds and isinstance(bounds, dict):
-            w = bounds.get("width") or 1920
-            h = bounds.get("height") or 1080
+        win = get_active_window()
+        if win is not None:
+            w = win.width or 1920
+            h = win.height or 1080
             return int(w), int(h)
     except Exception:
         pass
@@ -2346,23 +2406,15 @@ def _virtual_mouse_click(x: int, y: int, button: str = "left") -> None:
 
     success = vm.click(x, y, button)
     if not success:
-        LOGGER.warning("VirtualMouse click failed, falling back to MCP bridge")
+        # Backend click (hyprctl cursor move + ydotool) — the uinput path
+        # failed, so use the compositor-native fallback instead.
+        LOGGER.warning("VirtualMouse click failed, falling back to backend click")
         try:
-            from computer_use.linux_mcp import get_client
+            from backend.input import click as backend_click
 
-            mcp_client = get_client()
-            mcp_client.call_tool("click", {"x": x, "y": y})
-        except Exception as mcp_err:
-            LOGGER.warning("MCP bridge fallback also failed: %s", mcp_err)
-            import subprocess as _sp
-
-            _sp.run(
-                ["ydotool", "mousemove", "--absolute", "-x", str(x), "-y", str(y)],
-                capture_output=True,
-                timeout=5,
-            )
-            time.sleep(0.05)
-            _sp.run(["ydotool", "click", "0xC0"], capture_output=True, timeout=5)
+            backend_click(x=x, y=y, button=button)
+        except Exception as backend_err:
+            LOGGER.warning("Backend click fallback also failed: %s", backend_err)
 
     LOGGER.info("Mouse click: x=%d, y=%d, button=%s (via VirtualMouse)", x, y, button)
 

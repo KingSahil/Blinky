@@ -74,6 +74,9 @@ export function App() {
   const [sarvamApiKey, setSarvamApiKey] = useState('');
   const [groqApiKey, setGroqApiKey] = useState('');
   const [deepseekApiKey, setDeepseekApiKey] = useState('');
+  const [customUrl, setCustomUrl] = useState('');
+  const [customModel, setCustomModel] = useState('');
+  const [customApiKey, setCustomApiKey] = useState('');
 
   // WhatsApp connection states
   const [waBackendUrl, setWaBackendUrl] = useState('http://localhost:3000');
@@ -247,6 +250,9 @@ export function App() {
         setSarvamApiKey(settings.sarvam_api_key || '');
         setGroqApiKey(settings.groq_api_key || '');
         setDeepseekApiKey(settings.deepseek_api_key || '');
+        setCustomUrl(settings.custom_url || '');
+        setCustomModel(settings.custom_model || '');
+        setCustomApiKey(settings.custom_api_key || '');
       })
       .catch((err) => console.error('Failed to load settings:', err));
   }, []);
@@ -267,7 +273,7 @@ export function App() {
     const cleanProvider = newProvider.toLowerCase().trim();
     setProvider(cleanProvider);
     try {
-      await saveSettings(cleanProvider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey);
+      await saveSettings(cleanProvider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, customModel, customApiKey);
     } catch (err) {
       console.error('Failed to save provider:', err);
     }
@@ -276,7 +282,7 @@ export function App() {
   const updateShortcut = async (newShortcut: string) => {
     setShortcut(newShortcut);
     try {
-      await saveSettings(provider, newShortcut, sarvamApiKey, groqApiKey, deepseekApiKey);
+      await saveSettings(provider, newShortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, customModel, customApiKey);
     } catch (err) {
       console.error('Failed to save shortcut:', err);
     }
@@ -285,7 +291,7 @@ export function App() {
   const updateSarvamApiKey = async (newKey: string) => {
     setSarvamApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, newKey, groqApiKey, deepseekApiKey);
+      await saveSettings(provider, shortcut, newKey, groqApiKey, deepseekApiKey, customUrl, customModel, customApiKey);
     } catch (err) {
       console.error('Failed to save Sarvam API key:', err);
     }
@@ -294,7 +300,7 @@ export function App() {
   const updateGroqApiKey = async (newKey: string) => {
     setGroqApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, sarvamApiKey, newKey, deepseekApiKey);
+      await saveSettings(provider, shortcut, sarvamApiKey, newKey, deepseekApiKey, customUrl, customModel, customApiKey);
     } catch (err) {
       console.error('Failed to save Groq API key:', err);
     }
@@ -303,9 +309,36 @@ export function App() {
   const updateDeepseekApiKey = async (newKey: string) => {
     setDeepseekApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, newKey);
+      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, newKey, customUrl, customModel, customApiKey);
     } catch (err) {
       console.error('Failed to save DeepSeek API key:', err);
+    }
+  };
+
+  const updateCustomUrl = async (newUrl: string) => {
+    setCustomUrl(newUrl);
+    try {
+      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, newUrl, customModel, customApiKey);
+    } catch (err) {
+      console.error('Failed to save custom URL:', err);
+    }
+  };
+
+  const updateCustomModel = async (newModel: string) => {
+    setCustomModel(newModel);
+    try {
+      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, newModel, customApiKey);
+    } catch (err) {
+      console.error('Failed to save custom model:', err);
+    }
+  };
+
+  const updateCustomApiKey = async (newKey: string) => {
+    setCustomApiKey(newKey);
+    try {
+      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, customModel, newKey);
+    } catch (err) {
+      console.error('Failed to save custom API key:', err);
     }
   };
 
@@ -537,16 +570,19 @@ export function App() {
           <div ref={dropdownRef} className="command-settings-dropdown">
             <div className="dropdown-section">
               <h4>Change Model</h4>
-              <select
-                className="settings-input settings-select"
-                value={provider}
-                onChange={(e) => updateProvider(e.target.value)}
-              >
-                <option value="groq">Groq</option>
-                <option value="ollama">Ollama</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="mimo">MiMo</option>
-              </select>
+              <div className="dropdown-options">
+                {(['groq', 'ollama', 'deepseek', 'mimo', 'custom'] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    className={`dropdown-option ${provider.toLowerCase().trim() === p ? 'active' : ''}`}
+                    onClick={() => updateProvider(p)}
+                  >
+                    <span>{p === 'custom' ? 'Custom (OpenAI-compatible)' : p.charAt(0).toUpperCase() + p.slice(1)}</span>
+                    {provider.toLowerCase().trim() === p && <Check size={14} className="active-dot" />}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="dropdown-section">
@@ -595,6 +631,41 @@ export function App() {
                   placeholder="Paste API Key..."
                 />
               </div>
+            )}
+
+            {provider.toLowerCase().trim() === 'custom' && (
+              <>
+                <div className="dropdown-section">
+                  <h4>Custom API URL</h4>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    value={customUrl}
+                    onChange={(e) => updateCustomUrl(e.target.value)}
+                    placeholder="https://opencode.ai/zen/v1"
+                  />
+                </div>
+                <div className="dropdown-section">
+                  <h4>Model</h4>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    value={customModel}
+                    onChange={(e) => updateCustomModel(e.target.value)}
+                    placeholder="minimax-m3"
+                  />
+                </div>
+                <div className="dropdown-section">
+                  <h4>Custom API Key</h4>
+                  <input
+                    type="password"
+                    className="settings-input"
+                    value={customApiKey}
+                    onChange={(e) => updateCustomApiKey(e.target.value)}
+                    placeholder="Paste API Key..."
+                  />
+                </div>
+              </>
             )}
 
             <div className="dropdown-section">

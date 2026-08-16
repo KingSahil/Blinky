@@ -883,8 +883,11 @@ class GuidanceFlowTests(unittest.TestCase):
     def test_click_target_extraction_removes_generic_words(self) -> None:
         self.assertEqual(extract_click_target("click YouTube"), "YouTube")
         self.assertEqual(extract_click_target("click the YouTube button"), "YouTube")
-        self.assertEqual(extract_click_target("open YouTube"), "YouTube")
-        self.assertEqual(extract_click_target("open the YouTube tab"), "YouTube")
+        # "open X" is an app-launch / web-destination query, NOT a screen
+        # locator — it must never be fed to the OCR locator (that caused
+        # "open vivaldi and search youtube.com" to click the word "search").
+        self.assertIsNone(extract_click_target("open YouTube"))
+        self.assertIsNone(extract_click_target("open the YouTube tab"))
         self.assertIsNone(extract_click_target("how to install code runner extension"))
 
     def test_click_question_uses_local_uia_match_without_ai(self) -> None:

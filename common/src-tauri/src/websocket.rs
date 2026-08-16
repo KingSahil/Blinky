@@ -254,7 +254,9 @@ async fn handle_connection(
         stream,
         move |req: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
             if let Ok(mut p) = path_clone.lock() {
-                *p = req.uri().path().to_string();
+                *p = req.uri().path_and_query()
+                    .map(|pq| pq.as_str().to_string())
+                    .unwrap_or_else(|| req.uri().path().to_string());
             }
             Ok(response)
         },
@@ -267,17 +269,59 @@ async fn handle_connection(
     };
     println!(
         "WebSocket handshake succeeded with {} for path {}",
-        peer_addr, active_path
+        peer_addr,
+        uri_without_query(&active_path)
     );
 
-    if active_path == "/sarvam-stt" {
-        return handle_sarvam_stt_proxy(ws_stream).await;
-    } else if active_path == "/sarvam-tts" {
+    // Extract the optional `?token=` query param if present.
+    let uri_token = extract_query_token(&active_path);
+    let server_token = get_remote_token();
+    let is_loopback = peer_addr.ip().is_loopback();
+    let remote_authed = is_loopback
+        || uri_token
+            .as_deref()
+            .map(|t| token_equals(t, &server_token))
+            .unwrap_or(false);
+
+    if active_path.starts_with("/sarvam-stt") || active_path.starts_with("/sarvam-tts") {
+        // STT/TTS proxies also require authentication (they consume the API key).
+        // Loopback callers (the desktop frontend) are trusted; remote callers must
+        // present the token.
+        if !remote_authed {
+            eprintln!("REJECTED unauthenticated Sarvam proxy connection from {}", peer_addr);
+            return Ok(());
+        }
+        if active_path.starts_with("/sarvam-stt") {
+            return handle_sarvam_stt_proxy(ws_stream).await;
+        }
         return handle_sarvam_tts_proxy(ws_stream).await;
     }
 
     let (ws_sender, mut ws_receiver) = ws_stream.split();
     let ws_sender = std::sync::Arc::new(tokio::sync::Mutex::new(ws_sender));
+
+    let mut authenticated = remote_authed;
+    if !authenticated {
+        eprintln!(
+            "WARN: unauthenticated remote connection from {} — awaiting auth frame (commands will be denied)",
+            peer_addr
+        );
+    }
+
+    /// Builds an auth-denied JSON error frame for a command that requires a token.
+    fn auth_denied(request_id: &str) -> String {
+        serde_json::json!({
+            "requestId": request_id,
+            "status": "error",
+            "data": {},
+            "error": {
+                "code": "UNAUTHORIZED",
+                "message": "This connection is not authenticated with a BLINKY_REMOTE_TOKEN",
+                "details": ""
+            }
+        })
+        .to_string()
+    }
 
     while let Some(msg) = ws_receiver.next().await {
         let msg = msg?;
@@ -285,6 +329,29 @@ async fn handle_connection(
             let text = msg.to_text()?;
             println!("Received message: {}", text);
             let trimmed = text.trim();
+
+            // Accept an `auth:<token>` frame as an in-band authentication step.
+            if let Some(provided) = trimmed.strip_prefix("auth:") {
+                authenticated = token_equals(provided.trim(), &server_token);
+                if authenticated {
+                    println!("{} authenticated successfully", peer_addr);
+                } else {
+                    eprintln!("{} failed authentication", peer_addr);
+                    authenticated = false;
+                }
+                continue;
+            }
+
+            if !authenticated {
+                eprintln!("BLOCKED unauthenticated command from {}: {}", peer_addr, trimmed);
+                let denied = auth_denied("unknown");
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(tokio_tungstenite::tungstenite::Message::Text(denied.into()))
+                    .await;
+                continue;
+            }
 
             if trimmed == "power_off" {
                 crate::platform::execute_power_off();
@@ -587,6 +654,19 @@ fn emit_agent_progress(app: &AppHandle, line: &str) {
     let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) else {
         return;
     };
+
+    // Forward workflow-save prompts emitted by the agent loop
+    // ({"type":"status","phase":"recipe_prompt","data":{...}}).
+    if parsed.get("type").and_then(|t| t.as_str()) == Some("status")
+        && parsed.get("phase").and_then(|p| p.as_str()) == Some("recipe_prompt")
+    {
+        let _ = app.emit(
+            "blinky://recipe-prompt",
+            parsed.get("data").cloned().unwrap_or(serde_json::Value::Null),
+        );
+        return;
+    }
+
     if parsed.get("status").and_then(|s| s.as_str()) != Some("processing") {
         return;
     }
@@ -719,6 +799,53 @@ mod tests {
         assert!(error.contains("Failed to open YouTube"));
         assert!(error.contains("no browser"));
     }
+
+    #[test]
+    fn token_equals_matches_exact_token() {
+        assert!(super::token_equals("abc123", "abc123"));
+    }
+
+    #[test]
+    fn token_equals_rejects_different_tokens() {
+        assert!(!super::token_equals("abc123", "abc124"));
+        assert!(!super::token_equals("abc123", "abc12"));
+        assert!(!super::token_equals("", "abc123"));
+        assert!(!super::token_equals("abc123", ""));
+    }
+
+    #[test]
+    fn extract_query_token_parses_token_param() {
+        assert_eq!(
+            super::extract_query_token("/?token=deadbeef"),
+            Some("deadbeef".to_string())
+        );
+        assert_eq!(
+            super::extract_query_token("/sarvam-stt?token=abc&foo=1"),
+            Some("abc".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_query_token_returns_none_without_token() {
+        assert_eq!(super::extract_query_token("/"), None);
+        assert_eq!(super::extract_query_token("/?foo=bar"), None);
+        assert_eq!(super::extract_query_token("/?token="), None);
+    }
+
+    #[test]
+    fn uri_without_query_strips_query_string() {
+        assert_eq!(super::uri_without_query("/"), "/");
+        assert_eq!(super::uri_without_query("/?token=x"), "/");
+        assert_eq!(super::uri_without_query("/sarvam-stt?token=x"), "/sarvam-stt");
+    }
+
+    #[test]
+    fn generate_remote_token_is_nonempty_and_unique() {
+        let a = super::generate_remote_token();
+        let b = super::generate_remote_token();
+        assert_eq!(a.len(), 32);
+        assert_ne!(a, b);
+    }
 }
 
 fn get_sarvam_api_key() -> String {
@@ -728,6 +855,105 @@ fn get_sarvam_api_key() -> String {
         .find(|(k, _)| k == "SARVAM_API_KEY")
         .map(|(_, v)| v)
         .unwrap_or_default()
+}
+
+/// Generates (and persists) a per-install remote-control token on first use,
+/// then returns it. The token gates every WebSocket command so an unauthenticated
+/// host on the LAN cannot drive power/automation actions.
+fn get_remote_token() -> String {
+    let root = project_root();
+    let envs = read_env_file(&root);
+    let existing = envs
+        .iter()
+        .find(|(k, _)| k == "BLINKY_REMOTE_TOKEN")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    if !existing.is_empty() {
+        return existing;
+    }
+
+    // Generate an unpredictable token and persist it in .env
+    let token = generate_remote_token();
+
+    let env_path = root.join(".env");
+    let contents = std::fs::read_to_string(&env_path).unwrap_or_default();
+    let mut lines: Vec<String> = contents.lines().map(|s| s.to_string()).collect();
+    let mut found = false;
+    for line in lines.iter_mut() {
+        if line.trim().starts_with("BLINKY_REMOTE_TOKEN=") {
+            *line = format!("BLINKY_REMOTE_TOKEN={}", token);
+            found = true;
+        }
+    }
+    if !found {
+        lines.push(format!("BLINKY_REMOTE_TOKEN={}", token));
+    }
+    let _ = std::fs::write(&env_path, lines.join("\n") + "\n");
+    token
+}
+
+/// Simple constant-time comparison to avoid leaking token length/timing.
+fn token_equals(provided: &str, expected: &str) -> bool {
+    if provided.len() != expected.len() {
+        return false;
+    }
+    let provided = provided.as_bytes();
+    let expected = expected.as_bytes();
+    let mut diff = 0u8;
+    for (a, b) in provided.iter().zip(expected.iter()) {
+        diff |= a ^ b;
+    }
+    diff == 0
+}
+
+/// Strips the `?query` part from a stored path_and_query for logging.
+fn uri_without_query(path_and_query: &str) -> String {
+    match path_and_query.find('?') {
+        Some(idx) => path_and_query[..idx].to_string(),
+        None => path_and_query.to_string(),
+    }
+}
+
+/// Extracts the `?token=<value>` query param from a stored path_and_query.
+fn extract_query_token(path_and_query: &str) -> Option<String> {
+    let query = path_and_query.split('?').nth(1)?;
+    for pair in query.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            if key == "token" && !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// RFC 4122-ish random hex token, dependency-free (no `rand` crate needed).
+/// Uses `SystemTime` + address entropy + `RandomState` (OS-seeded) so two
+/// process invocations produce effectively unpredictable values.
+fn generate_remote_token() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let addr = &COUNTER as *const AtomicU64 as u64 as u64;
+    let ctr = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let entropy = t ^ addr ^ ctr ^ (addr.rotate_left(17));
+
+    // RandomState's internal seed is randomized per process from OS entropy,
+    // so hashing the entropy with it yields an unpredictable, fresh token.
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_u64(entropy);
+    let a = hasher.finish();
+    let mut hasher2 = RandomState::new().build_hasher();
+    hasher2.write_u64(entropy >> 1);
+    let b = hasher2.finish();
+
+    format!("{:016x}{:016x}", a, b)
 }
 
 async fn handle_sarvam_stt_proxy(

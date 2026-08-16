@@ -55,14 +55,30 @@ export interface BlinkySettings {
   sarvam_api_key: string;
   groq_api_key: string;
   deepseek_api_key: string;
+  custom_url: string;
+  custom_model: string;
+  custom_api_key: string;
 }
 
 export async function getSettings(): Promise<BlinkySettings> {
   return invoke<BlinkySettings>('get_settings');
 }
 
-export async function saveSettings(provider: string, shortcut: string, sarvamApiKey: string, groqApiKey: string, deepseekApiKey: string): Promise<void> {
-  return invoke('save_settings', { provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey });
+export async function saveSettings(
+  provider: string,
+  shortcut: string,
+  sarvamApiKey: string,
+  groqApiKey: string,
+  deepseekApiKey: string,
+  customUrl: string = '',
+  customModel: string = '',
+  customApiKey: string = ''
+): Promise<void> {
+  return invoke('save_settings', { provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, customModel, customApiKey });
+}
+
+export async function confirmRecipeSave(recipeId: string, save: boolean): Promise<void> {
+  return invoke('confirm_recipe_save', { recipeId, save });
 }
 
 export async function openUrl(url: string): Promise<void> {

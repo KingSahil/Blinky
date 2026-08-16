@@ -79,9 +79,23 @@ class RecipeRegistry:
                 raise ValueError("index not a dict")
             valid: dict[str, dict[str, Any]] = {}
             for rid, entry in data.items():
-                if not os.path.exists(self._recipe_path(rid)):
+                recipe_file = self._recipe_path(rid)
+                if not os.path.exists(recipe_file):
                     continue
                 if isinstance(entry, dict) and "intent" in entry:
+                    # Reconcile status from the recipe file itself (the Tauri
+                    # command may have activated/discarded it out-of-band).
+                    try:
+                        with open(recipe_file) as rf:
+                            recipe = json.load(rf)
+                        if recipe.get("status") == "active":
+                            entry.pop("status", None)
+                        elif recipe.get("status") == "pending":
+                            entry["status"] = "pending"
+                        else:
+                            entry.pop("status", None)
+                    except (json.JSONDecodeError, OSError):
+                        pass
                     valid[rid] = entry
             self._index = valid
         except (json.JSONDecodeError, OSError, ValueError) as e:
@@ -101,6 +115,149 @@ class RecipeRegistry:
             LOGGER.warning("Failed to write index: %s", e)
 
     # ── knowledge extraction ────────────────────────────────────
+
+    def _extract_workflow(self, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Sanitized goal-path: only steps that succeeded, in order, deduped.
+
+        Filters out failed attempts, repeated same-tool loops (keeps the last
+        successful occurrence), and screenshot-only probes that didn't lead to
+        an action. The result is the *minimal action sequence* that worked —
+        exactly what a future task should take *inspiration* from, never
+        blindly replay.
+        """
+        workflow: list[dict[str, Any]] = []
+        for s in steps:
+            if not s.get("success"):
+                continue
+            tool = s.get("tool", "")
+            if not tool:
+                continue
+            args = s.get("args") or {}
+
+            # Skip pure inspection probes that produced no action
+            if tool == "screenshot" and not args:
+                continue
+
+            # Dedupe: if the previous kept step is the same tool+args, skip
+            if workflow and workflow[-1].get("tool") == tool:
+                prev_args = workflow[-1].get("args") or {}
+                if prev_args == args:
+                    continue
+
+            entry: dict[str, Any] = {"tool": tool}
+            if args:
+                entry["args"] = args
+            if s.get("message"):
+                entry["message"] = str(s["message"])[:200]
+            workflow.append(entry)
+
+        # Drop trailing verification screenshots (they confirm, not act)
+        if workflow and workflow[-1].get("tool") == "screenshot":
+            workflow = workflow[:-1]
+        return workflow
+
+    # ── pending save (user-confirmed) ───────────────────────────
+
+    def save_pending(
+        self, query: str, steps: list[dict[str, Any]], answer: str
+    ) -> dict[str, Any] | None:
+        """Build a recipe but stage it as PENDING — the user confirms before
+        it enters the active registry.
+
+        Returns {"recipe_id", "preview"} so the UI can ask "Save this
+        workflow?" with a human-readable summary.
+        """
+        knowledge = self._extract_knowledge(query, steps, answer)
+        workflow = self._extract_workflow(steps)
+        if not knowledge and not workflow:
+            return None
+
+        rid = str(uuid.uuid4())
+        intent = self._extract_intent(query)
+        app_patterns = self._extract_app_patterns(query, steps)
+
+        recipe = {
+            "id": rid,
+            "schema_version": RECIPE_SCHEMA_VERSION,
+            "intent": intent,
+            "app_patterns": app_patterns,
+            "knowledge": knowledge,
+            "workflow": workflow,
+            "original_query": query,
+            "status": "pending",
+            "successes": 0,
+            "failures": 0,
+            "created_at": _utc_iso(),
+            "last_used_at": _utc_iso(),
+        }
+
+        try:
+            with open(self._recipe_path(rid), "w") as f:
+                lock = _acquire_lock_fd(f)
+                if lock is not None:
+                    json.dump(recipe, f, indent=2)
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+        except OSError as e:
+            LOGGER.warning("Failed to stage pending recipe: %s", e)
+            return None
+
+        # Pending recipes are tracked in the index so they can be confirmed
+        self._index[rid] = {
+            "intent": intent,
+            "app_patterns": app_patterns,
+            "successes": 0,
+            "failures": 0,
+            "status": "pending",
+        }
+        self._persist_index()
+
+        preview = [
+            f"{step.get('tool', '')}({', '.join(f'{k}={v}' for k, v in (step.get('args') or {}).items())})"
+            for step in workflow
+        ]
+        LOGGER.info("Staged pending recipe %s (intent=%s, %d workflow steps)",
+                    rid, intent, len(workflow))
+        return {"recipe_id": rid, "preview": preview, "intent": intent}
+
+    def confirm_pending(self, recipe_id: str, save: bool) -> bool:
+        """User decision on a staged recipe: activate it or discard it."""
+        path = self._recipe_path(recipe_id)
+        if not os.path.exists(path):
+            return False
+        try:
+            with open(path) as f:
+                recipe = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return False
+
+        if not save:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            self._index.pop(recipe_id, None)
+            self._persist_index()
+            LOGGER.info("Discarded pending recipe %s", recipe_id)
+            return True
+
+        recipe["status"] = "active"
+        recipe["successes"] = 1
+        try:
+            with open(path, "w") as f:
+                lock = _acquire_lock_fd(f)
+                if lock is not None:
+                    json.dump(recipe, f, indent=2)
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+        except OSError as e:
+            LOGGER.warning("Failed to activate recipe %s: %s", recipe_id, e)
+            return False
+
+        if recipe_id in self._index:
+            self._index[recipe_id]["successes"] = 1
+            self._index[recipe_id].pop("status", None)
+        self._persist_index()
+        LOGGER.info("Activated recipe %s", recipe_id)
+        return True
 
     def _extract_knowledge(
         self, query: str, steps: list[dict[str, Any]], answer: str
@@ -168,9 +325,10 @@ class RecipeRegistry:
     def save(
         self, query: str, steps: list[dict[str, Any]], answer: str
     ) -> str | None:
-        """Save learned knowledge from a successful task."""
+        """Save learned knowledge + sanitized workflow from a successful task."""
         knowledge = self._extract_knowledge(query, steps, answer)
-        if not knowledge:
+        workflow = self._extract_workflow(steps)
+        if not knowledge and not workflow:
             return None
 
         rid = str(uuid.uuid4())
@@ -183,6 +341,7 @@ class RecipeRegistry:
             "intent": intent,
             "app_patterns": app_patterns,
             "knowledge": knowledge,
+            "workflow": workflow,
             "original_query": query,
             "successes": 1,
             "failures": 0,
@@ -212,8 +371,14 @@ class RecipeRegistry:
                      rid, intent, app_patterns, len(knowledge))
         return rid
 
-    def match_query(self, query: str) -> list[tuple[str, float]]:
-        """Return matching recipe IDs with confidence scores."""
+    def match_query(self, query: str, limit: int = 3) -> list[tuple[str, float]]:
+        """Return matching recipe IDs with confidence scores (best first).
+
+        Scoring combines:
+        - app-pattern overlap (existing)
+        - intent agreement (query verb hints vs recipe intent)
+        - success ratio (recipes that worked more get a small boost)
+        """
         self._lookup_count += 1
         if self._lookup_count % GC_INTERVAL == 0:
             self._gc()
@@ -226,8 +391,12 @@ class RecipeRegistry:
         if not q_words:
             return []
 
+        query_intent = self._extract_intent(query)
         scores: list[tuple[str, float]] = []
         for rid, entry in list(self._index.items()):
+            # Skip staged-but-unconfirmed recipes — only active ones inspire.
+            if entry.get("status") == "pending":
+                continue
             patterns: list[str] = entry.get("app_patterns", [])
             overlap = sum(1 for p in patterns if p in q)
             word_hits = sum(1 for w in q_words for p in patterns if p in w or w in p)
@@ -236,6 +405,11 @@ class RecipeRegistry:
                 min(overlap / max(len(patterns), 1), 1.0),
                 min(word_hits / max(len(q_words), 1), 1.0),
             )
+
+            # Intent agreement: same verb family → meaningful boost
+            intent = entry.get("intent", "")
+            if intent and query_intent == intent:
+                base = min(base + 0.15, 1.0)
 
             succ = entry.get("successes", 0)
             fail = entry.get("failures", 0)
@@ -249,10 +423,17 @@ class RecipeRegistry:
         scores.sort(key=lambda x: -x[1])
         if scores:
             LOGGER.info("Recipe match: %d candidates, best=%.3f", len(scores), scores[0][1])
-        return scores
+        return scores[:limit]
 
     def get_context(self, recipe_id: str) -> str | None:
-        """Return knowledge lines to inject into the LLM system prompt."""
+        """Return a structured context block to inject into the LLM prompt.
+
+        Format (numbered workflow + facts) is designed for *inspiration*:
+        the LLM sees what worked before for a similar goal, in order, with an
+        explicit instruction not to replay blindly. The workflow is the
+        sanitized goal-path (success steps only), so failed detours never
+        leak into the recommendation.
+        """
         path = self._recipe_path(recipe_id)
         if not os.path.exists(path):
             return None
@@ -260,10 +441,6 @@ class RecipeRegistry:
             with open(path) as f:
                 recipe = json.load(f)
         except (json.JSONDecodeError, OSError):
-            return None
-
-        knowledge: list[str] = recipe.get("knowledge", [])
-        if not knowledge:
             return None
 
         # Update last_used_at
@@ -274,8 +451,37 @@ class RecipeRegistry:
         except OSError:
             pass
 
-        lines = "\n".join(f"- {k}" for k in knowledge)
-        return f"\n\nPrevious experience:\n{lines}\n"
+        parts: list[str] = ["Previous experience with a similar goal (use as INSPIRATION only — do not blindly replay; verify each step against the current screen):"]
+        intent = recipe.get("intent", "")
+        if intent:
+            parts.append(f"- Goal type: {intent}")
+        if recipe.get("app_patterns"):
+            parts.append(f"- Related apps: {', '.join(recipe['app_patterns'][:5])}")
+
+        workflow: list[dict[str, Any]] = recipe.get("workflow", [])
+        if workflow:
+            parts.append("- A previously successful sequence:")
+            for i, step in enumerate(workflow, 1):
+                tool = step.get("tool", "")
+                args = step.get("args") or {}
+                arg_str = ", ".join(f"{k}={v}" for k, v in list(args.items())[:3])
+                note = f"  ({step.get('message', '')})" if step.get("message") and len(str(step.get("message", ""))) < 80 else ""
+                parts.append(f"  {i}. {tool}({arg_str}){note}")
+        else:
+            parts.append("- (no reusable step sequence recorded)")
+
+        knowledge: list[str] = recipe.get("knowledge", [])
+        if knowledge:
+            parts.append("- Facts:")
+            parts.extend(f"  - {k}" for k in knowledge[:5])
+
+        succ = int(recipe.get("successes", 0))
+        fail = int(recipe.get("failures", 0))
+        total = succ + fail
+        if total > 0:
+            parts.append(f"- Track record: {succ} success(es), {fail} failure(s)")
+
+        return "\n" + "\n".join(parts) + "\n"
 
     def decay(self, recipe_id: str, success: bool) -> None:
         """Adjust confidence after a task using this recipe's knowledge."""

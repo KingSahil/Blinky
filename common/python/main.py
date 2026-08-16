@@ -36,9 +36,9 @@ def _has_computer_use_action(question: str) -> bool:
     normalized = question.lower().strip()
     action_verbs = {
         "calculate", "compute", "type", "click", "press",
-        "search for", "find", "look up", "navigate to",
+        "search", "search for", "find", "look up", "navigate to", "go to",
         "scroll", "select", "choose", "fill", "enter",
-        "write", "input", "submit",
+        "write", "input", "submit", "open a", "open the",
     }
     return any(verb in normalized for verb in action_verbs)
 from app_context import get_app_context
@@ -399,7 +399,13 @@ def run(
     # Print the capture marker to stdout and flush immediately so Rust can restore windows
     print("__BLINKY_CAPTURED__", flush=True)
 
-    locator_result = resolve_locator_fast_path(question, screenshot, target_pid, warnings, started)
+    # Locator fast-path: screenshot-only, no LLM. NEVER runs for app-opening
+    # queries ("open X", "open X and Y") — those belong to the app launcher /
+    # agent loop, and a fuzzy OCR match on the app name would click the wrong
+    # thing (e.g. matching "search youtube.com" to the word "search").
+    locator_result = None
+    if not is_open_action_question(question):
+        locator_result = resolve_locator_fast_path(question, screenshot, target_pid, warnings, started)
     if locator_result is not None:
         return locator_result
 
@@ -1049,7 +1055,10 @@ def extract_click_target(question: str) -> str | None:
 
     patterns = [
         r"^(?:click|select|choose|press|tap)\s+(?:on\s+)?(?:the\s+)?(.+?)(?:\?|$)",
-        r"^(?:open|launch|start)\s+(?:the\s+)?(.+?)(?:\?|$)",
+        # NOTE: "open X" is deliberately NOT here — opening an app is the
+        # app-launcher's job (open_app / .desktop registry). Feeding it to the
+        # screen locator made "open vivaldi and search youtube.com" match the
+        # word "search" on screen and click it.
     ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)

@@ -13,7 +13,7 @@ import {
   shouldCompleteStepOnHighlightClick,
   shouldShowSummaryBubble,
 } from './lib/guidance';
-import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage } from './lib/tauri';
+import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave } from './lib/tauri';
 import { linkCitationMarkers } from './lib/citations';
 import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvamErrorMessage } from './lib/tts';
 import { SarvamSpeechToTextStream, SarvamTextToSpeechStream } from './lib/sarvamStream';
@@ -137,6 +137,13 @@ export function CommandBar() {
   const [sarvamApiKey, setSarvamApiKey] = useState('');
   const [groqApiKey, setGroqApiKey] = useState('');
   const [deepseekApiKey, setDeepseekApiKey] = useState('');
+  const [customUrl, setCustomUrl] = useState('');
+  const [customModel, setCustomModel] = useState('');
+  const [customApiKey, setCustomApiKey] = useState('');
+
+  // Workflow-save prompt (emitted by the agent loop after a successful task)
+  const [recipePrompt, setRecipePrompt] = useState<{ recipe_id: string; preview: string[]; intent: string } | null>(null);
+  const [recipeBusy, setRecipeBusy] = useState(false);
 
   // WhatsApp connection states
   const [waBackendUrl, setWaBackendUrl] = useState('http://localhost:3000');
@@ -453,6 +460,14 @@ export function CommandBar() {
       setStatus(event.payload.message);
     });
 
+    // Workflow-save prompt from the agent loop
+    const unlistenRecipe = listen<{ recipe_id: string; preview: string[]; intent: string }>(
+      'blinky://recipe-prompt',
+      (event) => {
+        setRecipePrompt(event.payload);
+      }
+    );
+
     unlistenChunk = listen<{ message: string }>('blinky://tutor-chunk', (event) => {
       const msg = event.payload.message;
       setStatus((prev) => {
@@ -488,6 +503,7 @@ export function CommandBar() {
     return () => {
       void unlistenStatus.then((dispose) => dispose());
       void unlistenChunk.then((dispose) => dispose());
+      void unlistenRecipe.then((dispose) => dispose());
     };
   }, []);
 
@@ -1237,6 +1253,9 @@ export function CommandBar() {
         setSarvamApiKey(settings.sarvam_api_key || '');
         setGroqApiKey(settings.groq_api_key || '');
         setDeepseekApiKey(settings.deepseek_api_key || '');
+        setCustomUrl(settings.custom_url || '');
+        setCustomModel(settings.custom_model || '');
+        setCustomApiKey(settings.custom_api_key || '');
       })
       .catch((err) => console.error('Failed to load settings:', err));
   }, []);
@@ -1272,7 +1291,7 @@ export function CommandBar() {
     const cleanProvider = newProvider.toLowerCase().trim();
     setProvider(cleanProvider);
     try {
-      await saveSettings(cleanProvider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey);
+      await saveSettings(cleanProvider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, customModel, customApiKey);
     } catch (err) {
       console.error('Failed to save provider:', err);
     }
@@ -1281,7 +1300,7 @@ export function CommandBar() {
   const updateShortcut = async (newShortcut: string) => {
     setShortcut(newShortcut);
     try {
-      await saveSettings(provider, newShortcut, sarvamApiKey, groqApiKey, deepseekApiKey);
+      await saveSettings(provider, newShortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, customModel, customApiKey);
     } catch (err) {
       console.error('Failed to save shortcut:', err);
     }
@@ -1290,7 +1309,7 @@ export function CommandBar() {
   const updateSarvamApiKey = async (newKey: string) => {
     setSarvamApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, newKey, groqApiKey, deepseekApiKey);
+      await saveSettings(provider, shortcut, newKey, groqApiKey, deepseekApiKey, customUrl, customModel, customApiKey);
     } catch (err) {
       console.error('Failed to save Sarvam API key:', err);
     }
@@ -1299,7 +1318,7 @@ export function CommandBar() {
   const updateGroqApiKey = async (newKey: string) => {
     setGroqApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, sarvamApiKey, newKey, deepseekApiKey);
+      await saveSettings(provider, shortcut, sarvamApiKey, newKey, deepseekApiKey, customUrl, customModel, customApiKey);
     } catch (err) {
       console.error('Failed to save Groq API key:', err);
     }
@@ -1308,9 +1327,49 @@ export function CommandBar() {
   const updateDeepseekApiKey = async (newKey: string) => {
     setDeepseekApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, newKey);
+      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, newKey, customUrl, customModel, customApiKey);
     } catch (err) {
       console.error('Failed to save DeepSeek API key:', err);
+    }
+  };
+
+  const updateCustomUrl = async (newUrl: string) => {
+    setCustomUrl(newUrl);
+    try {
+      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, newUrl, customModel, customApiKey);
+    } catch (err) {
+      console.error('Failed to save custom URL:', err);
+    }
+  };
+
+  const updateCustomModel = async (newModel: string) => {
+    setCustomModel(newModel);
+    try {
+      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, newModel, customApiKey);
+    } catch (err) {
+      console.error('Failed to save custom model:', err);
+    }
+  };
+
+  const updateCustomApiKey = async (newKey: string) => {
+    setCustomApiKey(newKey);
+    try {
+      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, customModel, newKey);
+    } catch (err) {
+      console.error('Failed to save custom API key:', err);
+    }
+  };
+
+  const handleRecipeDecision = async (save: boolean) => {
+    if (!recipePrompt || recipeBusy) return;
+    setRecipeBusy(true);
+    try {
+      await confirmRecipeSave(recipePrompt.recipe_id, save);
+    } catch (err) {
+      console.error('Failed to confirm recipe save:', err);
+    } finally {
+      setRecipeBusy(false);
+      setRecipePrompt(null);
     }
   };
 
@@ -1667,16 +1726,19 @@ export function CommandBar() {
           <div ref={dropdownRef} className="command-settings-dropdown">
             <div className="dropdown-section">
               <h4>Change Model</h4>
-              <select
-                className="settings-input settings-select"
-                value={provider}
-                onChange={(e) => updateProvider(e.target.value)}
-              >
-                <option value="groq">Groq</option>
-                <option value="ollama">Ollama</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="mimo">MiMo</option>
-              </select>
+              <div className="dropdown-options">
+                {(['groq', 'ollama', 'deepseek', 'mimo', 'custom'] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    className={`dropdown-option ${provider.toLowerCase().trim() === p ? 'active' : ''}`}
+                    onClick={() => updateProvider(p)}
+                  >
+                    <span>{p === 'custom' ? 'Custom (OpenAI-compatible)' : p.charAt(0).toUpperCase() + p.slice(1)}</span>
+                    {provider.toLowerCase().trim() === p && <Check size={14} className="active-dot" />}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="dropdown-section">
@@ -1727,6 +1789,41 @@ export function CommandBar() {
               </div>
             )}
 
+            {provider.toLowerCase().trim() === 'custom' && (
+              <>
+                <div className="dropdown-section">
+                  <h4>Custom API URL</h4>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    value={customUrl}
+                    onChange={(e) => updateCustomUrl(e.target.value)}
+                    placeholder="https://opencode.ai/zen/v1"
+                  />
+                </div>
+                <div className="dropdown-section">
+                  <h4>Model</h4>
+                  <input
+                    type="text"
+                    className="settings-input"
+                    value={customModel}
+                    onChange={(e) => updateCustomModel(e.target.value)}
+                    placeholder="minimax-m3"
+                  />
+                </div>
+                <div className="dropdown-section">
+                  <h4>Custom API Key</h4>
+                  <input
+                    type="password"
+                    className="settings-input"
+                    value={customApiKey}
+                    onChange={(e) => updateCustomApiKey(e.target.value)}
+                    placeholder="Paste API Key..."
+                  />
+                </div>
+              </>
+            )}
+
             <div className="dropdown-section">
               <h4>Sarvam AI API Key</h4>
               <input
@@ -1762,7 +1859,30 @@ export function CommandBar() {
           </div>
         )}
 
-
+        {/* Workflow-save prompt (agent loop completed a task) */}
+        {recipePrompt && (
+          <div className="recipe-prompt-banner">
+            <div className="recipe-prompt-title">
+              <Sparkles size={14} />
+              <span>Save this workflow?</span>
+            </div>
+            <div className="recipe-prompt-preview">
+              {recipePrompt.preview.length > 0
+                ? recipePrompt.preview.slice(0, 6).map((step, i) => (
+                    <span key={i} className="recipe-prompt-step">{step}</span>
+                  ))
+                : <span className="recipe-prompt-step">No reusable steps</span>}
+            </div>
+            <div className="recipe-prompt-actions">
+              <button type="button" className="recipe-prompt-btn primary" disabled={recipeBusy} onClick={() => handleRecipeDecision(true)}>
+                <Check size={13} /> Save
+              </button>
+              <button type="button" className="recipe-prompt-btn" disabled={recipeBusy} onClick={() => handleRecipeDecision(false)}>
+                <X size={13} /> Discard
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="command-stack">
           <div className="command-input" onClick={() => inputRef.current?.focus()}>
