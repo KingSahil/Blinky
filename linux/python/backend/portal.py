@@ -38,6 +38,73 @@ def capture_via_portal(timeout_seconds: int = 15) -> Path:
         return _capture_cli_dbus(timeout_seconds)
 
 
+def activate_window(window_id: str) -> bool:
+    """Best-effort focus via XDG portal / gdbus (GNOME/KDE any-Wayland path).
+
+    Tries org.freedesktop.portal... actually there is no universal portal
+    "focus window" method (RemoteDesktop needs interactive consent). This
+    helper instead uses the per-DE dbus focus paths that don't need consent:
+      - GNOME: org.gnome.Shell.Eval (focus by app id/title)
+      - KDE:   org.kde.KWin (activateWindow via script)
+    Returns True on any success. Falls back gracefully.
+    """
+    de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    try:
+        if "gnome" in de or "ubuntu" in de:
+            return _gnome_activate(window_id)
+        if "kde" in de or "plasma" in de:
+            return _kde_activate(window_id)
+    except Exception as exc:
+        LOGGER.debug("activate_window (%s) failed: %s", de, exc)
+    return False
+
+
+def _gnome_activate(window_id: str) -> bool:
+    """GNOME: org.gnome.Shell.Eval — search window actors by title/meta info."""
+    hashed_title = window_id.split(":", 1)[-1] if ":" in window_id else window_id
+    js = (
+        "global.get_window_actors().find(a => { const t = "
+        "a.meta_window.get_title() || ''; const wm = "
+        "a.meta_window.get_wm_class() || ''; return "
+        f"(t.includes({hashed_title!r}) || wm.includes({hashed_title!r})); "
+        "})?.meta_window.activate(global.get_current_time()) ?? false"
+    )
+    try:
+        result = subprocess.run(
+            ["gdbus", "call", "--session",
+             "--dest", "org.gnome.Shell",
+             "--object-path", "/org/gnome/Shell",
+             "--method", "org.gnome.Shell.Eval", js],
+            capture_output=True, text=True, timeout=6,
+        )
+        return result.returncode == 0 and "false" not in result.stdout
+    except Exception as exc:
+        LOGGER.debug("gnome activate failed: %s", exc)
+        return False
+
+
+def _kde_activate(window_id: str) -> bool:
+    """KDE: KWin scripting DBus — activateWindow by caption or atomId."""
+    hashed = window_id.split(":", 1)[-1] if ":" in window_id else window_id
+    script = (
+        "const w = workspace.windowList().find(win => "
+        f"win.caption.includes('{hashed}') || String(win.atomId) === '{hashed}'); "
+        "if (w) { w.activate(); call('done'); } else { call('miss'); }"
+    )
+    try:
+        result = subprocess.run(
+            ["gdbus", "call", "--session",
+             "--dest", "org.kde.KWin",
+             "--object-path", "/KWin",
+             "--method", "org.kde.KWin.Scripting.loadScript", script, str(uuid.uuid4())],
+            capture_output=True, text=True, timeout=6,
+        )
+        return result.returncode == 0 and "miss" not in result.stdout
+    except Exception as exc:
+        LOGGER.debug("kde activate failed: %s", exc)
+        return False
+
+
 def _capture_python_dbus(timeout_seconds: int) -> Path:
     import urllib.parse
 

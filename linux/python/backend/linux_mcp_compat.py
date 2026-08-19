@@ -88,8 +88,9 @@ def get_app_state(
     max_nodes: int = 200,
     max_depth: int = 6,
 ) -> dict[str, Any]:
-    """App element state. Backend provides windows + OCR element boxes
-    (no AT-SPI tree on Hyprland yet; P8 adds it for GNOME/KDE)."""
+    """App element state. Backend windows + AT-SPI element tree when the DE
+    exposes one (GNOME/KDE). On Hyprland (no a11y) elements stay empty; the
+    loop falls back to OCR."""
     windows = _backend_list_windows()
     # Filter to the requested app if given
     if app_name:
@@ -98,7 +99,31 @@ def get_app_state(
             w for w in windows
             if target in w.process.lower() or target in w.title.lower()
         ]
-    return {"elements": [], "windows": [_window_to_dict(w) for w in windows], "raw_nodes": 0}
+
+    # AT-SPI element tree (GNOME/KDE); empty on Hyprland
+    elements: list[dict[str, Any]] = []
+    try:
+        from .atspi import get_elements, is_available
+
+        if is_available():
+            atspi_elements = get_elements(pid=target_pid) if target_pid else get_elements()
+            for el in atspi_elements[:max_nodes]:
+                elements.append(
+                    {
+                        "text": el.text,
+                        "role": el.role,
+                        "x": el.x,
+                        "y": el.y,
+                        "width": el.width,
+                        "height": el.height,
+                        "source": "atspi",
+                        "confidence": el.confidence,
+                    }
+                )
+    except Exception as exc:
+        LOGGER.debug("AT-SPI element retrieval failed: %s", exc)
+
+    return {"elements": elements, "windows": [_window_to_dict(w) for w in windows], "raw_nodes": len(elements)}
 
 
 # ── Input ───────────────────────────────────────────────────────────

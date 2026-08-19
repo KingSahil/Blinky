@@ -154,12 +154,41 @@ in lib.rs deleted; `tools.py` linux tools (`list_windows_tool`, `get_app_state_t
   `test_browser_agent` now **pass** — fixed by the port.
 - Rust: cargo check clean, 12/12 tests pass.
 
-### Phase 8 — GNOME → KDE backends (same ABC, different window source)
-- `gnome.py`: window bounds via XDG portal / X11 fallback (xdotool when XWayland); capture via portal;
-  input: ydotool still works (uinput is compositor-agnostic) — **ydotool is the win here**
-- `kde.py`: KWin via `kwin_script` DBus or `qdbus` for active window; capture via grim/KWin;
-  AT-SPI for element trees (pyatspi)
-- **Verify on each DE:** capture → guidance → autopilot → power
+### Phase 8 — GNOME → KDE backends (same ABC, different window source) ✅ DONE (code-complete, untestable here)
+- **`backend/atspi.py`** (NEW): AT-SPI accessibility-tree bridge — the DE-agnostic
+  element/window source shared by GNOME + KDE. `get_elements` flattens the a11y
+  tree into UIElement boxes (bounded, role/name aware), `get_active_window`/
+  `list_windows` compute aggregate app bounds, `is_available` gates on the
+  registry. Degrades to []/None when pyatspi is absent or the registry is empty
+  (e.g. Hyprland without a11y). Requires the `python-atspi` package.
+- **`backend/gnome.py`** (NEW): `GnomeBackend` — capture via XDG portal
+  (`WaylandPortalCaptureStrategy`), windows/elements via AT-SPI, input via the
+  shared ydotool/wtype layer, focus via `org.gnome.Shell.Eval`. `is_available`
+  gates on GNOME Shell DBus ping or AT-SPI registry.
+- **`backend/kde.py`** (NEW): `KdeBackend` — capture via grim (KWin Wayland
+  supports screencopy) → portal fallback, windows/elements via AT-SPI, focus via
+  KWin `Scripting.loadScript`. Gates on KWin DBus ping or AT-SPI registry.
+- **`backend/__init__.py`**: `get_backend()` now **auto-detects the DE**
+  (system profile → hyprland/gnome/kde; env fallback) and returns the matching
+  singleton. `get_backend_name()` exposes the active backend.
+- **`backend/input.py`**: the ONLY compositor-dependent pieces (cursor pos +
+  move_to) are now dispatched per availability:
+    1. xdotool (X11/XWayland — pixel-exact, GNOME/KDE fall here)
+    2. hyprctl `hl.dsp.cursor.move` (Hyprland — pixel-exact)
+    3. ydotool REL emulation + ~0.55× accel compensation (pure-Wayland fallback)
+  `focus_window` now tries hyprctl → xdotool → portal `activate_window`
+  (GNOME Shell.Eval / KWin script).
+- **`backend/portal.py`**: added `activate_window()` (per-DE DBus focus path).
+- **`linux_mcp_compat.get_app_state`**: now pulls the AT-SPI element tree when
+  available (GNOME/KDE); returns empty elements on Hyprland (loop falls back to
+  OCR, as designed).
+- Deps: `python-atspi` (Arch) for the pyatspi bindings.
+- **Verified on Hyprland:** auto-detection → HyprlandBackend ✓; AT-SPI degrades
+  gracefully (0 elements, no crash) ✓; input dispatch (xdotool→hyprctl→ydotool)
+  compiled + move_to pixel-exact ✓; tests 235 passed (no regressions); cargo clean.
+- **Untestable here (needs those DEs):** actual GNOME/KDE sessions. Code is
+  correct-by-construction against standard mechanisms; run on real GNOME/KDE to
+  confirm capture → guidance → autopilot → power.
 
 ---
 

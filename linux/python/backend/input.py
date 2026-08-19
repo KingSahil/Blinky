@@ -12,6 +12,8 @@ focused window (backend/window.py); injection here is 100% compositor-free.
 
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import time
 
@@ -59,7 +61,27 @@ def _run(cmd: list[str], timeout: float = 5.0) -> None:
 
 
 def _cursor_pos() -> tuple[int, int]:
-    """Current cursor position in logical px (compositor-specific source)."""
+    """Current cursor position in logical px (compositor-specific source).
+
+    Routed through the active backend's cursor source (hyprctl on Hyprland,
+    xdotool on X11/XWayland). Falls back to a best-effort hyprctl attempt.
+    """
+    try:
+        # X11/XWayland → xdotool is the compositor-agnostic source
+        if shutil.which("xdotool"):
+            result = subprocess.run(
+                ["xdotool", "getmouselocation", "--shell"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode == 0:
+                vals = dict(
+                    line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+                )
+                if "X" in vals and "Y" in vals:
+                    return int(vals["X"]), int(vals["Y"])
+    except Exception as exc:
+        LOGGER.debug("cursorpos xdotool failed: %s", exc)
+
     try:
         result = subprocess.run(
             ["hyprctl", "cursorpos"], capture_output=True, text=True, timeout=3
@@ -69,31 +91,60 @@ def _cursor_pos() -> tuple[int, int]:
             return int(x_str.strip()), int(y_str.strip())
     except Exception as exc:
         LOGGER.debug("cursorpos query failed: %s", exc)
-    raise InputError("Could not determine cursor position (hyprctl cursorpos)")
+    raise InputError("Could not determine cursor position")
 
 
 def move_to(x: int, y: int) -> None:
     """Move the pointer to absolute (x, y).
 
-    Hyprland impl: native compositor dispatcher `hl.dsp.cursor.move` —
-    pixel-exact, immune to libinput pointer acceleration (which corrupts
-    ydotool's REL-based absolute emulation on large jumps).
-
-    Compositor-agnostic note: this is the ONLY compositor-dependent piece of
-    input. GNOME/KDE backends implement their own move_to (portal/xdotool);
-    click/wheel/key injection below is pure uinput and works everywhere.
+    Per-compositor, per availability:
+      1. X11/XWayland → xdotool mousemove (pixel-exact, compositor-agnostic
+         for any session that exposes an X display — GNOME/KDE fall this way)
+      2. Hyprland → native compositor dispatcher (pixel-exact)
+      3. Otherwise (pure Wayland, no X) → ydotool relative emulation with a
+         compensation constant; imperfect for large jumps but functional.
     """
-    script = f"hl.dispatch(hl.dsp.cursor.move({{ x = {int(x)}, y = {int(y)} }}))"
+    import shutil as _shutil
+
+    # 1. X11/XWayland: xdotool is pixel-exact and works on GNOME/KDE/X11
+    if _shutil.which("xdotool") and os.environ.get("DISPLAY"):
+        try:
+            result = subprocess.run(
+                ["xdotool", "mousemove", str(int(x)), str(int(y))],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                return
+        except Exception as exc:
+            LOGGER.debug("xdotool mousemove failed: %s", exc)
+            # fall through to hyprctl/ydotool
+
+    # 2. Hyprland native dispatcher (pixel-exact, immune to accel)
+    if _shutil.which("hyprctl"):
+        script = f"hl.dispatch(hl.dsp.cursor.move({{ x = {int(x)}, y = {int(y)} }}))"
+        try:
+            result = subprocess.run(
+                ["hyprctl", "eval", script], capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                return
+        except Exception as exc:
+            LOGGER.debug("hyprctl cursor move failed: %s", exc)
+
+    # 3. Pure-Wayland fallback: ydotool REL emulation with accel compensation.
+    #    ydotool's virtual device is REL-only, so absolute positions are
+    #    software-emulated. We compute the delta from the current cursor.
     try:
-        result = subprocess.run(
-            ["hyprctl", "eval", script], capture_output=True, text=True, timeout=5
-        )
-        if result.returncode != 0:
-            raise InputError(f"hyprctl cursor move failed: {result.stderr.strip()}")
-    except FileNotFoundError as exc:
-        raise InputError("hyprctl not found") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise InputError("hyprctl cursor move timed out") from exc
+        cx, cy = _cursor_pos()
+        dx, dy = int(x) - cx, int(y) - cy
+        # Compensate the ~1.8× libinput pointer-accel scaling observed on real
+        # compositors for large jumps.
+        if abs(dx) > 10 or abs(dy) > 10:
+            dx = int(round(dx * 0.55))
+            dy = int(round(dy * 0.55))
+        _run(["ydotool", "mousemove", "--", str(dx), str(dy)])
+    except InputError as exc:
+        raise InputError(f"Could not move cursor: {exc}")
 
 
 def click(x: int, y: int, button: str = "left", click_count: int = 1) -> ActionResult:
@@ -204,9 +255,39 @@ def key(keys: str) -> ActionResult:
 
 
 def focus_window(window_id: str) -> ActionResult:
-    """Focus a window via hyprctl dispatch (compositor-specific, Hyprland impl)."""
+    """Focus a window by its backend-specific id.
+
+    Per-compositor:
+      - hyprctl address (Hyprland)
+      - xdotool windowactivate (X11/XWayland)
+      - XDG portal ActivateWindow (GNOME/KDE, gives focus without raising)
+    Contacts multiple strategies; returns the first success.
+    """
+    de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+
+    # 1. Hyprland
+    if "hypr" in de and window_id.startswith("0x"):
+        try:
+            _run(["hyprctl", "dispatch", "focuswindow", f"address:{window_id}"])
+            return ActionResult(True, "focus_window", f"Focused {window_id}")
+        except InputError:
+            pass
+
+    # 2. X11/XWayland
+    if shutil.which("xdotool"):
+        try:
+            _run(["xdotool", "windowactivate", "--sync", window_id])
+            return ActionResult(True, "focus_window", f"Focused X window {window_id}")
+        except InputError:
+            pass
+
+    # 3. Portal ActivateWindow (compositor-agnostic; GNOME/KDE/any Wayland)
     try:
-        _run(["hyprctl", "dispatch", "focuswindow", f"address:{window_id}"])
-        return ActionResult(True, "focus_window", f"Focused {window_id}")
-    except InputError as exc:
-        return ActionResult(False, "focus_window", str(exc))
+        from .portal import activate_window
+
+        if activate_window(window_id):
+            return ActionResult(True, "focus_window", f"Focused {window_id} via portal")
+    except Exception as exc:
+        LOGGER.debug("portal activate_window failed: %s", exc)
+
+    return ActionResult(False, "focus_window", f"Cannot focus {window_id}")
