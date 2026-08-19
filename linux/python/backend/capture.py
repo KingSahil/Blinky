@@ -135,7 +135,9 @@ class WaylandPortalCaptureStrategy(CaptureStrategy):
     """XDG Desktop Portal screenshot — portable fallback for GNOME/KDE.
 
     interactive=True lets the DE show the user-consent dialog (non-interactive
-    Screenshot requests are denied by xdg-desktop-portal-gnome).
+    Screenshot requests are denied by xdg-desktop-portal-gnome). NOTE: GNOME
+    may still auto-deny headless requests with no parent window; keep
+    GnomeScreenshotCaptureStrategy later in the cascade as the native path.
     """
 
     def __init__(self, timeout_seconds: int = 15):
@@ -148,6 +150,72 @@ class WaylandPortalCaptureStrategy(CaptureStrategy):
         with Image.open(path) as img:
             img.load()
             return img.copy()
+
+
+class GnomeScreenshotCaptureStrategy(CaptureStrategy):
+    """gnome-screenshot — GNOME-native capture with proper consent flow.
+
+    Unlike a raw portal call, gnome-screenshot is a first-class app on GNOME:
+    the DE shows its screen-recording/screenshot consent once, then allows
+    subsequent captures. Works on GNOME Wayland and X11.
+    """
+
+    def __init__(self, timeout_seconds: int = 20):
+        self.timeout_seconds = timeout_seconds
+
+    def capture(self) -> Image.Image:
+        import tempfile
+
+        fd, tmp = tempfile.mkstemp(suffix=".png", prefix="blinky_gs_")
+        os.close(fd)
+        try:
+            result = subprocess.run(
+                ["gnome-screenshot", "--file", tmp],
+                capture_output=True, text=True, timeout=self.timeout_seconds,
+            )
+            if result.returncode != 0:
+                raise CaptureError(
+                    f"gnome-screenshot failed: {result.stderr.strip()}"
+                )
+            with Image.open(tmp) as img:
+                img.load()
+                return img.copy()
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+
+
+class _SpectacleCaptureStrategy(CaptureStrategy):
+    """spectacle — KDE-native capture (works on KWin Wayland & X11)."""
+
+    def __init__(self, timeout_seconds: int = 20):
+        self.timeout_seconds = timeout_seconds
+
+    def capture(self) -> Image.Image:
+        import tempfile
+
+        fd, tmp = tempfile.mkstemp(suffix=".png", prefix="blinky_sp_")
+        os.close(fd)
+        try:
+            result = subprocess.run(
+                ["spectacle", "--background", "--nonotify",
+                 "--fullscreen", "--output", tmp],
+                capture_output=True, text=True, timeout=self.timeout_seconds,
+            )
+            if result.returncode != 0 or not os.path.exists(tmp):
+                raise CaptureError(
+                    f"spectacle failed: {(result.stderr or result.stdout or '').strip()}"
+                )
+            with Image.open(tmp) as img:
+                img.load()
+                return img.copy()
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 # ── Fallback chain ────────────────────────────────────────────────────
@@ -198,20 +266,35 @@ class CaptureStrategyFactory:
     @classmethod
     def get_strategy(cls) -> CaptureStrategy:
         if not cls._is_wayland():
-            # X11/XWayland fallback — grim works on X11 too via the compositor,
-            # but PIL ImageGrab is the simplest X11 path.
+            # X11/XWayland fallback — PIL ImageGrab is the simplest X11 path.
             from PIL import ImageGrab
 
             return _X11GrabStrategy()
 
+        de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
         strategies: list[CaptureStrategy] = []
 
-        if cls._tool_available("grim"):
+        # grim is wlroots-only — it NEVER works on GNOME (Mutter) or KDE
+        # (KWin Wayland). Skip it for those DEs instead of failing every call.
+        if cls._tool_available("grim") and not (
+            "gnome" in de or "ubuntu" in de or "kde" in de or "plasma" in de
+        ):
             LOGGER.info("Wayland + grim available: grim first, window-crop second")
             strategies.append(GrimFullscreenCaptureStrategy())
             strategies.append(GrimWindowCropCaptureStrategy())
 
         strategies.append(WaylandPortalCaptureStrategy())
+
+        # GNOME-native capture: proper consent flow, works where headless
+        # portal calls are auto-denied.
+        if "gnome" in de or "ubuntu" in de:
+            if cls._tool_available("gnome-screenshot"):
+                strategies.append(GnomeScreenshotCaptureStrategy())
+
+        # KDE: spectacle (if present) after grim/portal
+        if "kde" in de or "plasma" in de:
+            if cls._tool_available("spectacle"):
+                strategies.append(_SpectacleCaptureStrategy())
 
         return FallbackCaptureStrategy(strategies)
 

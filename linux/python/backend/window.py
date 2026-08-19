@@ -136,27 +136,18 @@ def _window_info_from_client(client: dict[str, Any]) -> WindowInfo | None:
 
 
 def _is_hyprland() -> bool:
-    """True when the ACTIVE session is a live Hyprland instance.
+    """True when the ACTIVE session is Hyprland.
 
-    Signals, in order of reliability:
-      1. HYPRLAND_INSTANCE_SIGNATURE resolves to a live socket dir
-      2. XDG_CURRENT_DESKTOP contains 'hypr'/'Hyprland' (the compositor's
-         own advertisement)
-    Tool binary presence (hyprctl installed) is NOT a signal — this machine
-    has hyprctl even when booted into GNOME/KDE.
+    Signal of record: XDG_CURRENT_DESKTOP (the compositor advertises itself
+    into every launched app's environment). A leftover HYPRLAND_INSTANCE_
+    SIGNATURE socket dir is NOT a signal — after a gdm/DE switch the old
+    socket file may still exist on disk while the live compositor is GNOME/
+    KDE. Tool binary presence also isn't a signal (hyprctl is installed even
+    under GNOME).
     """
-    # 1. Live instance socket (most reliable — set by Hyprland into its session)
-    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
-    if sig:
-        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
-        if os.path.isdir(os.path.join(runtime, "hypr", sig)):
-            return True
-
-    # 2. DE advertisement
     de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
     if "hypr" in de:
         return True
-
     return False
 
 
