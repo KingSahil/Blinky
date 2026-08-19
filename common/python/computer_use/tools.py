@@ -1389,14 +1389,19 @@ def _check_grim_available() -> bool:
 
 
 def _detect_desktop_session() -> str:
+    """Session type (wayland/x11) — from the OS, not tool availability.
+
+    grim being absent must NOT make GNOME report 'x11'; the portal handles
+    capture there. This prevents the wrong capture/input code path from being
+    selected on GNOME/KDE.
+    """
     session = os.environ.get("XDG_SESSION_TYPE", "").lower().strip()
-    grim_ok = _check_grim_available()
+    if os.environ.get("WAYLAND_DISPLAY"):
+        session = "wayland"
     LOGGER.info(
-        "Desktop session: XDG_SESSION_TYPE=%s, grim_available=%s", session, grim_ok
+        "Desktop session: XDG_SESSION_TYPE=%s, grim_available=%s", session, _check_grim_available()
     )
-    if session == "wayland" and grim_ok:
-        return "wayland"
-    return "x11"
+    return session
 
 
 def _get_linux_mcp():

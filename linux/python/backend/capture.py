@@ -132,7 +132,11 @@ class GrimWindowCropCaptureStrategy(CaptureStrategy):
 
 
 class WaylandPortalCaptureStrategy(CaptureStrategy):
-    """XDG Desktop Portal screenshot — portable fallback for GNOME/KDE later."""
+    """XDG Desktop Portal screenshot — portable fallback for GNOME/KDE.
+
+    interactive=True lets the DE show the user-consent dialog (non-interactive
+    Screenshot requests are denied by xdg-desktop-portal-gnome).
+    """
 
     def __init__(self, timeout_seconds: int = 15):
         self.timeout_seconds = timeout_seconds
@@ -140,7 +144,7 @@ class WaylandPortalCaptureStrategy(CaptureStrategy):
     def capture(self) -> Image.Image:
         from .portal import capture_via_portal
 
-        path = capture_via_portal(timeout_seconds=self.timeout_seconds)
+        path = capture_via_portal(timeout_seconds=self.timeout_seconds, interactive=True)
         with Image.open(path) as img:
             img.load()
             return img.copy()

@@ -135,8 +135,54 @@ def _window_info_from_client(client: dict[str, Any]) -> WindowInfo | None:
     )
 
 
+def _is_hyprland() -> bool:
+    """True when the ACTIVE session is a live Hyprland instance.
+
+    Signals, in order of reliability:
+      1. HYPRLAND_INSTANCE_SIGNATURE resolves to a live socket dir
+      2. XDG_CURRENT_DESKTOP contains 'hypr'/'Hyprland' (the compositor's
+         own advertisement)
+    Tool binary presence (hyprctl installed) is NOT a signal — this machine
+    has hyprctl even when booted into GNOME/KDE.
+    """
+    # 1. Live instance socket (most reliable — set by Hyprland into its session)
+    sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    if sig:
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        if os.path.isdir(os.path.join(runtime, "hypr", sig)):
+            return True
+
+    # 2. DE advertisement
+    de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    if "hypr" in de:
+        return True
+
+    return False
+
+
+def _atspi_backend_windows() -> list[WindowInfo] | None:
+    """AT-SPI window list when not on Hyprland. None = unavailable."""
+    try:
+        from .atspi import is_available, list_windows as atspi_list_windows
+
+        if is_available():
+            return atspi_list_windows()
+    except Exception as exc:
+        LOGGER.debug("AT-SPI window list unavailable: %s", exc)
+    return None
+
+
 def get_active_window() -> WindowInfo | None:
-    """Active/focused window via `hyprctl activewindow -j`."""
+    """Active/focused window — compositor-aware (hyprctl or AT-SPI)."""
+    if not _is_hyprland():
+        try:
+            from .atspi import get_active_window as atspi_active
+
+            result = atspi_active()
+            if result is not None:
+                return result
+        except Exception:
+            pass
     data = _run_hyprctl(["activewindow", "-j"])
     if not isinstance(data, dict) or data.get("mapped") is False:
         return None
@@ -144,7 +190,11 @@ def get_active_window() -> WindowInfo | None:
 
 
 def list_windows() -> list[WindowInfo]:
-    """All mapped, visible windows via `hyprctl clients -j`."""
+    """All mapped, visible windows — compositor-aware (hyprctl or AT-SPI)."""
+    if not _is_hyprland():
+        atspi_windows = _atspi_backend_windows()
+        if atspi_windows is not None:
+            return atspi_windows
     data = _run_hyprctl(["clients", "-j"])
     if not isinstance(data, list):
         return []

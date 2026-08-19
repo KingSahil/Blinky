@@ -29,13 +29,18 @@ class PortalCaptureError(Exception):
     pass
 
 
-def capture_via_portal(timeout_seconds: int = 15) -> Path:
-    """Capture via org.freedesktop.portal.Screenshot; return the temp file path."""
+def capture_via_portal(timeout_seconds: int = 15, interactive: bool = True) -> Path:
+    """Capture via org.freedesktop.portal.Screenshot; return the temp file path.
+
+    interactive=True lets GNOME/KDE show the user-consent dialog (non-interactive
+    Screenshot requests are DENIED by xdg-desktop-portal-gnome). This is the
+    first capture on a new compositor; subsequent ones may be remembered.
+    """
     try:
-        return _capture_python_dbus(timeout_seconds)
+        return _capture_python_dbus(timeout_seconds, interactive=interactive)
     except ImportError:
         LOGGER.debug("dbus-python/PyGObject missing; using CLI dbus helper")
-        return _capture_cli_dbus(timeout_seconds)
+        return _capture_cli_dbus(timeout_seconds, interactive=interactive)
 
 
 def activate_window(window_id: str) -> bool:
@@ -105,7 +110,7 @@ def _kde_activate(window_id: str) -> bool:
         return False
 
 
-def _capture_python_dbus(timeout_seconds: int) -> Path:
+def _capture_python_dbus(timeout_seconds: int, interactive: bool = True) -> Path:
     import urllib.parse
 
     import dbus
@@ -139,7 +144,11 @@ def _capture_python_dbus(timeout_seconds: int) -> Path:
 
     try:
         screenshot_iface.Screenshot(
-            "", {"interactive": dbus.Boolean(False), "handle_token": dbus.String(token)}
+            "",
+            {
+                "interactive": dbus.Boolean(interactive),
+                "handle_token": dbus.String(token),
+            },
         )
     except Exception as e:
         signal_match.remove()
@@ -170,7 +179,7 @@ def _capture_python_dbus(timeout_seconds: int) -> Path:
     return Path(urllib.parse.unquote(urllib.parse.urlparse(str(uri)).path))
 
 
-def _capture_cli_dbus(timeout_seconds: int) -> Path:
+def _capture_cli_dbus(timeout_seconds: int, interactive: bool = True) -> Path:
     """Fallback: spawn system python3 with an inline portal helper."""
     import urllib.parse
 
@@ -192,7 +201,7 @@ try:
         result['response'] = int(code); result['results'] = results; loop.quit()
     match = bus.add_signal_receiver(handler, signal_name='Response',
         dbus_interface='org.freedesktop.portal.Request', path=path)
-    iface.Screenshot('', {{'interactive': dbus.Boolean(False), 'handle_token': dbus.String(token)}})
+    iface.Screenshot('', {{'interactive': dbus.Boolean({interactive}), 'handle_token': dbus.String(token)}})
     GLib.timeout_add_seconds({timeout_seconds}, lambda: (loop.quit(), False)[1])
     loop.run(); match.remove()
     if result['response'] == 1: print('ERROR: PermissionDenied', file=sys.stderr); sys.exit(3)

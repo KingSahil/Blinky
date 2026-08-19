@@ -109,16 +109,28 @@ def move_to(x: int, y: int) -> None:
     """Move the pointer to absolute (x, y).
 
     Per-compositor, per availability:
-      1. X11/XWayland → xdotool mousemove (pixel-exact, compositor-agnostic
-         for any session that exposes an X display — GNOME/KDE fall this way)
-      2. Hyprland → native compositor dispatcher (pixel-exact)
+      1. Hyprland → native compositor dispatcher (pixel-exact, immune to accel)
+      2. Non-Hyprland X11/XWayland → xdotool mousemove (pixel-exact; GNOME/KDE
+         XWayland syncs the X pointer to the Wayland cursor)
       3. Otherwise (pure Wayland, no X) → ydotool relative emulation with a
          compensation constant; imperfect for large jumps but functional.
     """
-    import shutil as _shutil
+    from .window import _is_hyprland
 
-    # 1. X11/XWayland: xdotool is pixel-exact and works on GNOME/KDE/X11
-    if _shutil.which("xdotool") and os.environ.get("DISPLAY"):
+    # 1. Hyprland native dispatcher (pixel-exact, immune to accel). MUST be
+    #    checked before xdotool — Hyprland's XWayland pointer does NOT sync to
+    #    the Wayland cursor, so xdotool would move the wrong pointer.
+    if _is_hyprland() and shutil.which("hyprctl"):
+        script = f"hl.dispatch(hl.dsp.cursor.move({{ x = {int(x)}, y = {int(y)} }}))"
+        try:
+            result = _hyprctl_run(["eval", script])
+            if result.returncode == 0:
+                return
+        except Exception as exc:
+            LOGGER.debug("hyprctl cursor move failed: %s", exc)
+
+    # 2. X11/XWayland: xdotool is pixel-exact and works on GNOME/KDE/X11
+    if not _is_hyprland() and shutil.which("xdotool") and os.environ.get("DISPLAY"):
         try:
             result = subprocess.run(
                 ["xdotool", "mousemove", str(int(x)), str(int(y))],
@@ -128,17 +140,6 @@ def move_to(x: int, y: int) -> None:
                 return
         except Exception as exc:
             LOGGER.debug("xdotool mousemove failed: %s", exc)
-            # fall through to hyprctl/ydotool
-
-    # 2. Hyprland native dispatcher (pixel-exact, immune to accel)
-    if _shutil.which("hyprctl"):
-        script = f"hl.dispatch(hl.dsp.cursor.move({{ x = {int(x)}, y = {int(y)} }}))"
-        try:
-            result = _hyprctl_run(["eval", script])
-            if result.returncode == 0:
-                return
-        except Exception as exc:
-            LOGGER.debug("hyprctl cursor move failed: %s", exc)
 
     # 3. Pure-Wayland fallback: ydotool REL emulation with accel compensation.
     #    ydotool's virtual device is REL-only, so absolute positions are
@@ -192,14 +193,62 @@ def scroll(direction: str, amount: int = 3, x: int | None = None, y: int | None 
 
 
 def type_text(text: str) -> ActionResult:
-    """Type text via wtype (wlroots-native keyboard injection)."""
+    """Type text. wtype first (wlroots-native); ydotool type fallback (uinput,
+    works on any compositor — GNOME/KDE don't expose the virtual-keyboard
+    protocol wtype needs)."""
     if not text:
         return ActionResult(True, "type_text", "Nothing to type")
     try:
         _run(["wtype", text])
         return ActionResult(True, "type_text", f"Typed {len(text)} chars")
+    except InputError:
+        pass  # wtype unsupported (e.g. GNOME) — fall through to ydotool
+    try:
+        # uinput-based; compositor-agnostic
+        _run(["ydotool", "type", "--", text])
+        return ActionResult(True, "type_text", f"Typed {len(text)} chars (ydotool)")
     except InputError as exc:
         return ActionResult(False, "type_text", str(exc))
+
+
+# Linux input keycodes (input-event-codes.h) — QWERTY linear scan order.
+# ydotool is uinput-only, so we translate common keys/aliases/modifiers
+# ourselves (wtype's XKB names don't apply to ydotool's raw keycodes).
+_YDOTOOL_KEYCODES = {
+    "enter": 28, "return": 28,
+    "esc": 1, "escape": 1,
+    "tab": 15, "space": 57,
+    "backspace": 14, "delete": 111, "del": 111,
+    "up": 103, "down": 108, "left": 105, "right": 106,
+    "home": 102, "end": 107, "pageup": 104, "pagedown": 109,
+}
+_MODIFIER_KEYCODES = {
+    "ctrl": 29, "control": 29,
+    "shift": 42,
+    "rightshift": 54, "rightctrl": 97,
+    "alt": 56, "meta": 125, "super": 125,
+}
+# QWERTY linear scan (Keycodes in input-event-codes.h, not alphabetical).
+_ASCII_KEYCODES = {
+    'q':16,'w':17,'e':18,'r':19,'t':20,'y':21,'u':22,'i':23,'o':24,'p':25,
+    'a':30,'s':31,'d':32,'f':33,'g':34,'h':35,'j':36,'k':37,'l':38,
+    'z':44,'x':45,'c':46,'v':47,'b':48,'n':49,'m':50,
+    '1':2,'2':3,'3':4,'4':5,'5':6,'6':7,'7':8,'8':9,'9':10,'0':11,
+    '-':12,'=':13,'[':26,']':27,';':39,"'":40,'`':41,'\\':43,',':51,'.':52,'/':53,
+}
+
+
+def _ydotool_keycode(name: str) -> int | None:
+    """Resolve a single-character or named key to a ydotool keycode."""
+    if name in _YDOTOOL_KEYCODES:
+        return _YDOTOOL_KEYCODES[name]
+    if name in _MODIFIER_KEYCODES:
+        return _MODIFIER_KEYCODES[name]
+    if len(name) == 1:
+        ch = name.lower()
+        if ch in _ASCII_KEYCODES:
+            return _ASCII_KEYCODES[ch]
+    return None
 
 
 def key(keys: str) -> ActionResult:
@@ -214,43 +263,24 @@ def key(keys: str) -> ActionResult:
         except InputError as exc:
             return ActionResult(False, "key", str(exc))
 
-    # Common aliases → wtype XKB key names. wtype does NOT know 'enter'/'esc'
-    # (it wants 'Return'/'Escape') — without this, the LLM's natural vocabulary
-    # fails and burns iterations.
-    _ALIASES = {
-        "enter": "Return",
-        "return": "Return",
-        "esc": "Escape",
-        "escape": "Escape",
-        "tab": "Tab",
-        "space": "space",
-        "backspace": "BackSpace",
-        "delete": "Delete",
-        "del": "Delete",
-        "up": "Up",
-        "down": "Down",
-        "left": "Left",
-        "right": "Right",
-        "home": "Home",
-        "end": "End",
-        "pageup": "Page_Up",
-        "pagedown": "Page_Down",
-    }
-
-    # Modifier combos → wtype: -M press mods, <key>, -m release mods
     parts = [p for p in key_lower.split("+") if p]
-    if len(parts) < 2:
-        # Single non-media key (e.g. "return", "escape") → wtype -k
-        single = _ALIASES.get(parts[0] if parts else key_lower, parts[0] if parts else key_lower)
-        try:
+
+    # Try wtype first (wlroots-native, keeps Hyprland behavior identical)
+    _ALIASES = {
+        "enter": "Return", "return": "Return",
+        "esc": "Escape", "escape": "Escape",
+        "tab": "Tab", "space": "space",
+        "backspace": "BackSpace", "delete": "Delete", "del": "Delete",
+        "up": "Up", "down": "Down", "left": "Left", "right": "Right",
+        "home": "Home", "end": "End", "pageup": "Page_Up", "pagedown": "Page_Down",
+    }
+    try:
+        if len(parts) < 2:
+            single = _ALIASES.get(parts[0] if parts else key_lower, parts[0] if parts else key_lower)
             _run(["wtype", "-k", single])
             return ActionResult(True, "key", f"Pressed '{key_lower}'")
-        except InputError as exc:
-            return ActionResult(False, "key", str(exc))
-
-    mods, final_key = parts[:-1], parts[-1]
-    final_key = _ALIASES.get(final_key, final_key)
-    try:
+        mods, final_key = parts[:-1], parts[-1]
+        final_key = _ALIASES.get(final_key, final_key)
         cmd = ["wtype"]
         for mod in mods:
             cmd += ["-M", mod]
@@ -259,6 +289,34 @@ def key(keys: str) -> ActionResult:
             cmd += ["-m", mod]
         _run(cmd)
         return ActionResult(True, "key", f"Pressed '{key_lower}'")
+    except InputError:
+        pass  # wtype unsupported (GNOME/etc.) — fall through to ydotool
+
+    # ydotool fallback: raw keycode dance (uinput, compositor-agnostic).
+    # Press all keys down together, release in reverse.
+    try:
+        if len(parts) < 2:
+            code = _ydotool_keycode(parts[0] if parts else key_lower)
+            if code is None:
+                return ActionResult(False, "key", f"Unknown key '{key_lower}'")
+            _run(["ydotool", "key", f"{code}:1", f"{code}:0"])
+            return ActionResult(True, "key", f"Pressed '{key_lower}' (ydotool)")
+
+        mods, final_key = parts[:-1], parts[-1]
+        codes: list[int] = []
+        for mod in mods:
+            c = _MODIFIER_KEYCODES.get(mod)
+            if c is None:
+                return ActionResult(False, "key", f"Unknown modifier '{mod}'")
+            codes.append(c)
+        fin = _ydotool_keycode(final_key)
+        if fin is None:
+            return ActionResult(False, "key", f"Unknown key '{final_key}'")
+        codes.append(fin)
+        # down all, up all (reverse)
+        events: list[str] = [f"{c}:1" for c in codes] + [f"{c}:0" for c in reversed(codes)]
+        _run(["ydotool", "key", *events])
+        return ActionResult(True, "key", f"Pressed '{key_lower}' (ydotool)")
     except InputError as exc:
         return ActionResult(False, "key", str(exc))
 

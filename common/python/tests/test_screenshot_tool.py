@@ -29,8 +29,9 @@ def test_screenshot_tool_legacy_mode_returns_ocr_items_key() -> None:
         patch("computer_use.tools.os.environ.get", return_value="legacy"),
         patch("computer_use.tools._screenshot_temp_dir", return_value=Path("/tmp")),
         patch("computer_use.tools._cleanup_old_screenshots"),
-        patch("backend.capture.GrimFullscreenCaptureStrategy", return_value=fake),
+        patch("backend.capture.CaptureStrategyFactory") as factory_cls,
     ):
+        factory_cls.get_strategy.return_value = fake
         result = screenshot_tool()
         assert result.success is True
         assert "ocr_items" in result.details
@@ -59,8 +60,9 @@ def test_screenshot_tool_has_vision_field() -> None:
         patch("computer_use.tools.os.environ.get", return_value="legacy"),
         patch("computer_use.tools._screenshot_temp_dir", return_value=Path("/tmp")),
         patch("computer_use.tools._cleanup_old_screenshots"),
-        patch("backend.capture.GrimFullscreenCaptureStrategy", return_value=fake),
+        patch("backend.capture.CaptureStrategyFactory") as factory_cls,
     ):
+        factory_cls.get_strategy.return_value = fake
         result = screenshot_tool()
         assert "has_vision" in result.details
         assert isinstance(result.details["has_vision"], bool)
@@ -74,8 +76,9 @@ def test_screenshot_tool_returns_toolresult_type() -> None:
         patch("computer_use.tools.os.environ.get", return_value="legacy"),
         patch("computer_use.tools._screenshot_temp_dir", return_value=Path("/tmp")),
         patch("computer_use.tools._cleanup_old_screenshots"),
-        patch("backend.capture.GrimFullscreenCaptureStrategy", return_value=fake),
+        patch("backend.capture.CaptureStrategyFactory") as factory_cls,
     ):
+        factory_cls.get_strategy.return_value = fake
         result = screenshot_tool()
         assert isinstance(result, ToolResult)
 
