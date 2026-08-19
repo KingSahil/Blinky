@@ -8,6 +8,7 @@ into WindowInfo.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from typing import Any
 
@@ -23,21 +24,87 @@ HYPRCTL = "hyprctl"
 IGNORED_PROCESS_HINTS = ("blinky", "tauri", "cae", "waybar", "rofi", "wofi")
 
 
-def _run_hyprctl(args: list[str], timeout: float = 5.0) -> Any | None:
+def _current_instance_sig() -> str:
+    """Resolve the ACTIVE Hyprland instance signature from the socket dir.
+
+    hyprctl reads the HYPRLAND_INSTANCE_SIGNATURE env var; after a display-
+    manager / session restart that env can be stale (points at a dead socket),
+    which makes every hyprctl call silently fail — 0 windows, no monitor
+    geometry, grim capture dead. Instead of trusting inherited env, scan
+    $XDG_RUNTIME_DIR/hypr/ and pick the most recently created instance.
+    """
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    hypr_dir = os.path.join(runtime, "hypr")
     try:
-        result = subprocess.run(
-            [HYPRCTL, *args],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if result.returncode != 0:
-            LOGGER.debug("hyprctl %s failed: %s", args, result.stderr.strip())
+        entries = [
+            d for d in os.listdir(hypr_dir)
+            if os.path.isdir(os.path.join(hypr_dir, d)) and os.path.exists(
+                os.path.join(hypr_dir, d, ".socket.sock")
+            )
+        ]
+    except (FileNotFoundError, PermissionError, NotADirectoryError):
+        return ""
+    if not entries:
+        return ""
+    if len(entries) == 1:
+        return entries[0]
+    # Prefer env var only when it is also the newest (avoids stale-socket pick)
+    env_sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")
+    entries.sort()
+    newest = entries[-1]
+    if env_sig == newest:
+        return newest
+    # Multiple instances: use the newest; callers retry on failure anyway
+    return newest
+
+
+def _run_hyprctl(args: list[str], timeout: float = 5.0) -> Any | None:
+    """Run hyprctl, resolving the live instance; retry newest on connection fail.
+
+    A stale HYPRLAND_INSTANCE_SIGNATURE makes hyprctl exit non-zero with a
+    dead-socket connect error; when that happens with multiple instance dirs,
+    retry once against the newest instance.
+    """
+    sig = _current_instance_sig()
+    env = os.environ.copy()
+    if sig:
+        env["HYPRLAND_INSTANCE_SIGNATURE"] = sig
+
+    def _call(sig_override: str | None) -> tuple[int, str]:
+        run_env = env.copy()
+        if sig_override:
+            run_env["HYPRLAND_INSTANCE_SIGNATURE"] = sig_override
+        try:
+            result = subprocess.run(
+                [HYPRCTL, *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=run_env,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+            LOGGER.debug("hyprctl %s error: %s", args, exc)
+            return -1, ""
+        return result.returncode, result.stdout
+
+    rc, out = _call(None)
+    if rc == 0:
+        try:
+            return json.loads(out)
+        except json.JSONDecodeError:
             return None
-        return json.loads(result.stdout)
-    except (json.JSONDecodeError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
-        LOGGER.debug("hyprctl %s error: %s", args, exc)
-        return None
+
+    # Connection failure with multiple instances → retry newest
+    newest = _current_instance_sig()
+    if newest and newest != sig:
+        LOGGER.debug("hyprctl retry against newest instance %s", newest)
+        rc2, out2 = _call(newest)
+        if rc2 == 0:
+            try:
+                return json.loads(out2)
+            except json.JSONDecodeError:
+                return None
+    return None
 
 
 def _is_ignored_process(process: str) -> bool:

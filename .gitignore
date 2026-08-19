@@ -54,3 +54,5 @@ screenshots_parsed
 landing
 # npm lockfiles — bun is the package manager
 package-lock.json
+log.txt
+log[0-9]*.txt

@@ -60,6 +60,19 @@ def _run(cmd: list[str], timeout: float = 5.0) -> None:
         raise InputError(f"{cmd[0]} timed out") from exc
 
 
+def _hyprctl_run(args: list[str], timeout: float = 5.0) -> subprocess.CompletedProcess:
+    """Run hyprctl with the resolved current instance (survives DE restarts)."""
+    from .window import _current_instance_sig
+
+    env = os.environ.copy()
+    sig = _current_instance_sig()
+    if sig:
+        env["HYPRLAND_INSTANCE_SIGNATURE"] = sig
+    return subprocess.run(
+        ["hyprctl", *args], capture_output=True, text=True, timeout=timeout, env=env
+    )
+
+
 def _cursor_pos() -> tuple[int, int]:
     """Current cursor position in logical px (compositor-specific source).
 
@@ -83,9 +96,7 @@ def _cursor_pos() -> tuple[int, int]:
         LOGGER.debug("cursorpos xdotool failed: %s", exc)
 
     try:
-        result = subprocess.run(
-            ["hyprctl", "cursorpos"], capture_output=True, text=True, timeout=3
-        )
+        result = _hyprctl_run(["cursorpos"])
         if result.returncode == 0:
             x_str, y_str = result.stdout.strip().split(",")
             return int(x_str.strip()), int(y_str.strip())
@@ -123,9 +134,7 @@ def move_to(x: int, y: int) -> None:
     if _shutil.which("hyprctl"):
         script = f"hl.dispatch(hl.dsp.cursor.move({{ x = {int(x)}, y = {int(y)} }}))"
         try:
-            result = subprocess.run(
-                ["hyprctl", "eval", script], capture_output=True, text=True, timeout=5
-            )
+            result = _hyprctl_run(["eval", script])
             if result.returncode == 0:
                 return
         except Exception as exc:

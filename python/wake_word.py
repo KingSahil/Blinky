@@ -60,14 +60,30 @@ def start_wake_word_detector(model_name="hey_blinky.onnx", threshold=0.25, verbo
 
         print(f"Loading openwakeword model: {model_name}", file=sys.stderr)
         
-        # Ensure openwakeword required feature models (melspectrogram.onnx, embedding_model.onnx) are downloaded
-        import openwakeword.utils
-        openwakeword.utils.download_models()
+        # Ensure openwakeword required feature models (melspectrogram.onnx,
+        # embedding_model.onnx) are available. download_models() was removed
+        # in openwakeword 0.4+ (feature models ship differently) — only call
+        # it when present, never let a missing downloader kill the detector.
+        try:
+            import openwakeword.utils
+            if hasattr(openwakeword.utils, "download_models"):
+                openwakeword.utils.download_models()
+        except Exception as exc:
+            print(f"openwakeword feature-model check skipped: {exc}", file=sys.stderr)
         
-        if os.path.exists(model_name) and model_name.endswith('.onnx'):
-            owwModel = Model(wakeword_models=[model_name])
-        else:
-            owwModel = Model(wakeword_models=[model_name])
+        # 0.4+ uses Model(wakeword_model_paths=...); older used wakeword_models=
+        model_kwargs: dict = {}
+        try:
+            import inspect
+            from openwakeword.model import Model as _Model
+            sig = inspect.signature(_Model.__init__)
+            if "wakeword_model_paths" in sig.parameters:
+                model_kwargs["wakeword_model_paths"] = [model_name]
+            else:
+                model_kwargs["wakeword_models"] = [model_name]
+        except Exception:
+            model_kwargs = {"wakeword_models": [model_name]}
+        owwModel = Model(**model_kwargs)
             
         print(f"Model loaded successfully. Listening for wake word... (Model: {os.path.basename(model_name)}, Threshold: {threshold})", file=sys.stderr, flush=True)
         if verbose:

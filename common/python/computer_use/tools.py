@@ -1777,17 +1777,18 @@ def screenshot_tool() -> ToolResult:
     except Exception:
         pass
 
-    # Legacy mode: backend grim capture (MCP layer is gone)
+    # Legacy mode: compositor-aware capture (MCP layer is gone)
     if mode == "legacy":
         try:
-            from backend.capture import GrimFullscreenCaptureStrategy
+            from backend.capture import CaptureStrategyFactory
 
             _cleanup_old_screenshots()
             ts = int(time.time() * 1000)
             out_path = (
                 _screenshot_temp_dir() / f"capture_{ts}_{_SCREENSHOT_COUNTER}.png"
             )
-            image = GrimFullscreenCaptureStrategy().capture()
+            strategy = CaptureStrategyFactory.get_strategy()
+            image = strategy.capture()
             image.save(out_path, format="PNG")
             decoded_path = str(out_path.resolve())
             return ToolResult(
@@ -1958,23 +1959,24 @@ def screenshot_tool() -> ToolResult:
             except Exception:
                 LOGGER.exception("Spectacle capture failed")
 
-        # Fallback to backend grim capture if the strategies above failed
+        # Fallback to compositor-aware capture (grim → portal → X11 ImageGrab)
         if not grim_succeeded:
-            LOGGER.info("Local screenshot strategies failed, falling back to backend grim")
+            LOGGER.info("Local screenshot strategies failed, falling back to backend capture")
             try:
-                from backend.capture import GrimFullscreenCaptureStrategy
+                from backend.capture import CaptureStrategyFactory
 
                 _cleanup_old_screenshots()
                 ts = int(time.time() * 1000)
                 out_path = (
                     _screenshot_temp_dir() / f"capture_{ts}_{_SCREENSHOT_COUNTER}.png"
                 )
-                image = GrimFullscreenCaptureStrategy().capture()
+                strategy = CaptureStrategyFactory.get_strategy()
+                image = strategy.capture()
                 image.save(out_path, format="PNG")
                 image_path = str(out_path.resolve())
                 grim_succeeded = True
             except Exception:
-                LOGGER.exception("Backend grim fallback failed")
+                LOGGER.exception("Backend capture fallback failed")
                 return ToolResult(
                     True,
                     "screenshot",
@@ -2182,18 +2184,20 @@ def open_app_tool_linux(app_name: str) -> ToolResult:
 def capture_screenshot() -> str | None:
     """Take a screenshot and return the image path, or None on failure.
 
-    Backend-first: grim direct capture (headless, native res). Never raises —
-    logs and returns None on failure.
+    Compositor-aware cascade (grim → portal → X11 ImageGrab) via the backend
+    factory, so a stale hyprctl socket / missing grim does NOT blind the loop.
+    Never raises — logs and returns None on failure.
     """
     try:
-        from backend.capture import GrimFullscreenCaptureStrategy
+        from backend.capture import CaptureStrategyFactory
 
         _cleanup_old_screenshots()
         ts = int(time.time() * 1000)
         out_path = (
             _screenshot_temp_dir() / f"capture_{ts}_{_SCREENSHOT_COUNTER}.png"
         )
-        image = GrimFullscreenCaptureStrategy().capture()
+        strategy = CaptureStrategyFactory.get_strategy()
+        image = strategy.capture()
         image.save(out_path, format="PNG")
         return str(out_path.resolve())
     except Exception:
