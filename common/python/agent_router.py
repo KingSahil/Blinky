@@ -668,6 +668,30 @@ async def handle_request(line):
             send_response(request_id, "error", error={"code": "SCREENSHOT_FAILED", "message": "Failed to capture PC screen", "details": str(e)})
             return
 
+    # ── Conversational & Greeting Intent Fast-Path ──
+    norm_q = cleaned_query.rstrip("?.!,;:")
+    GREETINGS = {
+        "hi", "hello", "hey", "hey blinky", "hello blinky", "hi blinky",
+        "greetings", "howdy", "sup", "what's up", "whats up", "good morning",
+        "good afternoon", "good evening", "good day", "who are you", "what is your name",
+        "how are you", "how are you doing", "what can you do", "help", "thanks", "thank you",
+        "bye", "goodbye", "ping", "test"
+    }
+    if norm_q in GREETINGS or re.match(r"^(hi|hello|hey|greetings|howdy|good\s+(morning|afternoon|evening))\b", norm_q):
+        send_response(request_id, "processing", data={"message": "Thinking...", "percent": 50})
+        try:
+            prompt = (
+                "You are Blinky, a fast, friendly, and helpful AI assistant for PC and mobile control.\n"
+                f"The user said: '{query}'\n"
+                "Respond in a natural, concise, and friendly manner (1-2 sentences max). Introduce what you can help with if it's a greeting."
+            )
+            answer = await asyncio.to_thread(ask_text_model, prompt)
+            send_response(request_id, "success", data={"response": answer.strip()})
+            return
+        except Exception as e:
+            send_response(request_id, "success", data={"response": "Hello! I'm Blinky, your AI assistant. How can I help you today?"})
+            return
+
     # ── Check for Local Desktop Agent Actions (aligning mobile behavior with PC chatbar) ──
     try:
         import platform

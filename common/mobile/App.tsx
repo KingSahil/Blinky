@@ -24,11 +24,14 @@ import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import {
   PinchGestureHandler,
   PinchGestureHandlerStateChangeEvent,
   PanGestureHandler,
   PanGestureHandlerStateChangeEvent,
+  TapGestureHandler,
+  TapGestureHandlerStateChangeEvent,
   State,
   GestureHandlerRootView,
 } from 'react-native-gesture-handler';
@@ -39,6 +42,21 @@ import {
   setAudioModeAsync,
 } from 'expo-audio';
 import { usePCWebSocket, ConnectionStatus } from './usePCWebSocket';
+
+export const triggerHaptic = (style: 'light' | 'medium' | 'heavy' | 'selection' = 'light') => {
+  try {
+    if (Platform.OS === 'web') return;
+    if (style === 'light') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } else if (style === 'medium') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } else if (style === 'heavy') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    } else if (style === 'selection') {
+      Haptics.selectionAsync();
+    }
+  } catch (e) {}
+};
 
 const STORAGE_KEY = '@blinky_pc_ip';
 
@@ -158,81 +176,142 @@ interface PinchableImageViewerProps {
   onClose: () => void;
 }
 
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
 const PinchableImageViewer: React.FC<PinchableImageViewerProps> = ({ uri, onClose }) => {
   const panRef = useRef(null);
   const pinchRef = useRef(null);
+  const doubleTapRef = useRef(null);
 
-  const baseScale = useRef(new Animated.Value(1)).current;
-  const pinchScale = useRef(new Animated.Value(1)).current;
-  const scale = Animated.multiply(baseScale, pinchScale);
-  const lastScale = useRef(1);
-
+  const scale = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(0)).current;
-  const lastOffset = useRef({ x: 0, y: 0 });
 
-  const onPinchGestureEvent = Animated.event(
-    [{ nativeEvent: { scale: pinchScale } }],
-    { useNativeDriver: true }
-  );
+  // Track absolute state values
+  const scaleVal = useRef(1);
+  const txVal = useRef(0);
+  const tyVal = useRef(0);
 
-  const onPanGestureEvent = Animated.event(
-    [
-      {
-        nativeEvent: {
-          translationX: translateX,
-          translationY: translateY,
-        },
-      },
-    ],
-    { useNativeDriver: true }
-  );
+  useEffect(() => {
+    const idS = scale.addListener(({ value }) => { scaleVal.current = value; });
+    const idX = translateX.addListener(({ value }) => { txVal.current = value; });
+    const idY = translateY.addListener(({ value }) => { tyVal.current = value; });
+    return () => {
+      scale.removeListener(idS);
+      translateX.removeListener(idX);
+      translateY.removeListener(idY);
+    };
+  }, []);
 
-  const onPinchHandlerStateChange = (event: PinchGestureHandlerStateChangeEvent) => {
-    if (event.nativeEvent.oldState === State.ACTIVE) {
-      lastScale.current *= event.nativeEvent.scale;
-      if (lastScale.current < 1) {
-        lastScale.current = 1;
-        baseScale.setValue(1);
-        pinchScale.setValue(1);
+  const getBounds = (currScale: number) => {
+    const maxTx = Math.max(0, ((SCREEN_WIDTH * currScale) - SCREEN_WIDTH) / 2);
+    const maxTy = Math.max(0, ((SCREEN_HEIGHT * currScale) - SCREEN_HEIGHT) / 2);
+    return { maxTx, maxTy };
+  };
+
+  // Double Tap Handler: Toggle between 1x and 2.5x
+  const onDoubleTap = (event: TapGestureHandlerStateChangeEvent) => {
+    if (event.nativeEvent.state === State.ACTIVE) {
+      if (scaleVal.current > 1.1) {
+        triggerHaptic('light');
         Animated.parallel([
-          Animated.spring(baseScale, { toValue: 1, useNativeDriver: true, bounciness: 2 }),
-          Animated.spring(translateX, { toValue: 0, useNativeDriver: true }),
-          Animated.spring(translateY, { toValue: 0, useNativeDriver: true }),
+          Animated.spring(scale, { toValue: 1, useNativeDriver: true, bounciness: 3 }),
+          Animated.spring(translateX, { toValue: 0, useNativeDriver: true, bounciness: 3 }),
+          Animated.spring(translateY, { toValue: 0, useNativeDriver: true, bounciness: 3 }),
         ]).start();
-        lastOffset.current = { x: 0, y: 0 };
-      } else if (lastScale.current > 6) {
-        lastScale.current = 6;
-        baseScale.setValue(6);
-        pinchScale.setValue(1);
       } else {
-        baseScale.setValue(lastScale.current);
-        pinchScale.setValue(1);
+        triggerHaptic('medium');
+        const targetScale = 2.5;
+        const focalX = event.nativeEvent.x - SCREEN_WIDTH / 2;
+        const focalY = event.nativeEvent.y - SCREEN_HEIGHT / 2;
+        const { maxTx, maxTy } = getBounds(targetScale);
+        const targetTx = Math.min(maxTx, Math.max(-maxTx, -focalX * (targetScale - 1)));
+        const targetTy = Math.min(maxTy, Math.max(-maxTy, -focalY * (targetScale - 1)));
+
+        Animated.parallel([
+          Animated.spring(scale, { toValue: targetScale, useNativeDriver: true, bounciness: 3 }),
+          Animated.spring(translateX, { toValue: targetTx, useNativeDriver: true, bounciness: 3 }),
+          Animated.spring(translateY, { toValue: targetTy, useNativeDriver: true, bounciness: 3 }),
+        ]).start();
       }
     }
   };
 
+  // Pinch Tracking
+  const pinchStartScale = useRef(1);
+  const onPinchGestureEvent = (event: any) => {
+    const newScale = Math.min(6, Math.max(0.6, pinchStartScale.current * event.nativeEvent.scale));
+    scale.setValue(newScale);
+  };
+
+  const onPinchHandlerStateChange = (event: PinchGestureHandlerStateChangeEvent) => {
+    if (event.nativeEvent.state === State.BEGAN) {
+      pinchStartScale.current = scaleVal.current;
+      triggerHaptic('selection');
+    } else if (event.nativeEvent.state === State.END || event.nativeEvent.state === State.CANCELLED) {
+      if (scaleVal.current < 1.05) {
+        triggerHaptic('medium');
+        Animated.parallel([
+          Animated.spring(scale, { toValue: 1, useNativeDriver: true, bounciness: 3 }),
+          Animated.spring(translateX, { toValue: 0, useNativeDriver: true, bounciness: 3 }),
+          Animated.spring(translateY, { toValue: 0, useNativeDriver: true, bounciness: 3 }),
+        ]).start();
+      } else {
+        const clampedScale = Math.min(5, Math.max(1, scaleVal.current));
+        const { maxTx, maxTy } = getBounds(clampedScale);
+        const clampedTx = Math.min(maxTx, Math.max(-maxTx, txVal.current));
+        const clampedTy = Math.min(maxTy, Math.max(-maxTy, tyVal.current));
+        triggerHaptic('light');
+
+        Animated.parallel([
+          Animated.spring(scale, { toValue: clampedScale, useNativeDriver: true, bounciness: 3 }),
+          Animated.spring(translateX, { toValue: clampedTx, useNativeDriver: true, bounciness: 3 }),
+          Animated.spring(translateY, { toValue: clampedTy, useNativeDriver: true, bounciness: 3 }),
+        ]).start();
+      }
+    }
+  };
+
+  // Pan Tracking
+  const panStartOffset = useRef({ x: 0, y: 0 });
+  const onPanGestureEvent = (event: any) => {
+    if (scaleVal.current <= 1.05) return;
+    const { maxTx, maxTy } = getBounds(scaleVal.current);
+    const rawX = panStartOffset.current.x + event.nativeEvent.translationX;
+    const rawY = panStartOffset.current.y + event.nativeEvent.translationY;
+    const boundedX = rawX > maxTx ? maxTx + (rawX - maxTx) * 0.3 : (rawX < -maxTx ? -maxTx + (rawX + maxTx) * 0.3 : rawX);
+    const boundedY = rawY > maxTy ? maxTy + (rawY - maxTy) * 0.3 : (rawY < -maxTy ? -maxTy + (rawY + maxTy) * 0.3 : rawY);
+    translateX.setValue(boundedX);
+    translateY.setValue(boundedY);
+  };
+
   const onPanHandlerStateChange = (event: PanGestureHandlerStateChangeEvent) => {
-    if (event.nativeEvent.oldState === State.ACTIVE) {
-      lastOffset.current.x += event.nativeEvent.translationX;
-      lastOffset.current.y += event.nativeEvent.translationY;
-      translateX.setOffset(lastOffset.current.x);
-      translateX.setValue(0);
-      translateY.setOffset(lastOffset.current.y);
-      translateY.setValue(0);
+    if (event.nativeEvent.state === State.BEGAN) {
+      panStartOffset.current = { x: txVal.current, y: tyVal.current };
+    } else if (event.nativeEvent.state === State.END || event.nativeEvent.state === State.CANCELLED) {
+      if (scaleVal.current <= 1.05) {
+        Animated.parallel([
+          Animated.spring(translateX, { toValue: 0, useNativeDriver: true }),
+          Animated.spring(translateY, { toValue: 0, useNativeDriver: true }),
+        ]).start();
+      } else {
+        const { maxTx, maxTy } = getBounds(scaleVal.current);
+        const targetX = Math.min(maxTx, Math.max(-maxTx, txVal.current));
+        const targetY = Math.min(maxTy, Math.max(-maxTy, tyVal.current));
+        Animated.parallel([
+          Animated.spring(translateX, { toValue: targetX, useNativeDriver: true, bounciness: 3 }),
+          Animated.spring(translateY, { toValue: targetY, useNativeDriver: true, bounciness: 3 }),
+        ]).start();
+      }
     }
   };
 
   const resetZoom = () => {
-    lastScale.current = 1;
-    lastOffset.current = { x: 0, y: 0 };
-    translateX.flattenOffset();
-    translateY.flattenOffset();
-    pinchScale.setValue(1);
+    triggerHaptic('light');
     Animated.parallel([
-      Animated.spring(baseScale, { toValue: 1, useNativeDriver: true, bounciness: 2 }),
-      Animated.spring(translateX, { toValue: 0, useNativeDriver: true }),
-      Animated.spring(translateY, { toValue: 0, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, useNativeDriver: true, bounciness: 3 }),
+      Animated.spring(translateX, { toValue: 0, useNativeDriver: true, bounciness: 3 }),
+      Animated.spring(translateY, { toValue: 0, useNativeDriver: true, bounciness: 3 }),
     ]).start();
   };
 
@@ -241,7 +320,10 @@ const PinchableImageViewer: React.FC<PinchableImageViewerProps> = ({ uri, onClos
       <View style={styles.fullscreenModalContainer}>
         <TouchableOpacity
           style={styles.fullscreenCloseBtn}
-          onPress={onClose}
+          onPress={() => {
+            triggerHaptic('light');
+            onClose();
+          }}
           activeOpacity={0.8}
         >
           <Ionicons name="close" size={26} color="#FFFFFF" />
@@ -253,44 +335,52 @@ const PinchableImageViewer: React.FC<PinchableImageViewerProps> = ({ uri, onClos
           activeOpacity={0.8}
         >
           <Ionicons name="refresh-outline" size={16} color="#FFFFFF" style={{ marginRight: 4 }} />
-          <Text style={styles.fullscreenResetText}>Reset Zoom</Text>
+          <Text style={styles.fullscreenResetText}>Reset</Text>
         </TouchableOpacity>
 
-        <PanGestureHandler
-          ref={panRef}
-          simultaneousHandlers={pinchRef}
-          onGestureEvent={onPanGestureEvent}
-          onHandlerStateChange={onPanHandlerStateChange}
-          minPointers={1}
-          maxPointers={2}
+        <TapGestureHandler
+          ref={doubleTapRef}
+          onHandlerStateChange={onDoubleTap}
+          numberOfTaps={2}
         >
-          <Animated.View style={styles.fullscreenImageWrapper} collapsable={false}>
-            <PinchGestureHandler
-              ref={pinchRef}
-              simultaneousHandlers={panRef}
-              onGestureEvent={onPinchGestureEvent}
-              onHandlerStateChange={onPinchHandlerStateChange}
+          <View style={styles.fullscreenImageWrapper}>
+            <PanGestureHandler
+              ref={panRef}
+              simultaneousHandlers={[pinchRef, doubleTapRef]}
+              onGestureEvent={onPanGestureEvent}
+              onHandlerStateChange={onPanHandlerStateChange}
+              minPointers={1}
+              maxPointers={1}
+              avgTouches={false}
             >
-              <Animated.View style={styles.fullscreenImageWrapper} collapsable={false}>
-                <Animated.Image
-                  source={{ uri }}
-                  style={[
-                    styles.fullscreenImage,
-                    {
-                      transform: [
-                        { perspective: 200 },
-                        { scale: scale },
-                        { translateX: translateX },
-                        { translateY: translateY },
-                      ],
-                    },
-                  ]}
-                  resizeMode="contain"
-                />
-              </Animated.View>
-            </PinchGestureHandler>
-          </Animated.View>
-        </PanGestureHandler>
+              <View style={styles.fullscreenImageWrapper}>
+                <PinchGestureHandler
+                  ref={pinchRef}
+                  simultaneousHandlers={[panRef, doubleTapRef]}
+                  onGestureEvent={onPinchGestureEvent}
+                  onHandlerStateChange={onPinchHandlerStateChange}
+                >
+                  <Animated.View style={styles.fullscreenImageWrapper} collapsable={false}>
+                    <Animated.Image
+                      source={{ uri }}
+                      style={[
+                        styles.fullscreenImage,
+                        {
+                          transform: [
+                            { translateX },
+                            { translateY },
+                            { scale },
+                          ],
+                        },
+                      ]}
+                      resizeMode="contain"
+                    />
+                  </Animated.View>
+                </PinchGestureHandler>
+              </View>
+            </PanGestureHandler>
+          </View>
+        </TapGestureHandler>
       </View>
     </GestureHandlerRootView>
   );
@@ -603,9 +693,11 @@ export default function App() {
 
   const handleQuery = () => {
     if (!queryText.trim()) {
+      triggerHaptic('selection');
       Alert.alert('Empty query', 'Please enter a search/browsing query first.');
       return;
     }
+    triggerHaptic('light');
     
     const query = queryText.trim();
     setRunningQuery(query);
@@ -663,10 +755,12 @@ export default function App() {
   // Voice recording handlers
   const startVoiceRecording = async () => {
     if (!isConnected) {
+      triggerHaptic('selection');
       Alert.alert('Not Connected', 'Please establish a link to your PC first.');
       return;
     }
     if (!sarvamApiKey) {
+      triggerHaptic('selection');
       Alert.alert('Configuration Missing', 'Waiting for Sarvam STT Key from your PC...');
       sendCommand('get_sarvam_key' as any);
       return;
@@ -686,6 +780,7 @@ export default function App() {
 
       await audioRecorder.prepareToRecordAsync();
       audioRecorder.record();
+      triggerHaptic('heavy');
       setIsVoiceRecording(true);
     } catch (err) {
       console.error('Failed to start voice recording', err);
@@ -695,6 +790,7 @@ export default function App() {
 
   const stopVoiceRecording = async () => {
     if (!isVoiceRecording) return;
+    triggerHaptic('medium');
     setIsVoiceRecording(false);
     setIsVoiceTranscribing(true);
     try {
@@ -806,6 +902,7 @@ export default function App() {
   };
 
   const handleStopQuery = () => {
+    triggerHaptic('heavy');
     setAgentStatus('idle');
     setRunningQuery('');
     setQueryText('');
@@ -900,6 +997,7 @@ export default function App() {
   };
 
   const handleConnect = async () => {
+    triggerHaptic('medium');
     if (!validateIp(ipAddress)) {
       Alert.alert('Invalid Address', 'Please enter a valid IP address or hostname.');
       return;
@@ -911,6 +1009,7 @@ export default function App() {
   };
 
   const handleAutoDiscover = async () => {
+    triggerHaptic('medium');
     setIsDiscovering(true);
     setDiscoveryProgress('Getting network details...');
     try {
@@ -940,6 +1039,7 @@ export default function App() {
   };
 
   const triggerPowerCommand = (command: 'power_off' | 'restart' | 'sleep', label: string) => {
+    triggerHaptic('heavy');
     setShowMenu(false);
     Alert.alert(
       `Confirm Action`,
@@ -950,6 +1050,7 @@ export default function App() {
           text: 'Confirm',
           style: 'destructive',
           onPress: () => {
+            triggerHaptic('heavy');
             const success = sendCommand(command);
             if (success) {
               setActionFeedback(`Command "${label}" sent!`);
@@ -964,6 +1065,7 @@ export default function App() {
   };
 
   const triggerQuickAction = (command: any, label: string) => {
+    triggerHaptic('medium');
     setShowMenu(false);
     const success = sendCommand(command);
     if (success) {
@@ -994,7 +1096,7 @@ export default function App() {
                 <View style={[styles.statusDotHeader, { backgroundColor: isConnected ? '#FF5A36' : '#EF4444' }]} />
                 <Text style={styles.statusTextHeader}>{isConnected ? 'Connected' : 'Disconnected'}</Text>
               </View>
-              <TouchableOpacity onPress={() => setShowMenu(!showMenu)} style={styles.menuBtn}>
+              <TouchableOpacity onPress={() => { triggerHaptic('light'); setShowMenu(!showMenu); }} style={styles.menuBtn}>
                 <Ionicons name="ellipsis-vertical" size={20} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
@@ -1003,7 +1105,7 @@ export default function App() {
           {/* Three Dots Dropdown Overlay Menu */}
           {showMenu && (
             <View style={styles.dropdownMenu}>
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => { setShowMenu(false); setShowSettings(!showSettings); }}>
+              <TouchableOpacity style={styles.dropdownItem} onPress={() => { triggerHaptic('light'); setShowMenu(false); setShowSettings(!showSettings); }}>
                 <Ionicons name="settings-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
                 <Text style={styles.dropdownText}>Local Link Setup</Text>
               </TouchableOpacity>
@@ -1085,7 +1187,7 @@ export default function App() {
                     </TouchableOpacity>
                   </>
                 ) : (
-                  <TouchableOpacity style={styles.disconnectBtn} onPress={disconnect} activeOpacity={0.8}>
+                  <TouchableOpacity style={styles.disconnectBtn} onPress={() => { triggerHaptic('heavy'); disconnect(); }} activeOpacity={0.8}>
                     <Text style={styles.disconnectBtnText}>
                       {status === 'connecting' ? 'Cancel Connection' : 'Disconnect Link'}
                     </Text>
@@ -1170,7 +1272,10 @@ export default function App() {
                     {!isUser && message.screenshot_b64 && (
                       <TouchableOpacity
                         activeOpacity={0.88}
-                        onPress={() => setPreviewImageUri(`data:image/jpeg;base64,${message.screenshot_b64}`)}
+                        onPress={() => {
+                          triggerHaptic('light');
+                          setPreviewImageUri(`data:image/jpeg;base64,${message.screenshot_b64}`);
+                        }}
                         style={styles.screenshotTouchable}
                       >
                         <Image

@@ -167,7 +167,7 @@ class WILPipeline:
         LOGGER.info(f"Query plan: {plan}")
         
         if not plan.get("needs_web_search", True):
-            emit_status("reasoning", "Skipping web search, answering from offline weights...")
+            emit_status("reasoning", "Synthesizing answer...")
             # Direct reasoning with no context
             synthesized = self.reasoner.synthesize(query, "No web search context requested.", on_chunk)
             return {

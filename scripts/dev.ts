@@ -174,6 +174,20 @@ if (process.platform === "win32" && !existsSync("common/python_runtime/Python313
   }
 }
 
+const killWindowsProcessTree = (pid?: number) => {
+  if (process.platform !== "win32") return;
+  try {
+    if (pid) {
+      Bun.spawnSync(["taskkill", "/F", "/T", "/PID", String(pid)]);
+    }
+    Bun.spawnSync(["taskkill", "/F", "/T", "/IM", "blinky.exe"]);
+    Bun.spawnSync(["powershell", "-NoProfile", "-Command", "Get-NetTCPConnection -LocalPort 5173,9001 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"]);
+  } catch {}
+};
+
+// Pre-flight cleanup to ensure port 5173 and 9001 are free
+killWindowsProcessTree();
+
 console.log("Starting Tauri Development Server...");
 const tauriDev = spawn(["bun", "tauri", "dev"], {
   stdout: "inherit",
@@ -187,6 +201,11 @@ const cleanup = () => {
       mobileProcess.kill();
     } catch {}
   }
+  try {
+    tauriDev.kill();
+  } catch {}
+
+  killWindowsProcessTree(tauriDev.pid);
 };
 
 const adbCmd = getAdbPath();
@@ -199,8 +218,8 @@ if (process.stdin.isTTY) {
     process.stdin.on("data", (key: string) => {
       // Handle Ctrl+C
       if (key === "\u0003") {
+        console.log("\n[Blinky] 🛑 Shutting down dev servers and closing Blinky PC app...");
         cleanup();
-        try { tauriDev.kill(); } catch {}
         process.exit(0);
       }
 
@@ -229,8 +248,14 @@ if (process.stdin.isTTY) {
   } catch {}
 }
 
-process.on("SIGINT", cleanup);
-process.on("SIGTERM", cleanup);
+process.on("SIGINT", () => {
+  cleanup();
+  process.exit(0);
+});
+process.on("SIGTERM", () => {
+  cleanup();
+  process.exit(0);
+});
 process.on("exit", cleanup);
 
 // Wait for Tauri dev process to exit
