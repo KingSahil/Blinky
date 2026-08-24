@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -44,11 +45,9 @@ def capture_via_portal(timeout_seconds: int = 15, interactive: bool = True) -> P
 
 
 def activate_window(window_id: str) -> bool:
-    """Best-effort focus via XDG portal / gdbus (GNOME/KDE any-Wayland path).
+    """Best-effort focus via per-DE DBus paths that don't need consent.
 
-    Tries org.freedesktop.portal... actually there is no universal portal
-    "focus window" method (RemoteDesktop needs interactive consent). This
-    helper instead uses the per-DE dbus focus paths that don't need consent:
+    Tries:
       - GNOME: org.gnome.Shell.Eval (focus by app id/title)
       - KDE:   org.kde.KWin (activateWindow via script)
     Returns True on any success. Falls back gracefully.
@@ -230,4 +229,119 @@ except Exception as e:
     path = Path(res.stdout.strip())
     if not path.exists():
         raise PortalCaptureError("Portal produced no file")
+    return path
+
+
+# ── ScreenCast portal → PipeWire (GNOME/KDE Wayland native capture) ────
+# GNOME 50 gates the shell Screenshot API and auto-denies headless portal
+# Screenshot requests. The sanctioned path is the ScreenCast portal, which
+# gives a PipeWire stream after one consent prompt — exactly what GNOME's own
+# screen recorder uses.
+
+
+def screen_cast_capture(timeout_seconds: int = 30) -> Path:
+    """Full portal ScreenCast session → PipeWire → one 60fps frame as PNG.
+
+    Returns a temp PNG path. Raises PermissionDeniedError if the user denies
+    the shared-screen consent dialog.
+    """
+    import subprocess
+    import tempfile
+    import uuid
+
+    token = f"blinky_{uuid.uuid4().hex[:8]}"
+    bus_addr = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+
+    inline = (
+        """
+import sys, json, uuid, os, subprocess, tempfile
+import dbus
+from dbus.mainloop.glib import DBusGMainLoop
+from gi.repository import GLib
+
+DBusGMainLoop(set_as_default=True)
+bus = dbus.SessionBus()
+portal = bus.get_object('org.freedesktop.portal.Desktop', '/org/freedesktop/portal/desktop')
+
+def wait_response(iface, token):
+    loop = GLib.MainLoop()
+    out = {'r': None}
+    sender = bus.get_unique_name().replace(':', '').replace('.', '_')
+    path = f'/org/freedesktop/portal/desktop/request/{sender}/{token}'
+    def cb(code, results):
+        out['r'] = (int(code), results); loop.quit()
+    m = bus.add_signal_receiver(cb, signal_name='Response',
+        dbus_interface='org.freedesktop.portal.Request', path=path)
+    GLib.timeout_add_seconds(_TIMEOUT, lambda: (loop.quit(), False)[1])
+    loop.run(); m.remove()
+    if out['r'] is None:
+        raise RuntimeError('portal response timeout')
+    return out['r']
+
+sc = dbus.Interface(portal, 'org.freedesktop.portal.ScreenCast')
+# 1. CreateSession(options) — single a{sv} arg with handle_token
+code, res = wait_response(
+    sc.CreateSession(dbus.Dictionary({'handle_token': dbus.String('sc1')}, 'sv')),
+    'sc1')
+if code != 0:
+    print('ERR session', code, file=sys.stderr); sys.exit(3)
+session = str(res.get('session_handle', ''))
+
+# 2. SelectSources(session, sources a{sv}, options a{sv})
+wait_response(sc.SelectSources(session,
+    dbus.Dictionary({'types': dbus.UInt32(0x1)}, 'sv'),
+    dbus.Dictionary({'handle_token': dbus.String('sc2')}, 'sv')), 'sc2')
+
+# 3. Start(session, parent_window '', options) → PipeWire node
+code, res = wait_response(sc.Start(session, '',
+    dbus.Dictionary({'handle_token': dbus.String('sc3')}, 'sv')), 'sc3')
+if code != 0:
+    print('ERR start', code, file=sys.stderr); sys.exit(4)
+streams = res.get('streams', [])
+if not streams:
+    print('ERR no streams', file=sys.stderr); sys.exit(5)
+node_id = int(streams[0][0])
+pipewire_fd = None
+for k, v in res.items():
+    pass
+# 4. gst: grab one frame from the PipeWire node
+out_path = tempfile.mktemp(suffix='.png', prefix='blinky_sc_')
+pipeline = (
+    'pipewiresrc path=%(path)s keepalive-time=0 num-buffers=1 '
+    '! videoconvert ! pngenc ! filesink location=%(out)s'
+).replace('%(path)s', str(node_id)).replace('%(out)s', out_path)
+rc = subprocess.run(['gst-launch-1.0', '-q'] + pipeline.split(),
+    capture_output=True, timeout=_TIMEOUT)
+if rc.returncode != 0:
+    print('ERR gst', rc.stderr.decode(errors='replace')[-300:], file=sys.stderr); sys.exit(6)
+print(out_path)
+"""
+    ).replace('_TIMEOUT', str(timeout_seconds))
+
+    env_copy = {
+        "DBUS_SESSION_BUS_ADDRESS": bus_addr,
+        "DISPLAY": os.environ.get("DISPLAY", ""),
+        "WAYLAND_DISPLAY": os.environ.get("WAYLAND_DISPLAY", ""),
+        "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", ""),
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+    }
+    try:
+        res = subprocess.run(
+            [sys.executable, "-c", inline],
+            capture_output=True, text=True, timeout=timeout_seconds + 10,
+            env=env_copy,
+        )
+    except subprocess.TimeoutExpired:
+        raise PortalCaptureError("ScreenCast capture timed out")
+    if res.returncode != 0:
+        err = res.stderr.strip()
+        if "ERR session" in err:
+            raise PermissionDeniedError("ScreenCast session permission denied")
+        if "ERR start" in err:
+            raise PermissionDeniedError("ScreenCast stream permission denied")
+        raise PortalCaptureError(f"ScreenCast failed: {err[-200:]}")
+    path = Path(res.stdout.strip())
+    if not path.exists():
+        raise PortalCaptureError("ScreenCast produced no file")
     return path
