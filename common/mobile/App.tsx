@@ -17,12 +17,21 @@ import {
   Dimensions,
   Modal,
   LogBox,
+  Animated,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import {
+  PinchGestureHandler,
+  PinchGestureHandlerStateChangeEvent,
+  PanGestureHandler,
+  PanGestureHandlerStateChangeEvent,
+  State,
+  GestureHandlerRootView,
+} from 'react-native-gesture-handler';
 import {
   useAudioRecorder,
   RecordingPresets,
@@ -143,6 +152,149 @@ interface Message {
   screenshot_b64?: string;
   steps?: any[];
 }
+
+interface PinchableImageViewerProps {
+  uri: string;
+  onClose: () => void;
+}
+
+const PinchableImageViewer: React.FC<PinchableImageViewerProps> = ({ uri, onClose }) => {
+  const panRef = useRef(null);
+  const pinchRef = useRef(null);
+
+  const baseScale = useRef(new Animated.Value(1)).current;
+  const pinchScale = useRef(new Animated.Value(1)).current;
+  const scale = Animated.multiply(baseScale, pinchScale);
+  const lastScale = useRef(1);
+
+  const translateX = useRef(new Animated.Value(0)).current;
+  const translateY = useRef(new Animated.Value(0)).current;
+  const lastOffset = useRef({ x: 0, y: 0 });
+
+  const onPinchGestureEvent = Animated.event(
+    [{ nativeEvent: { scale: pinchScale } }],
+    { useNativeDriver: true }
+  );
+
+  const onPanGestureEvent = Animated.event(
+    [
+      {
+        nativeEvent: {
+          translationX: translateX,
+          translationY: translateY,
+        },
+      },
+    ],
+    { useNativeDriver: true }
+  );
+
+  const onPinchHandlerStateChange = (event: PinchGestureHandlerStateChangeEvent) => {
+    if (event.nativeEvent.oldState === State.ACTIVE) {
+      lastScale.current *= event.nativeEvent.scale;
+      if (lastScale.current < 1) {
+        lastScale.current = 1;
+        baseScale.setValue(1);
+        pinchScale.setValue(1);
+        Animated.parallel([
+          Animated.spring(baseScale, { toValue: 1, useNativeDriver: true, bounciness: 2 }),
+          Animated.spring(translateX, { toValue: 0, useNativeDriver: true }),
+          Animated.spring(translateY, { toValue: 0, useNativeDriver: true }),
+        ]).start();
+        lastOffset.current = { x: 0, y: 0 };
+      } else if (lastScale.current > 6) {
+        lastScale.current = 6;
+        baseScale.setValue(6);
+        pinchScale.setValue(1);
+      } else {
+        baseScale.setValue(lastScale.current);
+        pinchScale.setValue(1);
+      }
+    }
+  };
+
+  const onPanHandlerStateChange = (event: PanGestureHandlerStateChangeEvent) => {
+    if (event.nativeEvent.oldState === State.ACTIVE) {
+      lastOffset.current.x += event.nativeEvent.translationX;
+      lastOffset.current.y += event.nativeEvent.translationY;
+      translateX.setOffset(lastOffset.current.x);
+      translateX.setValue(0);
+      translateY.setOffset(lastOffset.current.y);
+      translateY.setValue(0);
+    }
+  };
+
+  const resetZoom = () => {
+    lastScale.current = 1;
+    lastOffset.current = { x: 0, y: 0 };
+    translateX.flattenOffset();
+    translateY.flattenOffset();
+    pinchScale.setValue(1);
+    Animated.parallel([
+      Animated.spring(baseScale, { toValue: 1, useNativeDriver: true, bounciness: 2 }),
+      Animated.spring(translateX, { toValue: 0, useNativeDriver: true }),
+      Animated.spring(translateY, { toValue: 0, useNativeDriver: true }),
+    ]).start();
+  };
+
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <View style={styles.fullscreenModalContainer}>
+        <TouchableOpacity
+          style={styles.fullscreenCloseBtn}
+          onPress={onClose}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="close" size={26} color="#FFFFFF" />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.fullscreenResetBtn}
+          onPress={resetZoom}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="refresh-outline" size={16} color="#FFFFFF" style={{ marginRight: 4 }} />
+          <Text style={styles.fullscreenResetText}>Reset Zoom</Text>
+        </TouchableOpacity>
+
+        <PanGestureHandler
+          ref={panRef}
+          simultaneousHandlers={pinchRef}
+          onGestureEvent={onPanGestureEvent}
+          onHandlerStateChange={onPanHandlerStateChange}
+          minPointers={1}
+          maxPointers={2}
+        >
+          <Animated.View style={styles.fullscreenImageWrapper} collapsable={false}>
+            <PinchGestureHandler
+              ref={pinchRef}
+              simultaneousHandlers={panRef}
+              onGestureEvent={onPinchGestureEvent}
+              onHandlerStateChange={onPinchHandlerStateChange}
+            >
+              <Animated.View style={styles.fullscreenImageWrapper} collapsable={false}>
+                <Animated.Image
+                  source={{ uri }}
+                  style={[
+                    styles.fullscreenImage,
+                    {
+                      transform: [
+                        { perspective: 200 },
+                        { scale: scale },
+                        { translateX: translateX },
+                        { translateY: translateY },
+                      ],
+                    },
+                  ]}
+                  resizeMode="contain"
+                />
+              </Animated.View>
+            </PinchGestureHandler>
+          </Animated.View>
+        </PanGestureHandler>
+      </View>
+    </GestureHandlerRootView>
+  );
+};
 
 export default function App() {
   const [ipAddress, setIpAddress] = useState('');
@@ -822,14 +974,15 @@ export default function App() {
     }
   };
 
-  return (
-    <LinearGradient colors={['#070313', '#090710', '#05020B']} style={styles.container}>
-      <StatusBar barStyle="light-content" />
-      <View style={styles.safeArea}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.keyboardView}
-        >
+    return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <LinearGradient colors={['#070313', '#090710', '#05020B']} style={styles.container}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.safeArea}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.keyboardView}
+          >
           {/* Header */}
           <View style={styles.header}>
             <View style={styles.headerLeft}>
@@ -1128,48 +1281,24 @@ export default function App() {
             )}
           </View>
 
-          {/* Fullscreen Image Preview Modal */}
+          {/* Fullscreen Image Preview Modal with Pinch to Zoom */}
           <Modal
             visible={!!previewImageUri}
             transparent={true}
             animationType="fade"
             onRequestClose={() => setPreviewImageUri(null)}
           >
-            <View style={styles.fullscreenModalContainer}>
-              <TouchableOpacity
-                style={styles.fullscreenCloseBtn}
-                onPress={() => setPreviewImageUri(null)}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="close" size={26} color="#FFFFFF" />
-              </TouchableOpacity>
-
-              {previewImageUri && (
-                <ScrollView
-                  maximumZoomScale={5}
-                  minimumZoomScale={1}
-                  showsHorizontalScrollIndicator={false}
-                  showsVerticalScrollIndicator={false}
-                  centerContent={true}
-                  contentContainerStyle={styles.zoomScrollViewContent}
-                  style={styles.zoomScrollView}
-                >
-                  <TouchableWithoutFeedback onPress={() => setPreviewImageUri(null)}>
-                    <View style={styles.fullscreenImageWrapper}>
-                      <Image
-                        source={{ uri: previewImageUri }}
-                        style={styles.fullscreenImage}
-                        resizeMode="contain"
-                      />
-                    </View>
-                  </TouchableWithoutFeedback>
-                </ScrollView>
-              )}
-            </View>
+            {previewImageUri && (
+              <PinchableImageViewer
+                uri={previewImageUri}
+                onClose={() => setPreviewImageUri(null)}
+              />
+            )}
           </Modal>
         </KeyboardAvoidingView>
       </View>
     </LinearGradient>
+    </GestureHandlerRootView>
   );
 }
 
@@ -1700,6 +1829,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  fullscreenResetBtn: {
+    position: 'absolute',
+    top: Platform.OS === 'android' ? (StatusBar.currentHeight || 20) + 12 : 50,
+    left: 20,
+    zIndex: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.18)',
+  },
+  fullscreenResetText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
   fullscreenImageWrapper: {
     width: Dimensions.get('window').width,
     height: Dimensions.get('window').height,
@@ -1709,14 +1855,5 @@ const styles = StyleSheet.create({
   fullscreenImage: {
     width: '94%',
     height: '84%',
-  },
-  zoomScrollView: {
-    width: '100%',
-    height: '100%',
-  },
-  zoomScrollViewContent: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
 });

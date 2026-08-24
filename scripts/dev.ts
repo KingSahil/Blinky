@@ -65,8 +65,9 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
 
   try {
     const proc = spawn([adb, "devices", "-l"], { stdout: "pipe" });
-    const output = await new Response(proc.stdout).text();
-    await proc.exited;
+    const outputPromise = new Response(proc.stdout).text();
+    const timeoutPromise = new Promise<string>((resolve) => setTimeout(() => resolve(""), 2500));
+    const output = await Promise.race([outputPromise, timeoutPromise]);
 
     // Parse connected devices in 'device' state
     const lines = output.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
@@ -84,9 +85,9 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
 
     console.log("[Mobile] Setting up USB reverse port forwarding (tcp:9001, tcp:8081)...");
     const rev1 = spawn([adb, "reverse", "tcp:9001", "tcp:9001"]);
-    await rev1.exited;
+    await Promise.race([rev1.exited, new Promise(r => setTimeout(r, 1500))]);
     const rev2 = spawn([adb, "reverse", "tcp:8081", "tcp:8081"]);
-    await rev2.exited;
+    await Promise.race([rev2.exited, new Promise(r => setTimeout(r, 1500))]);
 
     // Check if Metro bundler is already running
     let mobileProc: Subprocess | null = null;
