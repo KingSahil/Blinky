@@ -15,14 +15,20 @@ import {
   ScrollView,
   Image,
   Dimensions,
-  Modal
+  Modal,
+  LogBox,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
+import {
+  useAudioRecorder,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+} from 'expo-audio';
 import { usePCWebSocket, ConnectionStatus } from './usePCWebSocket';
 
 const STORAGE_KEY = '@blinky_pc_ip';
@@ -212,7 +218,7 @@ export default function App() {
 
   // Voice command states
   const [sarvamApiKey, setSarvamApiKey] = useState<string | null>(null);
-  const [voiceRecording, setVoiceRecording] = useState<Audio.Recording | null>(null);
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const [isVoiceTranscribing, setIsVoiceTranscribing] = useState(false);
 
@@ -515,42 +521,19 @@ export default function App() {
     }
 
     try {
-      const perm = await Audio.requestPermissionsAsync();
-      if (perm.status !== 'granted') {
+      const perm = await requestRecordingPermissionsAsync();
+      if (!perm.granted) {
         Alert.alert('Permission Denied', 'Microphone access is required for voice commands.');
         return;
       }
 
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
 
-      const { recording } = await Audio.Recording.createAsync({
-        android: {
-          extension: '.m4a',
-          outputFormat: Audio.AndroidOutputFormat.MPEG_4,
-          audioEncoder: Audio.AndroidAudioEncoder.AAC,
-          sampleRate: 16000,
-          numberOfChannels: 1,
-          bitRate: 64000,
-        },
-        ios: {
-          extension: '.wav',
-          audioQuality: Audio.IOSAudioQuality.HIGH,
-          sampleRate: 16000,
-          numberOfChannels: 1,
-          bitRate: 64000,
-          linearPCMBitDepth: 16,
-          linearPCMIsBigEndian: false,
-          linearPCMIsFloat: false,
-        },
-        web: {
-          mimeType: 'audio/webm',
-          bitsPerSecond: 64000,
-        }
-      });
-      setVoiceRecording(recording);
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
       setIsVoiceRecording(true);
     } catch (err) {
       console.error('Failed to start voice recording', err);
@@ -559,13 +542,12 @@ export default function App() {
   };
 
   const stopVoiceRecording = async () => {
-    if (!voiceRecording) return;
+    if (!isVoiceRecording) return;
     setIsVoiceRecording(false);
     setIsVoiceTranscribing(true);
     try {
-      await voiceRecording.stopAndUnloadAsync();
-      const uri = voiceRecording.getURI();
-      setVoiceRecording(null);
+      await audioRecorder.stop();
+      const uri = audioRecorder.uri;
 
       if (!uri) {
         throw new Error('No recording URI found');
