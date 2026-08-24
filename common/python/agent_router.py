@@ -3,6 +3,7 @@ import os
 import json
 import ast
 import re
+import time
 import asyncio
 import subprocess
 import webbrowser
@@ -14,6 +15,8 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 _COMMON_PY = str(_SCRIPT_DIR)
 if _COMMON_PY not in sys.path:
     sys.path.insert(0, _COMMON_PY)
+
+from tools.whatsapp_tool import resolve_whatsapp_request
 
 if sys.platform == "win32":
     _PLATFORM_PY = str(_SCRIPT_DIR.parent.parent / "windows" / "python")
@@ -672,6 +675,17 @@ async def handle_request(line):
         from computer_use import is_web_destination, looks_like_app_name, try_run_agent_action, is_in_app_action
         from computer_use.tools import play_spotify_track_tool, play_youtube_video_tool, open_app_tool, shortcut_tool
 
+        # Check WhatsApp direct request fast-path
+        wa_match = resolve_whatsapp_request(query)
+        if wa_match:
+            action, chat_name = wa_match
+            send_response(request_id, "processing", data={"message": f"Querying WhatsApp ({action})...", "percent": 50})
+            from main import run_whatsapp_tool
+            wa_result = await asyncio.to_thread(run_whatsapp_tool, action, chat_name, time.perf_counter(), [])
+            summary = wa_result.get("summary", "No WhatsApp response.")
+            send_response(request_id, "success", data={"response": summary})
+            return
+
         # Run direct regex action checks FIRST before LLM classification to ensure instant execution
         # and prevent misclassification of seek/skip commands as music/playback tracks.
         direct_result = try_run_agent_action(query)
@@ -703,6 +717,15 @@ async def handle_request(line):
             if STOP_SPOTIFY_RE.match(query.strip().rstrip("?.!,;:")):
                 send_response(request_id, "processing", data={"message": "Toggling media playback...", "percent": 50})
                 direct_result = shortcut_tool("media_play_pause")
+            elif intent == "WHATSAPP":
+                wa_action = str(extracted_params.get("wa_action") or "status").lower().strip()
+                wa_chat_name = extracted_params.get("wa_chat_name") or None
+                send_response(request_id, "processing", data={"message": f"Querying WhatsApp ({wa_action})...", "percent": 50})
+                from main import run_whatsapp_tool
+                wa_result = await asyncio.to_thread(run_whatsapp_tool, wa_action, wa_chat_name, time.perf_counter(), [])
+                summary = wa_result.get("summary", "No WhatsApp response.")
+                send_response(request_id, "success", data={"response": summary})
+                return
             elif intent == "MEDIA_PLAYBACK":
                 from computer_use.agent import handle_media_playback_action
                 direct_result = handle_media_playback_action(extracted_params, query)

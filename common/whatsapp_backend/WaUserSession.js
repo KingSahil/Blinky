@@ -9,7 +9,7 @@ import { existsSync } from 'fs';
 import { exec, execFile } from 'child_process';
 import systemPrompt from './generated-prompt.cjs';
 
-const { Client, LocalAuth } = pkg;
+const { Client, LocalAuth, Message } = pkg;
 
 // ── Module-level constants (system-wide, not per-user) ────────────────────────
 const AUTH_DIR = process.env.WWEBJS_AUTH_DIR || join(process.cwd(), '.wwebjs_auth');
@@ -576,6 +576,34 @@ Get-CimInstance Win32_Process | Where-Object {
         });
     }
 
+    async getChatInstance(chatId) {
+        if (!chatId) return null;
+        try {
+            const data = await this.client.pupPage.evaluate((cid) => {
+                const collections = window.require ? window.require('WAWebCollections') : null;
+                const c = collections?.Chat?.get(cid) || window.Store?.Chat?.get(cid);
+                if (!c) return null;
+                return {
+                    id: c.id?._serialized ? c.id : { _serialized: cid, user: cid.split('@')[0] },
+                    name: c.name || c.formattedTitle || cid.split('@')[0],
+                    isGroup: !!c.isGroup,
+                    unreadCount: c.unreadCount || 0,
+                    groupMetadata: c.groupMetadata ? {
+                        desc: c.groupMetadata.desc,
+                        participants: []
+                    } : null
+                };
+            }, chatId);
+            if (data) {
+                const ChatFactory = pkg.ChatFactory || (await import('whatsapp-web.js/src/factories/ChatFactory.js')).default;
+                return ChatFactory.create(this.client, data);
+            }
+        } catch (e) {
+            this.emit('info', `[GET_CHAT] Direct chat instance lookup fallback: ${e.message}`);
+        }
+        return await this.client.getChatById(chatId);
+    }
+
     async findChatByNameFromMemory(c, groupName) {
         const memory    = await this.loadSummaryMemory();
         const names     = memory.chatNames    || {};
@@ -971,7 +999,30 @@ Get-CimInstance Win32_Process | Where-Object {
         }
 
         if (!usedCache) {
-            const allMessages = await withTimeout(chat.fetchMessages({ limit: effectiveFetchLimit }), 45_000, 'fetchMessages');
+            let allMessages = [];
+            try {
+                allMessages = await withTimeout(chat.fetchMessages({ limit: effectiveFetchLimit }), 45_000, 'fetchMessages');
+            } catch (err) {
+                this.emit('info', `[FETCH] chat.fetchMessages fallback: ${err.message}`);
+                try {
+                    const rawMsgs = await this.client.pupPage.evaluate((cid, limit) => {
+                        try {
+                            const collections = window.require ? window.require('WAWebCollections') : null;
+                            const chatObj = (collections && collections.Chat && collections.Chat.get(cid)) || (window.Store && window.Store.Chat && window.Store.Chat.get(cid));
+                            if (!chatObj || !chatObj.msgs) return [];
+                            let arr = chatObj.msgs.getModelsArray() || [];
+                            if (arr.length > limit) arr = arr.slice(-limit);
+                            return arr.map(m => window.WWebJS ? window.WWebJS.getMessageModel(m) : { id: m.id._serialized, body: m.body, type: m.type, timestamp: m.t, fromMe: m.id.fromMe });
+                        } catch (e) {
+                            return [];
+                        }
+                    }, chatId, effectiveFetchLimit);
+                    allMessages = rawMsgs.map(m => new Message(this.client, m));
+                } catch (fallbackErr) {
+                    this.emit('error', `[FETCH] direct Store extraction failed: ${fallbackErr.message}`);
+                    throw new Error(`Failed to fetch chat messages: ${err.message}`);
+                }
+            }
             rawFetchedCount = allMessages.length;
             let filtered = allMessages.filter(m => !isSummarizeCommand(m.body || ''));
             if (sinceMs) {
@@ -1064,9 +1115,10 @@ Get-CimInstance Win32_Process | Where-Object {
             ? 'Provide a DETAILED, thorough summary covering all decisions, conclusions, questions asked, and important context from the [SUMMARY TARGET] messages. Do not omit anything significant.\n\n'
             : '';
 
+        const textModel = this.getSetting('GROQ_MODEL', process.env.GROQ_MODEL || 'openai/gpt-oss-120b') || process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
         const ai_response = await withTimeout(
             this.getGroqClient().chat.completions.create({
-                model: this.getSetting('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+                model: textModel,
                 messages: [
                     { role: 'system', content: detailPrefix + systemPrompt.trim() },
                     { role: 'user',   content: message_collection.join('\n') },
@@ -1083,7 +1135,7 @@ Get-CimInstance Win32_Process | Where-Object {
             this.emit('info', '[STATUS] Strict summary returned no-important-updates; retrying with relaxed recap prompt...');
             const relaxed = await withTimeout(
                 this.getGroqClient().chat.completions.create({
-                    model: this.getSetting('GROQ_MODEL'),
+                    model: textModel,
                     messages: [
                         {
                             role: 'system',

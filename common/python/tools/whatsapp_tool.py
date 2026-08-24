@@ -1,9 +1,61 @@
 import sys
 import json
 import os
+import re
 import requests
 
 SESSION_ID = "blinky-default-session"
+
+def resolve_whatsapp_request(query: str) -> tuple[str, str | None] | None:
+    """Deterministically parse and resolve WhatsApp action and chat name from a user query."""
+    if not query:
+        return None
+    q = query.strip().rstrip("?.!,;:").strip()
+    q_lower = q.lower()
+
+    if "whatsapp" not in q_lower and "wa " not in q_lower:
+        return None
+
+    # Status checks
+    if re.search(r"\b(whatsapp\s+status|check\s+whatsapp\s+status|is\s+whatsapp\s+connected|whatsapp\s+connection\s+status|whatsapp\s+state)\b", q_lower):
+        return ("status", None)
+
+    # Chat list checks
+    if re.search(r"\b(list\s+(all\s+)?(my\s+)?whatsapp\s+chats|show\s+(all\s+)?(my\s+)?whatsapp\s+chats|get\s+(my\s+)?whatsapp\s+chats|whatsapp\s+chats|my\s+whatsapp\s+chats|list\s+whatsapp\s+groups)\b", q_lower):
+        return ("chats", None)
+
+    # Summarize patterns
+    # Pattern 1: summarize [chat] in/on whatsapp
+    m = re.search(r"^(?:please\s+)?(?:summarize|summarise|give\s+a\s+summary\s+of|give\s+me\s+a\s+summary\s+of|recap)\s+(?:the\s+|my\s+)?(.+?)\s*(?:chat|group\s+chat|group|messages)?\s+(?:in|on|via|using|from|with)\s+whatsapp\s*(?:chat|group)?$", q, re.IGNORECASE)
+    if m:
+        chat = m.group(1).strip()
+        chat = re.sub(r"^(?:the|my)\s+", "", chat, flags=re.IGNORECASE).strip()
+        chat = re.sub(r"\s+(?:chat|group\s+chat|group|messages)$", "", chat, flags=re.IGNORECASE).strip()
+        return ("summarize", chat if chat else None)
+
+    # Pattern 2: whatsapp summarize [chat]
+    m = re.search(r"^(?:on|in|via)?\s*whatsapp\s+(?:please\s+)?(?:summarize|summarise|recap)\s+(?:the\s+|my\s+)?(?:chat|group\s+chat|group)?\s*(.+)$", q, re.IGNORECASE)
+    if m:
+        chat = m.group(1).strip()
+        chat = re.sub(r"^(?:the|my)\s+", "", chat, flags=re.IGNORECASE).strip()
+        chat = re.sub(r"\s+(?:chat|group\s+chat|group|messages)$", "", chat, flags=re.IGNORECASE).strip()
+        return ("summarize", chat if chat else None)
+
+    # Pattern 3: summarize whatsapp [chat]
+    m = re.search(r"^(?:please\s+)?(?:summarize|summarise|recap)\s+whatsapp\s+(?:chat|group\s+chat|group|messages)?\s*(?:of|for|with)?\s*(.+)$", q, re.IGNORECASE)
+    if m:
+        chat = m.group(1).strip()
+        chat = re.sub(r"^(?:the|my)\s+", "", chat, flags=re.IGNORECASE).strip()
+        chat = re.sub(r"\s+(?:chat|group\s+chat|group|messages)$", "", chat, flags=re.IGNORECASE).strip()
+        return ("summarize", chat if chat else None)
+
+    # Pattern 4: general summarize query mentioning whatsapp
+    if re.search(r"\b(summarize|summarise|recap)\b", q_lower) and "whatsapp" in q_lower:
+        cleaned = re.sub(r"\b(please|summarize|summarise|give\s+a\s+summary\s+of|give\s+me\s+a\s+summary\s+of|recap|in|on|via|using|from|for|with|whatsapp|group\s+chat|group|chat|messages|the|my)\b", " ", q, flags=re.IGNORECASE)
+        chat = " ".join(cleaned.split()).strip()
+        return ("summarize", chat if chat else None)
+
+    return None
 
 def get_backend_url():
     """Discover the port of the WhatsApp Node backend."""
@@ -203,6 +255,12 @@ def run_summarize(base_url, chat_name=None, chat_id=None, limit=50):
         return {"error": f"HTTP request failed: {e}"}
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
     if len(sys.argv) < 2:
         print(json.dumps({"error": "Missing JSON argument string."}))
         sys.exit(1)

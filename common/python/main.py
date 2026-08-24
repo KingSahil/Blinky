@@ -594,6 +594,23 @@ def classify_request(
     agent_mode: bool = False,
 ) -> dict | None:
     try:
+        from tools.whatsapp_tool import resolve_whatsapp_request
+        wa_match = resolve_whatsapp_request(question)
+        if wa_match:
+            action, chat_name = wa_match
+            return {
+                "intent": "WHATSAPP",
+                "needs_screen": False,
+                "is_continuation": False,
+                "extracted_params": {
+                    "wa_action": action,
+                    "wa_chat_name": chat_name,
+                }
+            }
+    except Exception as exc:
+        LOGGER.debug("Fast-path WhatsApp resolution failed: %s", exc)
+
+    try:
         payload = ask_text_model(build_preflight_prompt(question, previous_question, conversation_history))
     except Exception as exc:
         LOGGER.warning("Preflight classification failed; falling back to screen mode: %s", exc)

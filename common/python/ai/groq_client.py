@@ -17,7 +17,7 @@ from utils.logging import get_logger
 LOGGER = get_logger("blinky.groq")
 
 DEFAULT_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 DEFAULT_GROQ_VISION_MODEL = "qwen/qwen3.6-27b"
 DEFAULT_IMAGE_MAX_DIM = 768
 DEFAULT_IMAGE_QUALITY = 80

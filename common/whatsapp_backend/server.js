@@ -90,23 +90,27 @@ app.get('/api/chats', requireSession, async (req, res) => {
 
 app.get('/api/debug-chats', requireSession, async (req, res) => {
   try {
-        const results = await req.session.client.pupPage.evaluate(() => {
-            const chat = window.require('WAWebCollections').Chat.get('120363426941949148@g.us');
-            if (!chat) return { error: "Chat not found" };
-            return {
-                id: chat.id._serialized,
-                groupType: chat.groupMetadata?.groupType,
-                metadata: chat.groupMetadata ? Object.keys(chat.groupMetadata).reduce((acc, k) => {
-                    const val = chat.groupMetadata[k];
-                    if (val && typeof val === 'object' && val._serialized) acc[k] = val._serialized;
-                    else if (typeof val !== 'object' || val === null) acc[k] = val;
-                    return acc;
-                }, {}) : null
-            };
+        const results = await req.session.client.pupPage.evaluate(async () => {
+            const id = '120363426466297788@g.us';
+            try {
+                const collections = window.require ? window.require('WAWebCollections') : null;
+                const chat = collections?.Chat?.get(id) || window.Store?.Chat?.get(id);
+                if (!chat) return { error: "Chat not in collections" };
+                const msgs = chat.msgs?.getModelsArray() || [];
+                return {
+                    id: chat.id?._serialized,
+                    name: chat.name,
+                    msgCount: msgs.length,
+                    firstMsg: msgs[0]?.body,
+                    lastMsg: msgs[msgs.length - 1]?.body,
+                };
+            } catch (e) {
+                return { error: e.stack || e.message || String(e) };
+            }
         });
         res.json(results);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.stack || err.message });
   }
 });
 
@@ -129,8 +133,7 @@ app.post('/api/summarise', requireSession, async (req, res) => {
     try {
         const { chatId, limit = 50 } = req.body;
         if (!chatId) return res.status(400).json({ error: 'chatId required' });
-        const chats = await req.session.client.getChats();
-        const chat = chats.find(c => c.id._serialized === chatId);
+        const chat = await req.session.getChatInstance(chatId);
         if (!chat) return res.status(404).json({ error: 'Chat not found' });
         const summary = await req.session.summariseChat(chat, parseInt(limit));
         await req.session.sendNtfy(summary);
