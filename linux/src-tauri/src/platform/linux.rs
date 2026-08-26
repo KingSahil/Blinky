@@ -132,3 +132,8 @@ pub fn set_system_cursor_visibility(_visible: bool) {
     // No-op on Linux
 }
 
+pub fn register_exit_cursor_restorer() {
+    // No-op on Linux
+}
+
+

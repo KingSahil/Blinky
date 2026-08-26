@@ -16,10 +16,11 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use platform::{
-    click_screen_point_impl, configure_overlay_passthrough, open_url_impl, scroll_at_point_impl,
-    set_system_cursor_visibility, set_window_capture_exclusion, start_global_click_listener,
-    type_text_impl,
+    click_screen_point_impl, configure_overlay_passthrough, open_url_impl, register_exit_cursor_restorer,
+    scroll_at_point_impl, set_system_cursor_visibility, set_window_capture_exclusion,
+    start_global_click_listener, type_text_impl,
 };
+
 
 
 #[derive(Debug, Deserialize)]
@@ -933,8 +934,10 @@ pub fn run() {
         })
 
         .setup(|app| {
+            register_exit_cursor_restorer();
             setup_tray(app)?;
             start_ui_observer(&app.handle());
+
             start_whatsapp_backend(&app.handle());
             start_wake_word_detector(&app.handle());
 

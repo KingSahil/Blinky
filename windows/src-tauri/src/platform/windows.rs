@@ -435,12 +435,30 @@ pub fn set_system_cursor_visibility(visible: bool) {
             if !blank_ibeam.is_null() {
                 SetSystemCursor(blank_ibeam, OCR_IBEAM);
             }
-
         }
     }
 }
 
+pub fn register_exit_cursor_restorer() {
 
+    unsafe {
+        use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_SETCURSORS};
+
+        unsafe extern "system" fn ctrl_handler(_ctrl_type: u32) -> windows_sys::Win32::Foundation::BOOL {
+            SystemParametersInfoW(SPI_SETCURSORS, 0, std::ptr::null_mut(), 0);
+            0
+        }
+
+        SetConsoleCtrlHandler(Some(ctrl_handler), 1);
+    }
+
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        set_system_cursor_visibility(true);
+        original_hook(info);
+    }));
+}
 
 pub fn configure_overlay_passthrough(window: &WebviewWindow) {
     use windows_sys::Win32::Foundation::HWND;
@@ -448,6 +466,7 @@ pub fn configure_overlay_passthrough(window: &WebviewWindow) {
         GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
         WS_EX_TRANSPARENT,
     };
+
 
     let _ = window.set_fullscreen(false);
 
