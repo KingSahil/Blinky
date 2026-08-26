@@ -71,6 +71,7 @@ export function CommandBar() {
   const [isRunning, setIsRunning] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [agentModeEnabled, setAgentModeEnabled] = useState(false);
+  const cursorRef = useRef<HTMLDivElement>(null);
   const defaultStatus = 'Ask anything on your screen';
 
   const [isResizing, setIsResizing] = useState(false);
@@ -78,6 +79,7 @@ export function CommandBar() {
     startX: number;
     initialWidth: number;
     initialHeight: number;
+
     initialX: number;
     initialY: number;
     scaleFactor: number;
@@ -1278,13 +1280,42 @@ export function CommandBar() {
     };
   }, []);
 
-  // Emit cursor visibility and hide/show native Windows cursor when Agent Mode is toggled
+  // Synchronize cursor visibility, hide native cursor in Windows, and track pointer inside CommandBar
   useEffect(() => {
     void emit('blinky://agent-cursor-visibility', { visible: agentModeEnabled });
     void setAgentCursorVisibility(agentModeEnabled);
+    if (typeof document !== 'undefined') {
+      document.body.classList.toggle('agent-mode-active', agentModeEnabled);
+    }
     if (agentModeEnabled) {
       void showOverlay();
     }
+  }, [agentModeEnabled]);
+
+  useEffect(() => {
+    if (!agentModeEnabled) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      if (cursorRef.current) {
+        cursorRef.current.style.transform = `translate3d(${e.clientX}px, ${e.clientY}px, 0)`;
+      }
+    };
+
+    const handlePointerLeave = () => {
+      if (cursorRef.current) {
+        cursorRef.current.style.transform = 'translate3d(-100px, -100px, 0)';
+      }
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerleave', handlePointerLeave);
+    document.addEventListener('mouseleave', handlePointerLeave);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerleave', handlePointerLeave);
+      document.removeEventListener('mouseleave', handlePointerLeave);
+    };
   }, [agentModeEnabled]);
 
   useEffect(() => {
@@ -1297,6 +1328,7 @@ export function CommandBar() {
       void setAgentCursorVisibility(false);
     };
   }, []);
+
 
 
 
@@ -2173,6 +2205,24 @@ export function CommandBar() {
           </div>
         </div>
       )}
+
+      {agentModeEnabled && (
+        <div 
+          ref={cursorRef}
+          className="agent-cursor-wrapper following-user"
+          style={{ pointerEvents: 'none', zIndex: 999999 }}
+        >
+          <svg className="agent-cursor" viewBox="0 0 24 24" width="28" height="28" fill="var(--accent-strong)" xmlns="http://www.w3.org/2000/svg">
+            <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z"/>
+          </svg>
+          <div className="agent-visualizer">
+            <div className="bar" />
+            <div className="bar" />
+            <div className="bar" />
+          </div>
+        </div>
+      )}
     </main>
   );
 }
+

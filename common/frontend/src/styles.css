@@ -2373,8 +2373,16 @@ h3 {
   will-change: transform, filter;
 }
 
+/* Hide hardware cursor on interactive elements when agent mode is active */
+body.agent-mode-active,
+body.agent-mode-active * {
+  cursor: none !important;
+}
+
+
 /* Agent Custom Companion Cursor (Clicky-style) and Visualizer */
 .agent-cursor-wrapper {
+
   position: fixed;
   top: 0;
   left: 0;
