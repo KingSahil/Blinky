@@ -52,14 +52,15 @@ export async function runAutopilotLoop({
     const point = getPhysicalClickablePoint(nextStep, current);
 
 
-    // Emit cursor move event so Overlay can animate the AI cursor
+    // Emit cursor move event so Overlay can animate the AI cursor to the exact target
     try {
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
-        await emit('blinky://agent-cursor-move', { x: logicalPoint.x, y: logicalPoint.y, instruction: nextStep.instruction });
-        // Allow virtual cursor to animate to the target point
-        await new Promise((r) => setTimeout(r, 260));
+        await emit('blinky://agent-cursor-move', { x: point.x, y: point.y, instruction: nextStep.instruction });
+        // Allow virtual cursor to animate smoothly to the target point
+        await new Promise((r) => setTimeout(r, 380));
       }
     } catch {}
+
 
     await act(point, nextStep);
 

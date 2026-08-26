@@ -1,6 +1,7 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
 import { getHighlightSteps } from './lib/guidance';
 import type { TutorResult } from './lib/types';
 import { logDebugMessage } from './lib/tauri';
@@ -30,13 +31,40 @@ export function Overlay() {
   const [dismissedKeys, setDismissedKeys] = useState<Set<string>>(() => new Set());
   const [offsets, setOffsets] = useState({ x: 0, y: 0 });
 
-  const [agentCursorTarget, setAgentCursorTarget] = useState<{ x: number, y: number } | null>(null);
+  const [cursorPos, setCursorPos] = useState<{ x: number, y: number } | null>(null);
   const [agentCursorVisible, setAgentCursorVisible] = useState(false);
+  const [isAgentActing, setIsAgentActing] = useState(false);
+  const [isClicking, setIsClicking] = useState(false);
+  const actingTimeoutRef = useRef<any>(null);
 
   const glowContainerRef = useRef<HTMLDivElement>(null);
 
+  const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
+  const pixelRatio = typeof window !== 'undefined' && isWindows ? window.devicePixelRatio || 1 : 1;
+
+  // Window offsets initialization and tracking
+  const updateOffsets = useCallback(async () => {
+    try {
+      const appWindow = getCurrentWindow();
+      const pos = await appWindow.outerPosition();
+      const factor = await appWindow.scaleFactor();
+      setOffsets({
+        x: pos.x / factor,
+        y: pos.y / factor,
+      });
+    } catch (err) {
+      console.error('Failed to get window offsets:', err);
+    }
+  }, []);
+
   useEffect(() => {
-    const unlisten = listen<{ volume: number }>('blinky://vad-update', (event) => {
+    void updateOffsets();
+    window.addEventListener('resize', updateOffsets);
+    return () => window.removeEventListener('resize', updateOffsets);
+  }, [updateOffsets]);
+
+  useEffect(() => {
+    const unlistenVad = listen<{ volume: number }>('blinky://vad-update', (event) => {
       if (glowContainerRef.current) {
         const volume = event.payload.volume;
         glowContainerRef.current.style.setProperty('--vad-opacity', volume > 0 ? (0.2 + volume * 0.8).toString() : '0');
@@ -48,20 +76,60 @@ export function Overlay() {
     const unlistenVis = listen<{ visible: boolean }>('blinky://agent-cursor-visibility', (event) => {
       setAgentCursorVisible(event.payload.visible);
       if (!event.payload.visible) {
-        setAgentCursorTarget(null);
+        setCursorPos(null);
+        setIsAgentActing(false);
       }
     });
 
-    const unlistenMove = listen<{ x: number, y: number }>('blinky://agent-cursor-move', (event) => {
-      setAgentCursorTarget({ x: event.payload.x, y: event.payload.y });
+    const unlistenNativeMove = listen<{ x: number, y: number }>('blinky://native-cursor-move', (event) => {
+      // Follow the user's cursor when the agent is idle
+      if (!isAgentActing) {
+        const cssX = (event.payload.x / pixelRatio) - offsets.x;
+        const cssY = (event.payload.y / pixelRatio) - offsets.y;
+        setCursorPos({ x: cssX, y: cssY });
+      }
     });
 
-    return () => {
-      unlisten.then((dispose) => dispose());
-      unlistenVis.then((dispose) => dispose());
-      unlistenMove.then((dispose) => dispose());
+    const unlistenAgentMove = listen<{ x: number, y: number, instruction?: string }>('blinky://agent-cursor-move', (event) => {
+      setIsAgentActing(true);
+      if (actingTimeoutRef.current) {
+        clearTimeout(actingTimeoutRef.current);
+      }
+
+      const cssX = (event.payload.x / pixelRatio) - offsets.x;
+      const cssY = (event.payload.y / pixelRatio) - offsets.y;
+      setCursorPos({ x: cssX, y: cssY });
+
+      // Trigger click pulse ring after gliding to target
+      setTimeout(() => {
+        setIsClicking(true);
+        setTimeout(() => setIsClicking(false), 300);
+      }, 360);
+
+      // Grace period staying at the target before transitioning back to user mouse tracking
+      actingTimeoutRef.current = setTimeout(() => {
+        setIsAgentActing(false);
+      }, 2500);
+    });
+
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!isAgentActing && agentCursorVisible) {
+        setCursorPos({ x: e.clientX, y: e.clientY });
+      }
     };
-  }, []);
+    window.addEventListener('pointermove', handlePointerMove);
+
+    return () => {
+      unlistenVad.then((dispose) => dispose());
+      unlistenVis.then((dispose) => dispose());
+      unlistenNativeMove.then((dispose) => dispose());
+      unlistenAgentMove.then((dispose) => dispose());
+      window.removeEventListener('pointermove', handlePointerMove);
+      if (actingTimeoutRef.current) {
+        clearTimeout(actingTimeoutRef.current);
+      }
+    };
+  }, [isAgentActing, agentCursorVisible, offsets, pixelRatio]);
 
   useEffect(() => {
     let timeoutId: any = null;
@@ -90,30 +158,12 @@ export function Overlay() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!result) return;
-    const updateOffsets = async () => {
-      try {
-        const appWindow = getCurrentWindow();
-        const pos = await appWindow.outerPosition();
-        const factor = await appWindow.scaleFactor();
-        setOffsets({
-          x: pos.x / factor,
-          y: pos.y / factor,
-        });
-      } catch (err) {
-        console.error('Failed to get window offsets:', err);
-      }
-    };
-    void updateOffsets();
-  }, [result]);
 
-  const isWindows = navigator.userAgent.includes('Windows');
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  const pixelRatio = isWindows ? window.devicePixelRatio || 1 : 1;
+  const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1920;
+  const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1080;
   const screenshotWidth = result?.screenshot?.width || viewportWidth * pixelRatio;
   const screenshotHeight = result?.screenshot?.height || viewportHeight * pixelRatio;
+
   const physicalScaleX = (viewportWidth * pixelRatio) / screenshotWidth;
   const physicalScaleY = (viewportHeight * pixelRatio) / screenshotHeight;
   const scaleX = physicalScaleX / pixelRatio;
@@ -289,15 +339,16 @@ export function Overlay() {
         <div className="fullscreen-edge-lighting-gradient" />
       </div>
 
-      {agentCursorVisible && agentCursorTarget && (
+      {agentCursorVisible && cursorPos && (
         <div 
-          className="agent-cursor-wrapper"
+          className={`agent-cursor-wrapper ${isAgentActing ? 'agent-acting' : 'following-user'}`}
           style={{
-            left: (agentCursorTarget.x * scaleX) - offsets.x,
-            top: (agentCursorTarget.y * scaleY) - offsets.y,
+            left: cursorPos.x,
+            top: cursorPos.y,
           }}
         >
-          <svg className="agent-cursor" viewBox="0 0 24 24" width="28" height="28" fill="var(--accent-strong)" xmlns="http://www.w3.org/2000/svg" style={{ filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.5))' }}>
+          {isClicking && <div className="agent-cursor-click-ring" />}
+          <svg className="agent-cursor" viewBox="0 0 24 24" width="28" height="28" fill="var(--accent-strong)" xmlns="http://www.w3.org/2000/svg">
             <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z"/>
           </svg>
           <div className="agent-visualizer">
@@ -307,6 +358,7 @@ export function Overlay() {
           </div>
         </div>
       )}
+
 
       {frames.map((frame) => {
         if (dismissedKeys.has(frame.key)) return null;

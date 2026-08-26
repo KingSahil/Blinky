@@ -342,6 +342,8 @@ pub fn start_global_click_listener(app: AppHandle) {
         let mut was_left_down = false;
         let mut was_right_down = false;
         let mut was_enter_down = false;
+        let mut last_cursor_x = i32::MIN;
+        let mut last_cursor_y = i32::MIN;
 
         loop {
             if let Some(click) = read_mouse_click(&mut was_left_down, &mut was_right_down) {
@@ -349,6 +351,25 @@ pub fn start_global_click_listener(app: AppHandle) {
                     if overlay.is_visible().unwrap_or(false) {
                         let click = click.with_overlay_metrics(&overlay);
                         let _ = overlay.emit("blinky://global-click", click);
+                    }
+                }
+            }
+
+            let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+            if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) } != 0 {
+                if pt.x != last_cursor_x || pt.y != last_cursor_y {
+                    last_cursor_x = pt.x;
+                    last_cursor_y = pt.y;
+                    if let Some(overlay) = app.get_webview_window("overlay") {
+                        if overlay.is_visible().unwrap_or(false) {
+                            let _ = overlay.emit(
+                                "blinky://native-cursor-move",
+                                serde_json::json!({
+                                    "x": pt.x,
+                                    "y": pt.y
+                                }),
+                            );
+                        }
                     }
                 }
             }
@@ -361,6 +382,7 @@ pub fn start_global_click_listener(app: AppHandle) {
         }
     });
 }
+
 
 pub fn configure_overlay_passthrough(window: &WebviewWindow) {
     use windows_sys::Win32::Foundation::HWND;

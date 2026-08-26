@@ -1277,10 +1277,14 @@ export function CommandBar() {
     };
   }, []);
 
-  // Emit cursor visibility when Agent Mode is toggled
+  // Emit cursor visibility and ensure overlay is shown when Agent Mode is toggled
   useEffect(() => {
     void emit('blinky://agent-cursor-visibility', { visible: agentModeEnabled });
+    if (agentModeEnabled) {
+      void showOverlay();
+    }
   }, [agentModeEnabled]);
+
 
   // Synchronize wake word detector state with the application state centrally
   useEffect(() => {
