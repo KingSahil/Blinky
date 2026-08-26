@@ -369,6 +369,25 @@ pub fn start_global_click_listener(app: AppHandle) {
                                     "y": pt.y
                                 }),
                             );
+                            // Keep overlay above native popup menus (e.g. right-click context menus #32768)
+                            if let Ok(hwnd) = overlay.hwnd() {
+                                unsafe {
+                                    use windows_sys::Win32::Foundation::HWND;
+                                    use windows_sys::Win32::UI::WindowsAndMessaging::{
+                                        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+                                        SWP_NOSIZE,
+                                    };
+                                    SetWindowPos(
+                                        hwnd.0 as HWND,
+                                        HWND_TOPMOST,
+                                        0,
+                                        0,
+                                        0,
+                                        0,
+                                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -382,6 +401,7 @@ pub fn start_global_click_listener(app: AppHandle) {
         }
     });
 }
+
 
 pub fn set_system_cursor_visibility(visible: bool) {
     unsafe {
@@ -463,10 +483,10 @@ pub fn register_exit_cursor_restorer() {
 pub fn configure_overlay_passthrough(window: &WebviewWindow) {
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, SetWindowLongW, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-        WS_EX_TRANSPARENT,
+        GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE,
+        SWP_NOMOVE, SWP_NOSIZE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     };
-
 
     let _ = window.set_fullscreen(false);
 
@@ -495,12 +515,27 @@ pub fn configure_overlay_passthrough(window: &WebviewWindow) {
             SetWindowLongW(
                 hwnd,
                 GWL_EXSTYLE,
-                style | WS_EX_TRANSPARENT as i32 | WS_EX_LAYERED as i32 | WS_EX_TOOLWINDOW as i32,
+                style
+                    | WS_EX_TRANSPARENT as i32
+                    | WS_EX_LAYERED as i32
+                    | WS_EX_TOOLWINDOW as i32
+                    | WS_EX_TOPMOST as i32
+                    | WS_EX_NOACTIVATE as i32,
+            );
+            SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
         }
         let _ = window.set_always_on_top(true);
     }
 }
+
 
 pub fn set_window_capture_exclusion(window: &WebviewWindow, exclude: bool) {
     use windows_sys::Win32::Foundation::HWND;
