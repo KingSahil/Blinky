@@ -186,7 +186,27 @@ const killWindowsProcessTree = (pid?: number) => {
   } catch {}
 };
 
-// Pre-flight cleanup to ensure port 5173 and 9001 are free
+const restoreWindowsSystemCursor = () => {
+  if (process.platform === "win32") {
+    try {
+      const { dlopen, FFIType } = require("bun:ffi");
+      const user32 = dlopen("user32.dll", {
+        SystemParametersInfoW: {
+          args: [FFIType.u32, FFIType.u32, FFIType.ptr, FFIType.u32],
+          returns: FFIType.bool,
+        },
+      });
+      user32.symbols.SystemParametersInfoW(0x0057 /* SPI_SETCURSORS */, 0, null, 0);
+    } catch {
+      try {
+        Bun.spawnSync(["powershell", "-NoProfile", "-Command", "rundll32.exe user32.dll,UpdatePerUserSystemParameters 1, True"]);
+      } catch {}
+    }
+  }
+};
+
+// Pre-flight cleanup to ensure port 5173 and 9001 are free and native cursor is active
+restoreWindowsSystemCursor();
 killWindowsProcessTree();
 
 console.log("Starting Tauri Development Server...");
@@ -197,6 +217,7 @@ const tauriDev = spawn(["bun", "tauri", "dev"], {
 });
 
 const cleanup = () => {
+  restoreWindowsSystemCursor();
   if (mobileProcess) {
     try {
       mobileProcess.kill();
@@ -207,7 +228,9 @@ const cleanup = () => {
   } catch {}
 
   killWindowsProcessTree(tauriDev.pid);
+  restoreWindowsSystemCursor();
 };
+
 
 const adbCmd = getAdbPath();
 if (process.stdin.isTTY) {
