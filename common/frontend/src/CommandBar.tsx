@@ -314,8 +314,10 @@ export function CommandBar() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  const isRecordingRef = useRef(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const lastQueryRef = useRef<string>('');
   const completedTargetsRef = useRef<string[]>([]);
@@ -1332,6 +1334,35 @@ export function CommandBar() {
 
 
 
+  const isVoiceActive = isSpeaking || isRecording || isTtsActive;
+
+  useEffect(() => {
+    isRecordingRef.current = isRecording;
+  }, [isRecording]);
+
+  useEffect(() => {
+    void emit('blinky://voice-active', { active: isVoiceActive });
+  }, [isVoiceActive]);
+
+  useEffect(() => {
+    const unlistenPtt = listen<boolean>('blinky://push-to-talk', (event) => {
+      if (event.payload) {
+        if (!isRecordingRef.current && !isStartingRecordingRef.current) {
+          stopSpeaking();
+          void startRecording();
+        }
+      } else {
+        if (isRecordingRef.current) {
+          stopRecording();
+        }
+      }
+    });
+
+    return () => {
+      unlistenPtt.then((dispose) => dispose());
+    };
+  }, []);
+
   // Synchronize wake word detector state with the application state centrally
   useEffect(() => {
     const shouldPause = isRunning || isRecording || isSpeaking || isTtsActive;
@@ -1341,6 +1372,7 @@ export function CommandBar() {
       void resumeWakeWord();
     }
   }, [isRunning, isRecording, isSpeaking, isTtsActive]);
+
 
   const updateProvider = async (newProvider: string) => {
     const cleanProvider = newProvider.toLowerCase().trim();
@@ -1907,12 +1939,27 @@ export function CommandBar() {
               </div>
             </div>
 
+            <div className="dropdown-section">
+              <h4>Shortcuts & Voice</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', marginTop: '4px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Toggle App</span>
+                  <code style={{ background: 'rgba(255, 255, 255, 0.08)', padding: '2px 6px', borderRadius: '4px', color: '#fff', fontSize: '11px' }}>Ctrl + Shift + {shortcut}</code>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Push-to-Talk (Hold to speak)</span>
+                  <code style={{ background: 'rgba(255, 139, 106, 0.15)', color: 'var(--accent-strong, #ff8b6a)', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>Shift + Space</code>
+                </div>
+              </div>
+            </div>
+
             <div className="dropdown-section dropdown-about">
               <span>Theme: <strong>Ember</strong></span>
               <span>About: <strong>v1.0.0</strong></span>
             </div>
           </div>
         )}
+
 
         {/* Workflow-save prompt (agent loop completed a task) */}
         {recipePrompt && (
@@ -2215,13 +2262,16 @@ export function CommandBar() {
           <svg className="agent-cursor" viewBox="0 0 24 24" width="28" height="28" fill="var(--accent-strong)" xmlns="http://www.w3.org/2000/svg">
             <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z"/>
           </svg>
-          <div className="agent-visualizer">
-            <div className="bar" />
-            <div className="bar" />
-            <div className="bar" />
-          </div>
+          {isVoiceActive && (
+            <div className="agent-visualizer">
+              <div className="bar" />
+              <div className="bar" />
+              <div className="bar" />
+            </div>
+          )}
         </div>
       )}
+
     </main>
   );
 }

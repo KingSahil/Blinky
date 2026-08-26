@@ -2440,29 +2440,54 @@ body.agent-mode-active * {
 
 .agent-visualizer {
   display: flex;
-  gap: 3px;
+  gap: 4px;
   margin-left: 8px;
   align-items: center;
   height: 20px;
+  animation: visualizerFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes visualizerFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.6) translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateX(0);
+  }
 }
 
 .agent-visualizer .bar {
   width: 4px;
-  background: var(--accent-strong);
+  background: var(--accent-strong, #ff8b6a);
   border-radius: 2px;
-  /* Use VAD opacity to scale height. Base height is 4px, up to 20px */
-  height: calc(4px + (16px * var(--vad-opacity, 0)));
-  transition: height 0.05s ease-out;
-  box-shadow: 0 0 10px var(--accent-glow);
+  height: calc(6px + (16px * var(--vad-opacity, 0.4)));
+  animation: visualizerPulse 0.5s ease-in-out infinite alternate;
+  box-shadow: 0 0 10px var(--accent-glow, rgba(255, 139, 106, 0.5));
+}
+
+.agent-visualizer .bar:nth-child(1) {
+  animation-delay: 0s;
 }
 
 .agent-visualizer .bar:nth-child(2) {
-  height: calc(6px + (14px * var(--vad-opacity, 0)));
-  transition-delay: 0.02s;
+  animation-delay: 0.15s;
+  height: calc(8px + (16px * var(--vad-opacity, 0.5)));
 }
 
 .agent-visualizer .bar:nth-child(3) {
-  height: calc(4px + (12px * var(--vad-opacity, 0)));
-  transition-delay: 0.04s;
+  animation-delay: 0.3s;
+  height: calc(6px + (16px * var(--vad-opacity, 0.4)));
 }
+
+@keyframes visualizerPulse {
+  0% {
+    transform: scaleY(0.7);
+  }
+  100% {
+    transform: scaleY(1.35);
+  }
+}
+
 

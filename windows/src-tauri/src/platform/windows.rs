@@ -342,6 +342,7 @@ pub fn start_global_click_listener(app: AppHandle) {
         let mut was_left_down = false;
         let mut was_right_down = false;
         let mut was_enter_down = false;
+        let mut was_ptt_down = false;
         let mut last_cursor_x = i32::MIN;
         let mut last_cursor_y = i32::MIN;
 
@@ -353,6 +354,14 @@ pub fn start_global_click_listener(app: AppHandle) {
                         let _ = overlay.emit("blinky://global-click", click);
                     }
                 }
+            }
+
+            let is_shift_down = unsafe { (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x10 /* VK_SHIFT */) as u16 & 0x8000) != 0 };
+            let is_space_down = unsafe { (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x20 /* VK_SPACE */) as u16 & 0x8000) != 0 };
+            let ptt_down = is_shift_down && is_space_down;
+            if ptt_down != was_ptt_down {
+                was_ptt_down = ptt_down;
+                let _ = app.emit("blinky://push-to-talk", ptt_down);
             }
 
             let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
@@ -401,6 +410,7 @@ pub fn start_global_click_listener(app: AppHandle) {
         }
     });
 }
+
 
 
 pub fn set_system_cursor_visibility(visible: bool) {

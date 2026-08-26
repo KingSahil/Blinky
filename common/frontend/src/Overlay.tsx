@@ -33,6 +33,7 @@ export function Overlay() {
   const offsetsRef = useRef({ x: 0, y: 0 });
 
   const [agentCursorVisible, setAgentCursorVisible] = useState(false);
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [isClicking, setIsClicking] = useState(false);
   const cursorRef = useRef<HTMLDivElement>(null);
   const isAgentActingRef = useRef(false);
@@ -73,7 +74,14 @@ export function Overlay() {
         glowContainerRef.current.style.setProperty('--vad-opacity', volume > 0 ? (0.2 + volume * 0.8).toString() : '0');
         glowContainerRef.current.style.setProperty('--glow-scale', (1 + volume * 0.2).toString());
         glowContainerRef.current.style.setProperty('--glow-speed', `${4 - volume * 2.5}s`);
+        if (volume > 0.05) {
+          setIsVoiceActive(true);
+        }
       }
+    });
+
+    const unlistenVoice = listen<{ active: boolean }>('blinky://voice-active', (event) => {
+      setIsVoiceActive(event.payload.active);
     });
 
     const unlistenVis = listen<{ visible: boolean }>('blinky://agent-cursor-visibility', (event) => {
@@ -85,6 +93,7 @@ export function Overlay() {
         }
       }
     });
+
 
     const unlistenNativeMove = listen<{ x: number, y: number }>('blinky://native-cursor-move', (event) => {
       // Direct GPU transform update for zero lag (exact native cursor speed)
@@ -362,11 +371,13 @@ export function Overlay() {
           <svg className="agent-cursor" viewBox="0 0 24 24" width="28" height="28" fill="var(--accent-strong)" xmlns="http://www.w3.org/2000/svg">
             <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z"/>
           </svg>
-          <div className="agent-visualizer">
-            <div className="bar" />
-            <div className="bar" />
-            <div className="bar" />
-          </div>
+          {isVoiceActive && (
+            <div className="agent-visualizer">
+              <div className="bar" />
+              <div className="bar" />
+              <div className="bar" />
+            </div>
+          )}
         </div>
       )}
 
