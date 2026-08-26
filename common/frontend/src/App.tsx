@@ -78,7 +78,27 @@ export function App() {
   const [customModel, setCustomModel] = useState('');
   const [customApiKey, setCustomApiKey] = useState('');
 
+  useEffect(() => {
+    async function loadInitialSettings() {
+      try {
+        const s = await getSettings();
+        if (s.provider) setProvider(s.provider);
+        if (s.shortcut) setShortcut(s.shortcut);
+        if (s.sarvam_api_key) setSarvamApiKey(s.sarvam_api_key);
+        if (s.groq_api_key) setGroqApiKey(s.groq_api_key);
+        if (s.deepseek_api_key) setDeepseekApiKey(s.deepseek_api_key);
+        if (s.custom_url) setCustomUrl(s.custom_url);
+        if (s.custom_model) setCustomModel(s.custom_model);
+        if (s.custom_api_key) setCustomApiKey(s.custom_api_key);
+      } catch (err) {
+        console.error('Failed to load initial settings in App:', err);
+      }
+    }
+    void loadInitialSettings();
+  }, []);
+
   // WhatsApp connection states
+
   const [waBackendUrl, setWaBackendUrl] = useState('http://localhost:3000');
   const [waStatus, setWaStatus] = useState<'loading' | 'disconnected' | 'qr' | 'connected' | 'error'>('loading');
   const [waQr, setWaQr] = useState('');

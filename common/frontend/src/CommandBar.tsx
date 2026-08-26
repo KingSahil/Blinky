@@ -143,8 +143,36 @@ export function CommandBar() {
   const [customUrl, setCustomUrl] = useState('');
   const [customModel, setCustomModel] = useState('');
   const [customApiKey, setCustomApiKey] = useState('');
+  const sarvamApiKeyRef = useRef('');
+
+  useEffect(() => {
+    sarvamApiKeyRef.current = sarvamApiKey;
+  }, [sarvamApiKey]);
+
+  useEffect(() => {
+    async function loadInitialSettings() {
+      try {
+        const s = await getSettings();
+        if (s.provider) setProvider(s.provider);
+        if (s.shortcut) setShortcut(s.shortcut);
+        if (s.sarvam_api_key) {
+          setSarvamApiKey(s.sarvam_api_key);
+          sarvamApiKeyRef.current = s.sarvam_api_key;
+        }
+        if (s.groq_api_key) setGroqApiKey(s.groq_api_key);
+        if (s.deepseek_api_key) setDeepseekApiKey(s.deepseek_api_key);
+        if (s.custom_url) setCustomUrl(s.custom_url);
+        if (s.custom_model) setCustomModel(s.custom_model);
+        if (s.custom_api_key) setCustomApiKey(s.custom_api_key);
+      } catch (err) {
+        console.error('Failed to load initial settings in CommandBar:', err);
+      }
+    }
+    void loadInitialSettings();
+  }, []);
 
   // Workflow-save prompt (emitted by the agent loop after a successful task)
+
   const [recipePrompt, setRecipePrompt] = useState<{ recipe_id: string; preview: string[]; intent: string } | null>(null);
   const [recipeBusy, setRecipeBusy] = useState(false);
 
@@ -749,7 +777,19 @@ export function CommandBar() {
   };
 
   const speakText = async (summaryText: string, stepsList: any[], options: { includeSteps?: boolean } = {}) => {
-    if (!sarvamApiKey) {
+    let key = sarvamApiKey || sarvamApiKeyRef.current;
+    if (!key) {
+      try {
+        const s = await getSettings();
+        if (s.sarvam_api_key) {
+          setSarvamApiKey(s.sarvam_api_key);
+          sarvamApiKeyRef.current = s.sarvam_api_key;
+          key = s.sarvam_api_key;
+        }
+      } catch {}
+    }
+
+    if (!key) {
       setStatus('Please set your Sarvam AI API Key in settings first.');
       return;
     }
@@ -813,7 +853,8 @@ export function CommandBar() {
   }, [isSpeaking, isRecording]);
 
   const handleAudioTranscription = async (blob: Blob) => {
-    if (!sarvamApiKey) {
+    const key = sarvamApiKey || sarvamApiKeyRef.current;
+    if (!key) {
       setStatus('Please set your Sarvam AI API Key in settings first.');
       return;
     }
@@ -828,7 +869,7 @@ export function CommandBar() {
       const res = await fetch('https://api.sarvam.ai/speech-to-text', {
         method: 'POST',
         headers: {
-          'api-subscription-key': sarvamApiKey,
+          'api-subscription-key': key,
         },
         body: formData,
       });
@@ -860,11 +901,24 @@ export function CommandBar() {
     if (isStartingRecordingRef.current) return;
     isStartingRecordingRef.current = true;
 
-    if (!sarvamApiKey) {
+    let key = sarvamApiKey || sarvamApiKeyRef.current;
+    if (!key) {
+      try {
+        const s = await getSettings();
+        if (s.sarvam_api_key) {
+          setSarvamApiKey(s.sarvam_api_key);
+          sarvamApiKeyRef.current = s.sarvam_api_key;
+          key = s.sarvam_api_key;
+        }
+      } catch {}
+    }
+
+    if (!key) {
       setStatus('Please set your Sarvam AI API Key in settings first.');
       isStartingRecordingRef.current = false;
       return;
     }
+
     await pauseWakeWord();
     await new Promise(resolve => setTimeout(resolve, 300));
     void showOverlay();
