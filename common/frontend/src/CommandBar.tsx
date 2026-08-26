@@ -13,7 +13,8 @@ import {
   shouldCompleteStepOnHighlightClick,
   shouldShowSummaryBubble,
 } from './lib/guidance';
-import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave } from './lib/tauri';
+import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility } from './lib/tauri';
+
 import { linkCitationMarkers } from './lib/citations';
 import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvamErrorMessage } from './lib/tts';
 import { SarvamSpeechToTextStream, SarvamTextToSpeechStream } from './lib/sarvamStream';
@@ -1277,13 +1278,26 @@ export function CommandBar() {
     };
   }, []);
 
-  // Emit cursor visibility and ensure overlay is shown when Agent Mode is toggled
+  // Emit cursor visibility and hide/show native Windows cursor when Agent Mode is toggled
   useEffect(() => {
     void emit('blinky://agent-cursor-visibility', { visible: agentModeEnabled });
+    void setAgentCursorVisibility(agentModeEnabled);
     if (agentModeEnabled) {
       void showOverlay();
     }
   }, [agentModeEnabled]);
+
+  useEffect(() => {
+    const handleUnload = () => {
+      void setAgentCursorVisibility(false);
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      void setAgentCursorVisibility(false);
+    };
+  }, []);
+
 
 
   // Synchronize wake word detector state with the application state centrally

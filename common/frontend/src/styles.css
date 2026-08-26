@@ -2375,22 +2375,26 @@ h3 {
 
 /* Agent Custom Companion Cursor (Clicky-style) and Visualizer */
 .agent-cursor-wrapper {
-  position: absolute;
+  position: fixed;
+  top: 0;
+  left: 0;
   pointer-events: none;
   z-index: 10000;
   display: flex;
   align-items: center;
   gap: 6px;
-  will-change: left, top;
+  will-change: transform;
+  transform: translate3d(-100px, -100px, 0);
 }
 
 .agent-cursor-wrapper.following-user {
-  transition: left 0.08s ease-out, top 0.08s ease-out;
+  transition: none !important;
 }
 
 .agent-cursor-wrapper.agent-acting {
-  transition: left 0.38s cubic-bezier(0.2, 0.85, 0.25, 1), top 0.38s cubic-bezier(0.2, 0.85, 0.25, 1);
+  transition: transform 0.35s cubic-bezier(0.2, 0.85, 0.25, 1);
 }
+
 
 .agent-cursor-click-ring {
   position: absolute;

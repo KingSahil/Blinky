@@ -30,11 +30,12 @@ export function Overlay() {
   const [result, setResult] = useState<TutorResult | null>(null);
   const [dismissedKeys, setDismissedKeys] = useState<Set<string>>(() => new Set());
   const [offsets, setOffsets] = useState({ x: 0, y: 0 });
+  const offsetsRef = useRef({ x: 0, y: 0 });
 
-  const [cursorPos, setCursorPos] = useState<{ x: number, y: number } | null>(null);
   const [agentCursorVisible, setAgentCursorVisible] = useState(false);
-  const [isAgentActing, setIsAgentActing] = useState(false);
   const [isClicking, setIsClicking] = useState(false);
+  const cursorRef = useRef<HTMLDivElement>(null);
+  const isAgentActingRef = useRef(false);
   const actingTimeoutRef = useRef<any>(null);
 
   const glowContainerRef = useRef<HTMLDivElement>(null);
@@ -48,10 +49,12 @@ export function Overlay() {
       const appWindow = getCurrentWindow();
       const pos = await appWindow.outerPosition();
       const factor = await appWindow.scaleFactor();
-      setOffsets({
+      const newOffsets = {
         x: pos.x / factor,
         y: pos.y / factor,
-      });
+      };
+      setOffsets(newOffsets);
+      offsetsRef.current = newOffsets;
     } catch (err) {
       console.error('Failed to get window offsets:', err);
     }
@@ -76,29 +79,35 @@ export function Overlay() {
     const unlistenVis = listen<{ visible: boolean }>('blinky://agent-cursor-visibility', (event) => {
       setAgentCursorVisible(event.payload.visible);
       if (!event.payload.visible) {
-        setCursorPos(null);
-        setIsAgentActing(false);
+        isAgentActingRef.current = false;
+        if (cursorRef.current) {
+          cursorRef.current.style.transform = 'translate3d(-100px, -100px, 0)';
+        }
       }
     });
 
     const unlistenNativeMove = listen<{ x: number, y: number }>('blinky://native-cursor-move', (event) => {
-      // Follow the user's cursor when the agent is idle
-      if (!isAgentActing) {
-        const cssX = (event.payload.x / pixelRatio) - offsets.x;
-        const cssY = (event.payload.y / pixelRatio) - offsets.y;
-        setCursorPos({ x: cssX, y: cssY });
+      // Direct GPU transform update for zero lag (exact native cursor speed)
+      if (!isAgentActingRef.current && cursorRef.current) {
+        const cssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
+        const cssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
+        cursorRef.current.style.transform = `translate3d(${cssX}px, ${cssY}px, 0)`;
       }
     });
 
     const unlistenAgentMove = listen<{ x: number, y: number, instruction?: string }>('blinky://agent-cursor-move', (event) => {
-      setIsAgentActing(true);
+      isAgentActingRef.current = true;
       if (actingTimeoutRef.current) {
         clearTimeout(actingTimeoutRef.current);
       }
 
-      const cssX = (event.payload.x / pixelRatio) - offsets.x;
-      const cssY = (event.payload.y / pixelRatio) - offsets.y;
-      setCursorPos({ x: cssX, y: cssY });
+      if (cursorRef.current) {
+        cursorRef.current.classList.remove('following-user');
+        cursorRef.current.classList.add('agent-acting');
+        const cssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
+        const cssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
+        cursorRef.current.style.transform = `translate3d(${cssX}px, ${cssY}px, 0)`;
+      }
 
       // Trigger click pulse ring after gliding to target
       setTimeout(() => {
@@ -106,15 +115,19 @@ export function Overlay() {
         setTimeout(() => setIsClicking(false), 300);
       }, 360);
 
-      // Grace period staying at the target before transitioning back to user mouse tracking
+      // Grace period staying at the target before smoothly returning to user mouse tracking
       actingTimeoutRef.current = setTimeout(() => {
-        setIsAgentActing(false);
+        isAgentActingRef.current = false;
+        if (cursorRef.current) {
+          cursorRef.current.classList.remove('agent-acting');
+          cursorRef.current.classList.add('following-user');
+        }
       }, 2500);
     });
 
     const handlePointerMove = (e: PointerEvent) => {
-      if (!isAgentActing && agentCursorVisible) {
-        setCursorPos({ x: e.clientX, y: e.clientY });
+      if (!isAgentActingRef.current && cursorRef.current) {
+        cursorRef.current.style.transform = `translate3d(${e.clientX}px, ${e.clientY}px, 0)`;
       }
     };
     window.addEventListener('pointermove', handlePointerMove);
@@ -129,7 +142,8 @@ export function Overlay() {
         clearTimeout(actingTimeoutRef.current);
       }
     };
-  }, [isAgentActing, agentCursorVisible, offsets, pixelRatio]);
+  }, [pixelRatio]);
+
 
   useEffect(() => {
     let timeoutId: any = null;
@@ -339,13 +353,10 @@ export function Overlay() {
         <div className="fullscreen-edge-lighting-gradient" />
       </div>
 
-      {agentCursorVisible && cursorPos && (
+      {agentCursorVisible && (
         <div 
-          className={`agent-cursor-wrapper ${isAgentActing ? 'agent-acting' : 'following-user'}`}
-          style={{
-            left: cursorPos.x,
-            top: cursorPos.y,
-          }}
+          ref={cursorRef}
+          className="agent-cursor-wrapper following-user"
         >
           {isClicking && <div className="agent-cursor-click-ring" />}
           <svg className="agent-cursor" viewBox="0 0 24 24" width="28" height="28" fill="var(--accent-strong)" xmlns="http://www.w3.org/2000/svg">
@@ -358,6 +369,7 @@ export function Overlay() {
           </div>
         </div>
       )}
+
 
 
       {frames.map((frame) => {

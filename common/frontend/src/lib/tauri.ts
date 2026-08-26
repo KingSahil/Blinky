@@ -108,3 +108,10 @@ export async function pauseWakeWord(): Promise<void> {
 export async function resumeWakeWord(): Promise<void> {
   return invoke('resume_wake_word');
 }
+
+export async function setAgentCursorVisibility(visible: boolean): Promise<void> {
+  if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+    return invoke('set_agent_cursor_visibility', { visible });
+  }
+}
+

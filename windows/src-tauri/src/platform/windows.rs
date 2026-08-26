@@ -378,10 +378,68 @@ pub fn start_global_click_listener(app: AppHandle) {
                 let _ = app.emit("blinky://global-enter", ());
             }
 
-            thread::sleep(Duration::from_millis(16));
+            thread::sleep(Duration::from_millis(6));
         }
     });
 }
+
+pub fn set_system_cursor_visibility(visible: bool) {
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            CreateCursor, SetSystemCursor, SystemParametersInfoW, OCR_NORMAL, OCR_HAND, OCR_IBEAM, SPI_SETCURSORS,
+        };
+
+        if visible {
+            // Restore native default system cursors
+            SystemParametersInfoW(SPI_SETCURSORS, 0, std::ptr::null_mut(), 0);
+        } else {
+            // Create transparent 32x32 blank cursor masks
+            let and_mask = [0xFFu8; 128];
+            let xor_mask = [0x00u8; 128];
+            
+            let blank_normal = CreateCursor(
+                0 as _,
+                0,
+                0,
+                32,
+                32,
+                and_mask.as_ptr() as *const _,
+                xor_mask.as_ptr() as *const _,
+            );
+            if !blank_normal.is_null() {
+                SetSystemCursor(blank_normal, OCR_NORMAL);
+            }
+
+            let blank_hand = CreateCursor(
+                0 as _,
+                0,
+                0,
+                32,
+                32,
+                and_mask.as_ptr() as *const _,
+                xor_mask.as_ptr() as *const _,
+            );
+            if !blank_hand.is_null() {
+                SetSystemCursor(blank_hand, OCR_HAND);
+            }
+
+            let blank_ibeam = CreateCursor(
+                0 as _,
+                0,
+                0,
+                32,
+                32,
+                and_mask.as_ptr() as *const _,
+                xor_mask.as_ptr() as *const _,
+            );
+            if !blank_ibeam.is_null() {
+                SetSystemCursor(blank_ibeam, OCR_IBEAM);
+            }
+
+        }
+    }
+}
+
 
 
 pub fn configure_overlay_passthrough(window: &WebviewWindow) {

@@ -127,3 +127,8 @@ where
 {
     // No-op on Linux to avoid CPU spinning
 }
+
+pub fn set_system_cursor_visibility(_visible: bool) {
+    // No-op on Linux
+}
+

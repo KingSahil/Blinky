@@ -17,8 +17,10 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use platform::{
     click_screen_point_impl, configure_overlay_passthrough, open_url_impl, scroll_at_point_impl,
-    set_window_capture_exclusion, start_global_click_listener, type_text_impl,
+    set_system_cursor_visibility, set_window_capture_exclusion, start_global_click_listener,
+    type_text_impl,
 };
+
 
 #[derive(Debug, Deserialize)]
 struct TutorRequest {
@@ -176,7 +178,14 @@ fn open_url(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn set_agent_cursor_visibility(visible: bool) -> Result<(), String> {
+    set_system_cursor_visibility(!visible);
+    Ok(())
+}
+
+#[tauri::command]
 fn log_debug_message(message: String) {
+
     use std::fs::OpenOptions;
     use std::io::Write;
     let _ = std::fs::create_dir_all("tmp");
@@ -905,7 +914,8 @@ pub fn run() {
             log_debug_message,
             pause_wake_word,
             resume_wake_word,
-            confirm_recipe_save
+            confirm_recipe_save,
+            set_agent_cursor_visibility
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -915,9 +925,13 @@ pub fn run() {
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show_command" => show_command_window(app),
-            "quit" => app.exit(0),
+            "quit" => {
+                set_system_cursor_visibility(true);
+                app.exit(0);
+            }
             _ => {}
         })
+
         .setup(|app| {
             setup_tray(app)?;
             start_ui_observer(&app.handle());
