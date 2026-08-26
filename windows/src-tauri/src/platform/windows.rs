@@ -378,25 +378,32 @@ pub fn start_global_click_listener(app: AppHandle) {
                                     "y": pt.y
                                 }),
                             );
-                            // Keep overlay above native popup menus (e.g. right-click context menus #32768)
-                            if let Ok(hwnd) = overlay.hwnd() {
-                                unsafe {
-                                    use windows_sys::Win32::Foundation::HWND;
-                                    use windows_sys::Win32::UI::WindowsAndMessaging::{
-                                        SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
-                                        SWP_NOSIZE,
-                                    };
-                                    SetWindowPos(
-                                        hwnd.0 as HWND,
-                                        HWND_TOPMOST,
-                                        0,
-                                        0,
-                                        0,
-                                        0,
-                                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                                    );
-                                }
-                            }
+                        }
+                    }
+                }
+            }
+
+            // Keep overlay unconditionally topmost above Windows 11 Start Menu, Notification Sidebar, and taskbars
+            if let Some(overlay) = app.get_webview_window("overlay") {
+                if overlay.is_visible().unwrap_or(false) {
+                    if let Ok(hwnd) = overlay.hwnd() {
+                        unsafe {
+                            use windows_sys::Win32::Foundation::HWND;
+                            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                                SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+                                SWP_NOSIZE, BringWindowToTop,
+                            };
+                            let hwnd = hwnd.0 as HWND;
+                            SetWindowPos(
+                                hwnd,
+                                HWND_TOPMOST,
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                            );
+                            BringWindowToTop(hwnd);
                         }
                     }
                 }
@@ -410,6 +417,7 @@ pub fn start_global_click_listener(app: AppHandle) {
         }
     });
 }
+
 
 
 
@@ -490,11 +498,35 @@ pub fn register_exit_cursor_restorer() {
     }));
 }
 
+fn try_promote_to_system_band(hwnd: windows_sys::Win32::Foundation::HWND) {
+    unsafe {
+        use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+        let user32 = GetModuleHandleA(b"user32.dll\0".as_ptr());
+        if !user32.is_null() {
+            type PfnSetWindowBand = unsafe extern "system" fn(
+                windows_sys::Win32::Foundation::HWND,
+                windows_sys::Win32::Foundation::HWND,
+                u32,
+            ) -> windows_sys::Win32::Foundation::BOOL;
+
+            if let Some(set_window_band) = GetProcAddress(user32, b"SetWindowBand\0".as_ptr()) {
+                let set_window_band: PfnSetWindowBand = std::mem::transmute(set_window_band);
+                // Try system/accessibility topmost bands: ZBID_SYSTEM_TOOLS (16), ZBID_ABOVELOCK_UX (18), ZBID_IMMERSIVE_NOTIFICATION (4), ZBID_UIACCESS (2)
+                for band in [16u32, 18, 4, 2] {
+                    if set_window_band(hwnd, std::ptr::null_mut(), band) != 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn configure_overlay_passthrough(window: &WebviewWindow) {
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE,
-        SWP_NOMOVE, SWP_NOSIZE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        BringWindowToTop, GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
         WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     };
 
@@ -541,10 +573,13 @@ pub fn configure_overlay_passthrough(window: &WebviewWindow) {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
+            BringWindowToTop(hwnd);
+            try_promote_to_system_band(hwnd);
         }
         let _ = window.set_always_on_top(true);
     }
 }
+
 
 
 pub fn set_window_capture_exclusion(window: &WebviewWindow, exclude: bool) {
