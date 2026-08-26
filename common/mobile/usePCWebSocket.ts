@@ -18,7 +18,7 @@ export function usePCWebSocket() {
     setLatestResponse(null);
   }, []);
 
-  const connect = useCallback((ipAddress: string) => {
+  const connect = useCallback((ipAddress: string, token?: string) => {
     disconnect();
     
     // Clean IP Address and default to port 9001 if no port is specified
@@ -43,6 +43,12 @@ export function usePCWebSocket() {
 
       ws.onopen = () => {
         if (wsRef.current === ws) {
+          // Authenticate the remote connection before any commands are sent.
+          // The desktop gateway denies all commands from non-loopback peers
+          // unless the BLINKY_REMOTE_TOKEN is presented.
+          if (token && token.trim()) {
+            ws.send(`auth:${token.trim()}`);
+          }
           setStatus('connected');
           setErrorMsg(null);
         }

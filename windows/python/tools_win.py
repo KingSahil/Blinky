@@ -80,9 +80,16 @@ def open_app_via_windows_search_impl(app_name: str) -> ToolResult:
     try:
         from pywinauto.keyboard import send_keys
 
+        # Security: pywinauto's send_keys interprets `{...}`, `^`, `%`, `+`, `~`
+        # as key/modifier syntax. Typing a raw app name could inject keystrokes.
+        # Strip those metacharacters — a search query is only used for matching.
+        safe_query = re.sub(r"[{}\^%~]", "", app_name).strip()
+        if not safe_query:
+            return ToolResult(False, "open_app", "App name contains only characters that cannot be typed safely.", {"app_name": app_name})
+
         send_keys("{VK_LWIN down}s{VK_LWIN up}")
         time.sleep(0.4)
-        send_keys(app_name, with_spaces=True)
+        send_keys(safe_query, with_spaces=True)
         time.sleep(0.8)
         from computer_use.tools import find_windows_search_result, click_item_center
         match = find_windows_search_result(app_name)

@@ -1,6 +1,5 @@
 mod platform;
 mod websocket;
-mod mcp_bridge;
 
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
@@ -16,7 +15,6 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
-
 use platform::{
     click_screen_point_impl, configure_overlay_passthrough, open_url_impl, scroll_at_point_impl,
     set_window_capture_exclusion, start_global_click_listener, type_text_impl,
@@ -84,6 +82,54 @@ async fn run_agent_query(
     request: AgentQueryRequest,
 ) -> Result<serde_json::Value, String> {
     websocket::run_agent_query(&app, &request.query).await
+}
+
+/// User decision on a staged workflow recipe (saved after a successful agent
+/// task). Flips the recipe file's status directly so the Python registry
+/// picks it up on the next load: "active" (usable as inspiration) or the
+/// file is removed (discarded).
+#[tauri::command]
+fn confirm_recipe_save(recipe_id: String, save: bool) -> Result<(), String> {
+    let root = project_root_from_cwd().map_err(|e| e.to_string())?;
+    let recipes_dir = root
+        .join(".brain")
+        .join("ARTIFACTS")
+        .join("recipes");
+    let path = recipes_dir.join(format!("{recipe_id}.json"));
+    if !path.exists() {
+        return Err(format!("Pending recipe not found: {recipe_id}"));
+    }
+
+    if !save {
+        std::fs::remove_file(&path)
+            .map_err(|err| format!("Failed to discard recipe: {err}"))?;
+        eprintln!("Recipe {recipe_id} discarded by user");
+        return Ok(());
+    }
+
+    // Activate: read the staged recipe, mark status=active, successes=1
+    let contents = std::fs::read_to_string(&path)
+        .map_err(|err| format!("Failed to read pending recipe: {err}"))?;
+    let mut recipe: serde_json::Value = serde_json::from_str(&contents)
+        .map_err(|err| format!("Failed to parse pending recipe: {err}"))?;
+    recipe["status"] = serde_json::Value::String("active".to_string());
+    recipe["successes"] = serde_json::Value::Number(serde_json::Number::from(1));
+    std::fs::write(&path, serde_json::to_string_pretty(&recipe).unwrap_or_default())
+        .map_err(|err| format!("Failed to activate recipe: {err}"))?;
+    eprintln!("Recipe {recipe_id} activated by user");
+    Ok(())
+}
+
+fn project_root_from_cwd() -> Result<std::path::PathBuf, String> {
+    let mut dir = std::env::current_dir().map_err(|e| e.to_string())?;
+    loop {
+        if dir.join("common").join("python").is_dir() {
+            return Ok(dir);
+        }
+        if !dir.pop() {
+            return Err("Could not locate project root (no common/python found)".to_string());
+        }
+    }
 }
 
 #[tauri::command]
@@ -183,6 +229,9 @@ struct BlinkySettings {
     sarvam_api_key: String,
     groq_api_key: String,
     deepseek_api_key: String,
+    custom_url: String,
+    custom_model: String,
+    custom_api_key: String,
 }
 
 #[tauri::command]
@@ -195,6 +244,9 @@ async fn get_settings(app: AppHandle) -> Result<BlinkySettings, String> {
     let mut sarvam_api_key = "".to_string();
     let mut groq_api_key = "".to_string();
     let mut deepseek_api_key = "".to_string();
+    let mut custom_url = "".to_string();
+    let mut custom_model = "".to_string();
+    let mut custom_api_key = "".to_string();
 
     for (key, val) in env_vars {
         if key == "BLINKY_AI_PROVIDER" {
@@ -207,6 +259,12 @@ async fn get_settings(app: AppHandle) -> Result<BlinkySettings, String> {
             groq_api_key = val;
         } else if key == "DEEPSEEK_API_KEY" {
             deepseek_api_key = val;
+        } else if key == "BLINKY_CUSTOM_URL" {
+            custom_url = val;
+        } else if key == "BLINKY_CUSTOM_MODEL" {
+            custom_model = val;
+        } else if key == "CUSTOM_API_KEY" {
+            custom_api_key = val;
         }
     }
 
@@ -216,6 +274,9 @@ async fn get_settings(app: AppHandle) -> Result<BlinkySettings, String> {
         sarvam_api_key,
         groq_api_key,
         deepseek_api_key,
+        custom_url,
+        custom_model,
+        custom_api_key,
     })
 }
 
@@ -227,6 +288,9 @@ async fn save_settings(
     sarvam_api_key: String,
     groq_api_key: String,
     deepseek_api_key: String,
+    custom_url: String,
+    custom_model: String,
+    custom_api_key: String,
 ) -> Result<(), String> {
     let root = project_root(&app)?;
     ensure_env_file(&root);
@@ -240,6 +304,9 @@ async fn save_settings(
     let mut sarvam_api_key_found = false;
     let mut groq_api_key_found = false;
     let mut deepseek_api_key_found = false;
+    let mut custom_url_found = false;
+    let mut custom_model_found = false;
+    let mut custom_api_key_found = false;
 
     for line in lines.iter_mut() {
         let trimmed = line.trim();
@@ -258,6 +325,15 @@ async fn save_settings(
         } else if trimmed.starts_with("DEEPSEEK_API_KEY=") {
             *line = format!("DEEPSEEK_API_KEY={}", deepseek_api_key);
             deepseek_api_key_found = true;
+        } else if trimmed.starts_with("BLINKY_CUSTOM_URL=") {
+            *line = format!("BLINKY_CUSTOM_URL={}", custom_url);
+            custom_url_found = true;
+        } else if trimmed.starts_with("BLINKY_CUSTOM_MODEL=") {
+            *line = format!("BLINKY_CUSTOM_MODEL={}", custom_model);
+            custom_model_found = true;
+        } else if trimmed.starts_with("CUSTOM_API_KEY=") {
+            *line = format!("CUSTOM_API_KEY={}", custom_api_key);
+            custom_api_key_found = true;
         }
     }
 
@@ -275,6 +351,15 @@ async fn save_settings(
     }
     if !deepseek_api_key_found {
         lines.push(format!("DEEPSEEK_API_KEY={}", deepseek_api_key));
+    }
+    if !custom_url_found {
+        lines.push(format!("BLINKY_CUSTOM_URL={}", custom_url));
+    }
+    if !custom_model_found {
+        lines.push(format!("BLINKY_CUSTOM_MODEL={}", custom_model));
+    }
+    if !custom_api_key_found {
+        lines.push(format!("CUSTOM_API_KEY={}", custom_api_key));
     }
 
     let new_contents = lines.join("\n") + "\n";
@@ -819,7 +904,8 @@ pub fn run() {
             save_settings,
             log_debug_message,
             pause_wake_word,
-            resume_wake_word
+            resume_wake_word,
+            confirm_recipe_save
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -840,7 +926,6 @@ pub fn run() {
 
             #[cfg(target_os = "linux")]
             {
-                mcp_bridge::start_mcp_bridge();
                 start_ydotoold();
             }
 

@@ -22,11 +22,16 @@ def test_screenshot_tool_not_linux() -> None:
 
 
 def test_screenshot_tool_legacy_mode_returns_ocr_items_key() -> None:
+    fake = MagicMock()
+    fake.capture.return_value = MagicMock()
     with (
         patch("computer_use.tools.IS_LINUX", True),
         patch("computer_use.tools.os.environ.get", return_value="legacy"),
-        patch("computer_use.linux_mcp.screenshot", return_value={}),
+        patch("computer_use.tools._screenshot_temp_dir", return_value=Path("/tmp")),
+        patch("computer_use.tools._cleanup_old_screenshots"),
+        patch("backend.capture.CaptureStrategyFactory") as factory_cls,
     ):
+        factory_cls.get_strategy.return_value = fake
         result = screenshot_tool()
         assert result.success is True
         assert "ocr_items" in result.details
@@ -48,22 +53,32 @@ def test_screenshot_tool_ocr_mode_x11_fallback() -> None:
 
 
 def test_screenshot_tool_has_vision_field() -> None:
+    fake = MagicMock()
+    fake.capture.return_value = MagicMock()
     with (
         patch("computer_use.tools.IS_LINUX", True),
         patch("computer_use.tools.os.environ.get", return_value="legacy"),
-        patch("computer_use.linux_mcp.screenshot", return_value={}),
+        patch("computer_use.tools._screenshot_temp_dir", return_value=Path("/tmp")),
+        patch("computer_use.tools._cleanup_old_screenshots"),
+        patch("backend.capture.CaptureStrategyFactory") as factory_cls,
     ):
+        factory_cls.get_strategy.return_value = fake
         result = screenshot_tool()
         assert "has_vision" in result.details
         assert isinstance(result.details["has_vision"], bool)
 
 
 def test_screenshot_tool_returns_toolresult_type() -> None:
+    fake = MagicMock()
+    fake.capture.return_value = MagicMock()
     with (
         patch("computer_use.tools.IS_LINUX", True),
         patch("computer_use.tools.os.environ.get", return_value="legacy"),
-        patch("computer_use.linux_mcp.screenshot", return_value={}),
+        patch("computer_use.tools._screenshot_temp_dir", return_value=Path("/tmp")),
+        patch("computer_use.tools._cleanup_old_screenshots"),
+        patch("backend.capture.CaptureStrategyFactory") as factory_cls,
     ):
+        factory_cls.get_strategy.return_value = fake
         result = screenshot_tool()
         assert isinstance(result, ToolResult)
 

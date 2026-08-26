@@ -17,7 +17,7 @@ def build_preflight_prompt(
         history_context_str = f"\nRecent conversation:\n{history_context_str}\n"
 
     return f"""
-You are Blinky, an AI desktop tutor running on Linux (KDE Plasma Wayland).
+You are Blinky, an AI desktop tutor running on Linux.
 
 Classify the student's request before any screen capture happens.
 {previous_context_str}
@@ -41,6 +41,12 @@ Intents to choose from:
 6. `INFORMATIONAL_CHAT`: The user is greeting you, asking about your identity, explaining concepts, starting a normal conversation, or asking general questions that don't need screen context or web search (e.g. "hello", "who are you", "what is a variable in Python?").
 7. `WHATSAPP`: The user wants to interact with WhatsApp — summarize a chat, list chats, or check WhatsApp connection status (e.g. "summarize hackathon crew", "summarize my whatsapp group", "list my whatsapp chats", "check whatsapp status", "whatsapp status"). Extract: the WhatsApp action to "wa_action" (one of: "summarize", "chats", "status"), and the group or chat name to "wa_chat_name" (if mentioned).
 8. `DESKTOP_AUTOMATION`: Any step-by-step guidance on the user's active desktop screen/application UI (e.g. "how do I install python extension?", "click the install button", "where is the settings tab?").
+
+Compound-request rule (IMPORTANT):
+- If the request combines OPENING an app WITH a follow-up action inside it
+ (e.g. "open vivaldi and search youtube.com", "open firefox and type hello",
+ "launch vscode then open a file"), classify as `COMPUTER_USE` — NOT OPEN_APP,
+ NOT DESKTOP_AUTOMATION. It is a multi-step automation task for the agent loop.
 
 Rules for needs_screen:
 - needs_screen is true ONLY when the student wants guidance tied to visible UI (like clicking, opening, selecting, locating, highlighting, installing, or navigating something in an app, menu, button, tab, or window).

@@ -40,7 +40,12 @@ class PytesseractOcrProvider(OcrProvider):
         from PIL import Image
         img = Image.open(image_path)
 
-        max_dim = 2048
+        # Speed tuning (measured on Hyprland, 2560x1440):
+        #   default (OEM0, 2048px):      ~2.7s
+        #   OEM1 LSTM-only, 1600px:      ~1.4-1.6s  ← this config
+        # PSM stays at 3 (auto layout) — PSM 6 assumes one text block and
+        # drops scattered UI elements (51 items vs 70 for PSM 3).
+        max_dim = 1600
         w, h = img.size
         scale = 1.0
         if w > max_dim or h > max_dim:
@@ -53,7 +58,11 @@ class PytesseractOcrProvider(OcrProvider):
             img = img.resize(new_size, Image.Resampling.BILINEAR)
             LOGGER.info("Downscaled image for OCR from %dx%d to %dx%d (scale: %f)", w, h, img.width, img.height, scale)
 
-        data = self.pytesseract.image_to_data(img, output_type=self.pytesseract.Output.DICT)
+        data = self.pytesseract.image_to_data(
+            img,
+            output_type=self.pytesseract.Output.DICT,
+            config="--oem 1",  # LSTM-only engine (faster than legacy+lstm)
+        )
 
         items: list[dict[str, Any]] = []
         n_boxes = len(data['text'])

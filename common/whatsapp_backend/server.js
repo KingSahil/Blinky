@@ -11,20 +11,29 @@ import { initSessionManager, getOrCreateSession, getSession } from './SessionMan
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const httpServer = createServer(app);
-const io = new Server(httpServer, {
-    cors: {
-        origin: process.env.ALLOWED_ORIGINS
-            ? process.env.ALLOWED_ORIGINS.split(',')
-            : '*',
-        methods: ['GET', 'POST'],
+
+// CORS: default to same-origin / no-origin only. A wildcard `*` default would let
+// any website the user visits issue cross-origin requests to this server (reading
+// chat lists, marking chats read, triggering summaries). Cross-origin access is
+// only granted for explicitly listed origins via ALLOWED_ORIGINS.
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
+    : [];
+const corsOptions = {
+    origin(origin, callback) {
+        // No Origin header = same-origin/curl/native client → allow.
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.includes(origin)) return callback(null, true);
+        return callback(new Error('Not allowed by CORS'));
     },
+    methods: ['GET', 'POST'],
+};
+
+const io = new Server(httpServer, {
+    cors: corsOptions,
 });
 
-app.use(cors({
-    origin: process.env.ALLOWED_ORIGINS
-        ? process.env.ALLOWED_ORIGINS.split(',')
-        : '*',
-}));
+app.use(cors(corsOptions));
 app.use(express.json());
 
 const DEFAULT_SESSION_ID = 'blinky-default-session';
@@ -136,7 +145,13 @@ app.post('/api/summarise', requireSession, async (req, res) => {
         const chat = await req.session.getChatInstance(chatId);
         if (!chat) return res.status(404).json({ error: 'Chat not found' });
         const summary = await req.session.summariseChat(chat, parseInt(limit));
-        await req.session.sendNtfy(summary);
+        // Ntfy push is fire-and-forget; failures must not fail the request, and
+        // it is only sent when explicitly enabled (guards against surprise spam).
+        if (process.env.NTFY_ENABLED === 'true') {
+            req.session.sendNtfy(summary).catch((err) => {
+                console.error('[SERVER] ntfy push failed:', err?.message || err);
+            });
+        }
         io.to(req.session.sessionId).emit('summary_done', summary);
         res.json({ summary });
     } catch (err) {
@@ -189,8 +204,11 @@ io.on('connection', async (socket) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-httpServer.listen(PORT, () => {
-    console.log(`[SERVER] Running at http://localhost:${PORT}`);
+// Bind loopback by default: the WhatsApp backend serves the local web UI only.
+// Set HOST=0.0.0.0 explicitly to expose it (e.g. behind a reverse proxy).
+const HOST = process.env.HOST || '127.0.0.1';
+httpServer.listen(PORT, HOST, () => {
+    console.log(`[SERVER] Running at http://${HOST}:${PORT}`);
 });
 httpServer.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {

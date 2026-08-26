@@ -123,9 +123,13 @@ def test_virtual_mouse_get_instance_creates_singleton() -> None:
 
 # ── _get_screen_dimensions ──────────────────────────────────────────
 
-@patch("computer_use.linux_mcp.get_focused_window_bounds")
-def test_get_screen_dimensions_from_mcp(mock_bounds: Mock) -> None:
-    mock_bounds.return_value = {"x": 0, "y": 0, "width": 2560, "height": 1440}
+@patch("backend.window.get_active_window")
+@patch("computer_use.tools.subprocess.run", side_effect=FileNotFoundError)
+def test_get_screen_dimensions_from_mcp(_mock_subprocess: Mock, mock_bounds: Mock) -> None:
+    from backend.abc import WindowInfo
+    mock_bounds.return_value = WindowInfo(
+        title="t", process="p", x=0, y=0, width=2560, height=1440, pid=1
+    )
     from computer_use.tools import _get_screen_dimensions
     w, h = _get_screen_dimensions()
     assert w == 2560
@@ -133,7 +137,7 @@ def test_get_screen_dimensions_from_mcp(mock_bounds: Mock) -> None:
 
 
 @patch("computer_use.tools.subprocess.run", side_effect=FileNotFoundError)
-@patch("computer_use.linux_mcp.get_focused_window_bounds", return_value=None)
+@patch("backend.window.get_active_window", return_value=None)
 def test_get_screen_dimensions_fallback_1920x1080(_mock_bounds: Mock, _mock_subprocess: Mock) -> None:
     from computer_use.tools import _get_screen_dimensions
     w, h = _get_screen_dimensions()

@@ -32,6 +32,9 @@ def ask_ollama(prompt: str) -> dict[str, Any]:
                     "prompt": prompt,
                     "stream": False,
                     "format": "json",
+                    # gemma4 and other thinking models consume their token budget on
+                    # chain-of-thought otherwise; force non-thinking responses.
+                    "think": False,
                     "options": {
                         "temperature": 0.1,
                         "num_predict": 350,
@@ -68,6 +71,9 @@ def ask_ollama_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
                 "prompt": prompt,
                 "stream": False,
                 "format": "json",
+                # gemma4 and other thinking models consume their token budget on
+                # chain-of-thought otherwise; force non-thinking responses.
+                "think": False,
                 "options": {
                     "temperature": 0.1,
                     "num_predict": max_tokens,
@@ -91,10 +97,12 @@ def _ollama_timeout_seconds() -> int:
 
 
 def _parse_json(text: str) -> dict[str, Any]:
+    # LLMs frequently wrap JSON in markdown code fences even with format=json.
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
     try:
-        return json.loads(text)
+        return json.loads(cleaned)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
+        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
         if not match:
             raise
         return json.loads(match.group(0))

@@ -36,8 +36,9 @@ def test_system_prompt_excludes_vision_note_when_false() -> None:
 
 def test_system_prompt_includes_coordinate_guidance() -> None:
     prompt = build_system_prompt()
-    assert "ABSOLUTE pixel coordinates from OCR items directly" in prompt
-    assert "Do NOT convert to fractions" in prompt
+    assert "ABSOLUTE native pixel coordinates" in prompt
+    assert "convert to fractions" in prompt
+    assert "COST HIERARCHY" in prompt
 
 
 def test_system_prompt_includes_enriched_screenshot_description() -> None:

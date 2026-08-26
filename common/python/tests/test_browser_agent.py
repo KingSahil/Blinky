@@ -60,25 +60,24 @@ class BrowserAgentPlanTests(unittest.TestCase):
 
 class BrowserAgentRunTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_site_search_opens_search_engine_site_query(self):
-        controller = AsyncMock()
-        controller.open_url.return_value = {
-            "url": "https://www.google.com/search?q=site%3Ablinkit+gaming+chair",
-            "title": "gaming chair - Google Search",
-        }
+        # run_browser_plan always opens the URL via webbrowser.open (the
+        # controller param is ignored) — mock it so tests never pop real
+        # browser tabs on the machine running the suite.
+        with patch("webbrowser.open", return_value=True) as mock_open:
+            result = await run_browser_plan({
+                "match": True,
+                "action": "site_search",
+                "site": "blinkit",
+                "query": "gaming chair",
+                "confidence": 91,
+            })
 
-        result = await run_browser_plan({
-            "match": True,
-            "action": "site_search",
-            "site": "blinkit",
-            "query": "gaming chair",
-            "confidence": 91,
-        }, controller=controller)
-
-        controller.open_url.assert_awaited_once_with(
-            "https://www.google.com/search?q=site%3Ablinkit+gaming+chair"
+        mock_open.assert_called_once()
+        self.assertEqual(
+            result["url"],
+            "https://www.google.com/search?q=site%3Ablinkit+gaming+chair",
         )
         self.assertEqual(result["response"], "Opened web search for gaming chair on blinkit.")
-        self.assertEqual(result["url"], "https://www.google.com/search?q=site%3Ablinkit+gaming+chair")
 
 
 if __name__ == "__main__":

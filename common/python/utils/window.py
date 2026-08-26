@@ -122,12 +122,33 @@ def get_ignored_overlay_rects() -> list[dict[str, int]]:
 
 def get_target_window_element(window=None, target_pid: int | None = None):
     if os.name != "nt":
+        # Linux: return a lightweight window descriptor (hyprctl-backed).
+        # Keeps the same call contract (`.process_id()` used by main.py) via a
+        # tiny adapter; window/target_pid args are ignored on Linux.
+        try:
+            from backend.window import get_active_window
+
+            info = get_active_window()
+            if info is not None:
+                return _LinuxWindowAdapter(info)
+        except ImportError:
+            pass
         return None
     try:
         from window import _get_target_window_element_impl
         return _get_target_window_element_impl(window, target_pid)
     except ImportError:
         return None
+
+
+class _LinuxWindowAdapter:
+    """Minimal adapter exposing process_id() over backend WindowInfo."""
+
+    def __init__(self, info):
+        self._info = info
+
+    def process_id(self):
+        return self._info.pid or 0
 
 
 def get_active_window(window=None, target_pid: int | None = None) -> dict:
@@ -158,9 +179,31 @@ def _get_active_window_win(window=None, target_pid: int | None = None) -> dict:
 
 
 def _get_active_window_linux() -> dict:
+    # New compositor backend (Hyprland-first; GNOME/KDE land in phase 8)
     try:
-        from window_linux import get_active_window_linux
-        return get_active_window_linux()
+        from backend.window import get_active_window
+
+        info = get_active_window()
+        if info is not None:
+            return {
+                "title": info.title,
+                "process": info.process,
+                "supported": info.supported,
+            }
+    except ImportError:
+        pass
+
+    # Fallback: legacy KWin/xdotool/xprop chain (kept until phase 7 cleanup)
+    try:
+        from backend.vision import get_active_window_bounds
+
+        bounds = get_active_window_bounds()
+        if bounds:
+            return {
+                "title": bounds.get("title", ""),
+                "process": str(bounds.get("app_id", "")).split(".")[-1],
+                "supported": True,
+            }
     except ImportError:
         pass
 

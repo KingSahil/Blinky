@@ -23,6 +23,10 @@ src-tauri/target/
 common/src-tauri/target/
 screenshots/
 python/cache/
+# Runtime-generated artifacts (regenerated on demand; never commit)
+common/python/python/cache/
+common/python/tools/temp_candidate*
+common/whatsapp_backend/data/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -48,6 +52,10 @@ data/users/blinky-default-session/summary-memory.json
 .wwebjs_cache
 screenshots_parsed
 landing
+# npm lockfiles — bun is the package manager
+package-lock.json
+log.txt
+log[0-9]*.txt
 
 # Whitelist root-level scripts folder
-!/scripts/
+!/scripts/

@@ -13,3 +13,11 @@ pytesseract>=0.3.10
 PyYAML>=6.0.1
 scipy>=1.11.0
 sounddevice>=0.5.1
+evdev>=1.7.0
+openwakeword>=0.4.0
+
+# AT-SPI bindings (GNOME/KDE backends — phase 8). Arch: python-atspi (system pkg, not pip)
+# python-atspi
+
+# GNOME/KDE capture + a11y (system pkgs, not pip)
+# gnome-screenshot  spectacle  python-atspi

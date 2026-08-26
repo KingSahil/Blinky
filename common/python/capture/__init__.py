@@ -64,9 +64,9 @@ def capture_screen() -> Screenshot:
                 raise CaptureError(f"Windows screen capture failed: {dxcam_exc}") from dxcam_exc
     else:
         try:
-            from linux_capture import LinuxCaptureStrategyFactory
+            from backend.capture import CaptureStrategyFactory
 
-            strategy = LinuxCaptureStrategyFactory.get_strategy()
+            strategy = CaptureStrategyFactory.get_strategy()
             image = strategy.capture()
             LOGGER.info("Captured screen with %s", strategy.__class__.__name__)
         except Exception as exc:
