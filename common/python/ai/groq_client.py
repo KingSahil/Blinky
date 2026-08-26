@@ -414,10 +414,11 @@ def _active_groq_model() -> str:
 
 
 def _active_groq_vision_model() -> str:
-    model = os.getenv("BLINKY_GROQ_VISION_MODEL", "").strip() or os.getenv("BLINKY_GROQ_MODEL", "").strip()
-    if not model or model in DECOMMISSIONED_GROQ_MODELS:
+    model = os.getenv("BLINKY_GROQ_VISION_MODEL", "").strip()
+    if not model or model in DECOMMISSIONED_GROQ_MODELS or model in ("openai/gpt-oss-120b", "openai/gpt-oss-20b"):
         return DEFAULT_GROQ_VISION_MODEL
     return model
+
 
 
 

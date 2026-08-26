@@ -90,6 +90,29 @@ def _is_system_session(pid: int) -> bool:
     return False
 
 
+class SimpleWindowWrapper:
+    def __init__(self, handle: int, pid: int, title: str, process_name: str):
+        self.handle = handle
+        self._pid = pid
+        self._title = title
+        self._process_name = process_name
+
+    def process_id(self) -> int:
+        return self._pid
+
+    def window_text(self) -> str:
+        return self._title
+
+    def exists(self) -> bool:
+        return True
+
+    def is_visible(self) -> bool:
+        return True
+
+    def children(self, **kwargs) -> list:
+        return []
+
+
 def _get_target_window_element_impl(window=None, target_pid: int | None = None):
     if os.name != "nt":
         return None
@@ -111,6 +134,7 @@ def _get_target_window_element_impl(window=None, target_pid: int | None = None):
         fallback_hwnd = None
         fallback_title = ""
         fallback_process_name = ""
+        fallback_pid = 0
  
         # GW_HWNDNEXT = 2
         while next_hwnd:
@@ -163,15 +187,10 @@ def _get_target_window_element_impl(window=None, target_pid: int | None = None):
                 # Shell chrome windows (Progman, Shell_TrayWnd, WorkerW) either
                 # have no title or a known shell window class.
                 if process_name == "explorer.exe":
-                    # Check window class name
                     class_buf = ctypes.create_unicode_buffer(256)
                     user32.GetClassNameW(next_hwnd, class_buf, 256)
                     win_class = class_buf.value.lower()
                     if win_class in EXPLORER_SHELL_WINDOW_CLASSES or not title:
-                        if not fallback_hwnd:
-                            fallback_hwnd = next_hwnd
-                            fallback_title = title
-                            fallback_process_name = process_name
                         next_hwnd = user32.GetWindow(next_hwnd, 2)
                         continue
 
@@ -180,7 +199,6 @@ def _get_target_window_element_impl(window=None, target_pid: int | None = None):
                     next_hwnd = user32.GetWindow(next_hwnd, 2)
                     continue
 
-                
                 # We found our target window!
                 # Resolve it using pywinauto from its handle
                 try:
@@ -189,7 +207,22 @@ def _get_target_window_element_impl(window=None, target_pid: int | None = None):
                         LOGGER.info("Detected target application window via Z-order hwnd: %s (%s)", title, process_name)
                         return target_w
                 except Exception as pywinauto_exc:
-                    LOGGER.debug("Failed to wrap hwnd %d in pywinauto: %s", next_hwnd, pywinauto_exc)
+                    LOGGER.debug("Failed to wrap hwnd %d in pywinauto uia: %s", next_hwnd, pywinauto_exc)
+                    try:
+                        target_w = Desktop(backend="win32").window(handle=next_hwnd)
+                        if target_w.exists():
+                            LOGGER.info("Detected target application window via Z-order win32 hwnd: %s (%s)", title, process_name)
+                            return target_w
+                    except Exception:
+                        pass
+                
+                # If pywinauto failed to wrap but we found a valid top-level window with a title or known browser
+                if title or process_name in ("msedge.exe", "chrome.exe", "firefox.exe", "brave.exe", "opera.exe"):
+                    if not fallback_hwnd:
+                        fallback_hwnd = next_hwnd
+                        fallback_title = title
+                        fallback_process_name = process_name
+                        fallback_pid = pid
                     
             next_hwnd = user32.GetWindow(next_hwnd, 2)
             
@@ -199,8 +232,17 @@ def _get_target_window_element_impl(window=None, target_pid: int | None = None):
                 if target_w.exists():
                     LOGGER.info("Detected target application window via Z-order fallback hwnd: %s (%s)", fallback_title, fallback_process_name)
                     return target_w
-            except Exception as pywinauto_exc:
-                LOGGER.debug("Failed to wrap fallback hwnd %d in pywinauto: %s", fallback_hwnd, pywinauto_exc)
+            except Exception:
+                pass
+            try:
+                target_w = Desktop(backend="win32").window(handle=fallback_hwnd)
+                if target_w.exists():
+                    LOGGER.info("Detected target application window via win32 fallback hwnd: %s (%s)", fallback_title, fallback_process_name)
+                    return target_w
+            except Exception:
+                pass
+            LOGGER.info("Detected target application window via simple wrapper: %s (%s)", fallback_title, fallback_process_name)
+            return SimpleWindowWrapper(fallback_hwnd, fallback_pid, fallback_title, fallback_process_name)
 
     except Exception as exc:
         LOGGER.warning("Failed to scan Windows window handles: %s", exc)
@@ -209,7 +251,6 @@ def _get_target_window_element_impl(window=None, target_pid: int | None = None):
     try:
         from pywinauto import Desktop
         windows = Desktop(backend="uia").windows()
-        fallback_w = None
         for w in windows:
             try:
                 if not w.is_visible() or _is_window_cloaked(w.handle):
@@ -241,18 +282,15 @@ def _get_target_window_element_impl(window=None, target_pid: int | None = None):
                 # Skip explorer.exe shell chrome (desktop, taskbar, tray).
                 # Real File-Explorer windows always have a non-empty title.
                 if process_name == "explorer.exe" and not title:
-                    if not fallback_w:
-                        fallback_w = w
                     continue
                     
                 LOGGER.info("Detected target application window: %s (%s)", title, process_name)
                 return w
             except Exception:
                 continue
-        if fallback_w:
-            LOGGER.info("Detected target application window (fallback): %s (%s)", fallback_w.window_text(), "explorer.exe")
-            return fallback_w
     except Exception:
+        pass
+
         pass
         
     return None
