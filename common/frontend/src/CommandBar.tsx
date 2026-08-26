@@ -4,7 +4,7 @@ import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import QRCode from 'qrcode';
-import { runAutopilotLoop, extractTextToType, shouldPressEnterAfterTyping, isScrollAction, getScrollDirection, isClickInstruction } from './lib/autopilot';
+import { runAutopilotLoop, extractTextToType, shouldPressEnterAfterTyping, isScrollAction, getScrollDirection, isClickInstruction, isSingleActionQuery } from './lib/autopilot';
 import {
   getCurrentGuideSteps,
   getDisplaySteps,
@@ -1044,10 +1044,11 @@ export function CommandBar() {
           result = agentResult;
         } else {
           // Vision-guided autopilot loop (screen-based clicking)
+          const isSingleAction = isSingleActionQuery(queryText);
           let firstObservation: TutorResult | null = null;
           const autopilot = await runAutopilotLoop({
-            maxAttempts: 5,
-            observeAfterAction: true,
+            maxAttempts: isSingleAction ? 1 : 5,
+            observeAfterAction: !isSingleAction,
             observe: async () => {
               if (!firstObservation) {
                 firstObservation = agentResult;
@@ -1078,13 +1079,17 @@ export function CommandBar() {
               }
             },
           });
-          if (autopilot.stopReason === 'complete' && autopilot.attempts > 0) {
+          if ((autopilot.stopReason === 'complete' || autopilot.stopReason === 'single_action') && autopilot.attempts > 0) {
+            const firstStep = agentResult.steps?.find((candidate) => candidate.instruction.trim());
             result = {
               ...autopilot.finalResult,
-              summary: `Autopilot successfully completed the task!`,
+              summary: isSingleAction
+                ? `Clicked ${firstStep?.target_text || 'the target'}.`
+                : `Autopilot successfully completed the task!`,
               steps: [],
             };
           } else if (autopilot.stopReason === 'unsafe_step') {
+
             const nextStep = autopilot.finalResult.steps.find((candidate) => candidate.instruction.trim());
             const blockedLabel = nextStep?.target_text || nextStep?.instruction || 'the next action';
             result = {

@@ -17,10 +17,12 @@ pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
         SendInput, INPUT, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
         MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK,
     };
+    use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-        SM_YVIRTUALSCREEN,
+        GetCursorPos, GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN,
+        SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
+
 
     let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
     let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
@@ -29,6 +31,10 @@ pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
     if width <= 1 || height <= 1 {
         return Err("Cannot determine virtual screen size".to_string());
     }
+
+    // Save native cursor position so user cursor is not displaced
+    let mut original_cursor = POINT { x: 0, y: 0 };
+    let has_original = unsafe { GetCursorPos(&mut original_cursor) } != 0;
 
     let absolute_x = ((x - left) as i64 * 65535 / (width - 1) as i64) as i32;
     let absolute_y = ((y - top) as i64 * 65535 / (height - 1) as i64) as i32;
@@ -46,11 +52,20 @@ pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
             std::mem::size_of::<INPUT>() as i32,
         )
     };
+
+    // Restore original native cursor position
+    if has_original {
+        unsafe {
+            SetCursorPos(original_cursor.x, original_cursor.y);
+        }
+    }
+
     if sent != inputs.len() as u32 {
         return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
     }
     Ok(())
 }
+
 
 fn mouse_input(
     dx: i32,

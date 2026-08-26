@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { getClickablePoint, getPhysicalClickablePoint, isSafeAutopilotStep, runAutopilotLoop, extractTextToType, shouldPressEnterAfterTyping, isScrollAction, getScrollDirection } from '../src/lib/autopilot';
+import { getClickablePoint, getPhysicalClickablePoint, isSafeAutopilotStep, runAutopilotLoop, extractTextToType, shouldPressEnterAfterTyping, isScrollAction, getScrollDirection, isSingleActionQuery } from '../src/lib/autopilot';
+
 import type { TutorResult, TutorStep } from '../src/lib/types';
 
 function step(instruction: string, target = 'Gaming'): TutorStep {
@@ -249,4 +250,22 @@ describe('getScrollDirection', () => {
     expect(getScrollDirection('scroll')).toBe('down');
   });
 });
+
+describe('isSingleActionQuery', () => {
+  test('detects single click and tap commands', () => {
+    expect(isSingleActionQuery('click instagram')).toBe(true);
+    expect(isSingleActionQuery('click youtube')).toBe(true);
+    expect(isSingleActionQuery('please click on the search bar')).toBe(true);
+    expect(isSingleActionQuery('tap settings')).toBe(true);
+    expect(isSingleActionQuery('select profile')).toBe(true);
+    expect(isSingleActionQuery('press submit button')).toBe(true);
+  });
+
+  test('returns false for multi-step guidance questions', () => {
+    expect(isSingleActionQuery('how to change password in windows')).toBe(false);
+    expect(isSingleActionQuery('guide me on ordering food')).toBe(false);
+    expect(isSingleActionQuery('show me how to make a ppt')).toBe(false);
+  });
+});
+
 

@@ -50,16 +50,25 @@ export async function runAutopilotLoop({
     const beforeSignature = getStepSignature(nextStep);
     const logicalPoint = getClickablePoint(nextStep);
     const point = getPhysicalClickablePoint(nextStep, current);
-    
+
+
     // Emit cursor move event so Overlay can animate the AI cursor
-    await emit('blinky://agent-cursor-move', { x: logicalPoint.x, y: logicalPoint.y, instruction: nextStep.instruction });
+    try {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        await emit('blinky://agent-cursor-move', { x: logicalPoint.x, y: logicalPoint.y, instruction: nextStep.instruction });
+        // Allow virtual cursor to animate to the target point
+        await new Promise((r) => setTimeout(r, 260));
+      }
+    } catch {}
 
     await act(point, nextStep);
+
     attempts += 1;
 
     if (!observeAfterAction) {
       return { finalResult: current, attempts, stopReason: 'single_action' };
     }
+
 
     await wait();
 
@@ -223,3 +232,10 @@ export function isClickInstruction(instruction: string): boolean {
   const norm = normalize(instruction);
   return SAFE_ACTION_HINTS.some((hint) => norm.startsWith(hint));
 }
+
+export function isSingleActionQuery(query: string): boolean {
+  const norm = normalize(query).replace(/[?.!,;:]+$/, '');
+  if (!norm) return false;
+  return /^(?:please\s+)?(?:click|tap|press|select|choose|hit|double\s*click|open\s+(?:link|app|video|website|channel|post|photo|profile)|focus)\b/i.test(norm);
+}
+
