@@ -108,7 +108,7 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
       }
 
       console.log("[Mobile] 🚀 Starting Expo mobile development server on port 8081...");
-      mobileProc = spawn(["bun", "run", "start"], {
+      mobileProc = spawn(["bun", "run", "start", "--", "-c"], {
         cwd: "common/mobile",
         stdout: "inherit",
         stderr: "inherit",
@@ -118,6 +118,7 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
           EXPO_NO_TELEMETRY: "1",
         },
       });
+
     }
 
     // Attempt to launch on device (Expo Go or custom package)
