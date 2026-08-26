@@ -1171,21 +1171,8 @@ export default function App() {
                   autoCorrect={false}
                 />
               </View>
-              <View style={styles.inputWrapper}>
-                <Ionicons name="key-outline" size={20} color="#6C6985" style={styles.inputIcon} />
-                <TextInput
-                  style={[styles.input, isConnected && styles.inputDisabled]}
-                  placeholder="Remote token (from desktop .env)"
-                  placeholderTextColor="#6C6985"
-                  value={remoteToken}
-                  onChangeText={setRemoteToken}
-                  editable={!isConnected && status !== 'connecting'}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  secureTextEntry
-                />
-              </View>
               <View style={styles.actionRow}>
+
                 {status !== 'connected' && status !== 'connecting' ? (
                   <>
                     <TouchableOpacity style={styles.connectBtn} onPress={handleConnect} activeOpacity={0.8} disabled={isDiscovering}>

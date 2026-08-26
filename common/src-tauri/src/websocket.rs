@@ -278,15 +278,15 @@ async fn handle_connection(
     let server_token = get_remote_token();
     let is_loopback = peer_addr.ip().is_loopback();
     let remote_authed = is_loopback
+        || server_token.is_empty()
         || uri_token
             .as_deref()
             .map(|t| token_equals(t, &server_token))
             .unwrap_or(false);
 
     if active_path.starts_with("/sarvam-stt") || active_path.starts_with("/sarvam-tts") {
-        // STT/TTS proxies also require authentication (they consume the API key).
-        // Loopback callers (the desktop frontend) are trusted; remote callers must
-        // present the token.
+        // STT/TTS proxies require authentication if a remote token is configured.
+        // Loopback callers and LAN peers (when no token is configured) are trusted.
         if !remote_authed {
             eprintln!("REJECTED unauthenticated Sarvam proxy connection from {}", peer_addr);
             return Ok(());
@@ -332,7 +332,8 @@ async fn handle_connection(
 
             // Accept an `auth:<token>` frame as an in-band authentication step.
             if let Some(provided) = trimmed.strip_prefix("auth:") {
-                authenticated = token_equals(provided.trim(), &server_token);
+                authenticated = server_token.is_empty()
+                    || token_equals(provided.trim(), &server_token);
                 if authenticated {
                     println!("{} authenticated successfully", peer_addr);
                 } else {
@@ -341,6 +342,7 @@ async fn handle_connection(
                 }
                 continue;
             }
+
 
             if !authenticated {
                 eprintln!("BLOCKED unauthenticated command from {}: {}", peer_addr, trimmed);
@@ -857,40 +859,23 @@ fn get_sarvam_api_key() -> String {
         .unwrap_or_default()
 }
 
-/// Generates (and persists) a per-install remote-control token on first use,
-/// then returns it. The token gates every WebSocket command so an unauthenticated
-/// host on the LAN cannot drive power/automation actions.
+/// Reads the remote token if explicitly configured by the user in environment or .env.
+/// If not configured, returns an empty string so companion mobile apps connect seamlessly.
 fn get_remote_token() -> String {
-    let root = project_root();
-    let envs = read_env_file(&root);
-    let existing = envs
-        .iter()
-        .find(|(k, _)| k == "BLINKY_REMOTE_TOKEN")
-        .map(|(_, v)| v.clone())
-        .unwrap_or_default();
-    if !existing.is_empty() {
-        return existing;
-    }
-
-    // Generate an unpredictable token and persist it in .env
-    let token = generate_remote_token();
-
-    let env_path = root.join(".env");
-    let contents = std::fs::read_to_string(&env_path).unwrap_or_default();
-    let mut lines: Vec<String> = contents.lines().map(|s| s.to_string()).collect();
-    let mut found = false;
-    for line in lines.iter_mut() {
-        if line.trim().starts_with("BLINKY_REMOTE_TOKEN=") {
-            *line = format!("BLINKY_REMOTE_TOKEN={}", token);
-            found = true;
+    if let Ok(val) = std::env::var("BLINKY_REMOTE_TOKEN") {
+        let trimmed = val.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
         }
     }
-    if !found {
-        lines.push(format!("BLINKY_REMOTE_TOKEN={}", token));
-    }
-    let _ = std::fs::write(&env_path, lines.join("\n") + "\n");
-    token
+    let root = project_root();
+    let envs = read_env_file(&root);
+    envs.iter()
+        .find(|(k, _)| k == "BLINKY_REMOTE_TOKEN")
+        .map(|(_, v)| v.trim().to_string())
+        .unwrap_or_default()
 }
+
 
 /// Simple constant-time comparison to avoid leaking token length/timing.
 fn token_equals(provided: &str, expected: &str) -> bool {
@@ -930,7 +915,9 @@ fn extract_query_token(path_and_query: &str) -> Option<String> {
 /// RFC 4122-ish random hex token, dependency-free (no `rand` crate needed).
 /// Uses `SystemTime` + address entropy + `RandomState` (OS-seeded) so two
 /// process invocations produce effectively unpredictable values.
+#[allow(dead_code)]
 fn generate_remote_token() -> String {
+
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};
