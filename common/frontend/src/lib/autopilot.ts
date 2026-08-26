@@ -57,9 +57,10 @@ export async function runAutopilotLoop({
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         await emit('blinky://agent-cursor-move', { x: point.x, y: point.y, instruction: nextStep.instruction });
         // Allow virtual cursor to animate smoothly to the target point
-        await new Promise((r) => setTimeout(r, 380));
+        await new Promise((r) => setTimeout(r, 240));
       }
     } catch {}
+
 
 
     await act(point, nextStep);
@@ -187,8 +188,9 @@ function normalize(value: string | undefined): string {
 }
 
 function defaultWait(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 700));
+  return new Promise((resolve) => window.setTimeout(resolve, 200));
 }
+
 
 export function extractTextToType(instruction: string): string | null {
   const normalized = instruction.trim();

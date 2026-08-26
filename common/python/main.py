@@ -157,14 +157,15 @@ def should_skip_preflight_for_local_fast_path(question: str) -> bool:
         return False
     if is_followup_continuation_question(normalized):
         return True
-    click_words = {"click", "select", "choose", "press", "tap"}
+    click_words = {"click", "select", "choose", "press", "tap", "change", "switch", "set"}
     words = normalized.split()
     first_word = words[0] if words else ""
     if first_word in click_words:
         return True
-    if extract_locator_target(normalized):
+    if extract_locator_target(normalized) or extract_click_target(normalized):
         return True
     return False
+
 
 
 def run(
@@ -209,9 +210,13 @@ def run(
 
     locator_target = extract_locator_target(question)
 
-    skip_preflight = should_skip_preflight_for_local_fast_path(question)
+    has_progress = progress is not None and bool(
+        progress.get("completed_targets") or progress.get("completed_instructions")
+    )
+    skip_preflight = should_skip_preflight_for_local_fast_path(question) or has_progress
 
     # RULE: agent_mode NEVER forces screen context — it goes through preflight
+
     # for intent classification (COMPUTER_USE, OPEN_APP, etc.)
     if agent_mode:
         force_screen = False
@@ -1055,16 +1060,15 @@ def extract_click_target(question: str) -> str | None:
 
     patterns = [
         r"^(?:click|select|choose|press|tap)\s+(?:on\s+)?(?:the\s+)?(.+?)(?:\?|$)",
-        # NOTE: "open X" is deliberately NOT here — opening an app is the
-        # app-launcher's job (open_app / .desktop registry). Feeding it to the
-        # screen locator made "open vivaldi and search youtube.com" match the
-        # word "search" on screen and click it.
+        r"^(?:change|switch|set|turn)\s+(?:(?:dark|light|custom|theme|mode)\s+)?to\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^(?:change|switch|set)\s+(?:from\s+\w+\s+)?to\s+(?:the\s+)?(.+?)(?:\?|$)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
             return clean_locator_target(match.group(1))
     return None
+
 
 
 def is_open_action_question(question: str) -> bool:
