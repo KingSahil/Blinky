@@ -183,7 +183,7 @@ def test_groq_vision_retries_as_text_when_messages_content_must_be_string(tmp_pa
     second = response(True, groq_body('{"summary":"Parsed successfully from text","steps":[]}'))
 
     with (
-        patch.dict("os.environ", {"GROQ_API_KEY": "test-key", "BLINKY_GROQ_MODEL": "llama-3.3-70b-versatile"}),
+        patch.dict("os.environ", {"GROQ_API_KEY": "test-key", "BLINKY_GROQ_MODEL": "openai/gpt-oss-120b"}),
         patch("ai.groq_client.requests.post", side_effect=[first, second]) as post,
     ):
         result = ask_groq_vision("Look at this screen and guide", screenshot)
@@ -194,4 +194,34 @@ def test_groq_vision_retries_as_text_when_messages_content_must_be_string(tmp_pa
     assert isinstance(post.call_args_list[0].kwargs["json"]["messages"][0]["content"], list)
     # Second call fallback had string content
     assert isinstance(post.call_args_list[1].kwargs["json"]["messages"][0]["content"], str)
+
+
+def test_groq_vision_retries_with_default_model_when_model_not_found(tmp_path: Path) -> None:
+    screenshot = tmp_path / "screen.jpg"
+    img = Image.new("RGB", (100, 100), color="blue")
+    img.save(screenshot)
+
+    not_found_err = response(
+        False,
+        {
+            "error": {
+                "code": "model_not_found",
+                "message": "The model non-existent-model does not exist or you do not have access to it.",
+            }
+        },
+        status_code=404,
+    )
+    ok_resp = response(True, groq_body('{"summary":"Recovered with default model","steps":[]}'))
+
+    with (
+        patch.dict("os.environ", {"GROQ_API_KEY": "test-key", "BLINKY_GROQ_VISION_MODEL": "non-existent-model"}),
+        patch("ai.groq_client.requests.post", side_effect=[not_found_err, ok_resp]) as post,
+    ):
+        result = ask_groq_vision("Look at this screen", screenshot)
+
+    assert result["summary"] == "Recovered with default model"
+    assert post.call_count == 2
+    assert post.call_args_list[0].kwargs["json"]["model"] == "non-existent-model"
+    assert post.call_args_list[1].kwargs["json"]["model"] == "qwen/qwen3.6-27b"
+
 

@@ -17,18 +17,17 @@ from utils.logging import get_logger
 LOGGER = get_logger("blinky.groq")
 
 DEFAULT_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
-DEFAULT_GROQ_VISION_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+DEFAULT_GROQ_VISION_MODEL = "qwen/qwen3.6-27b"
 DEFAULT_IMAGE_MAX_DIM = 768
 DEFAULT_IMAGE_QUALITY = 80
 MAX_RATE_LIMIT_WAIT_SECONDS = 35
 
 DECOMMISSIONED_GROQ_MODELS = {
+    "llama-3.3-70b-versatile",
     "llama-3.2-90b-vision-preview",
     "llama-3.2-11b-vision-preview",
     "meta-llama/llama-4-scout-17b-16e-instruct",
-    "openai/gpt-oss-120b",
-    "qwen/qwen3.6-27b",
 }
 
 
@@ -79,6 +78,11 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
         }
 
     response = _post_groq_with_retry(groq_url, api_key, build_payload, timeout_val)
+    if _is_model_not_found_error(response) and model != DEFAULT_GROQ_VISION_MODEL:
+        LOGGER.warning("Groq model '%s' not found; retrying with default '%s'.", model, DEFAULT_GROQ_VISION_MODEL)
+        model = DEFAULT_GROQ_VISION_MODEL
+        response = _post_groq_with_retry(groq_url, api_key, build_payload, timeout_val)
+
     if _is_content_string_error(response):
         LOGGER.warning("Groq model '%s' rejected multimodal image array; falling back to OCR text prompt.", model)
         text_payload = {
@@ -130,6 +134,12 @@ def ask_groq_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
     }
 
     response = _post_groq_with_retry(groq_url, api_key, payload, timeout_val)
+    if _is_model_not_found_error(response) and model != DEFAULT_GROQ_MODEL:
+        LOGGER.warning("Groq text model '%s' not found; retrying with default '%s'.", model, DEFAULT_GROQ_MODEL)
+        model = DEFAULT_GROQ_MODEL
+        payload["model"] = model
+        response = _post_groq_with_retry(groq_url, api_key, payload, timeout_val)
+
     if _is_json_validate_error(response):
         LOGGER.warning("Groq JSON-mode generation failed; retrying text request without response_format.")
         retry_payload = _without_response_format(payload)
@@ -140,6 +150,7 @@ def ask_groq_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
         raise RuntimeError(_format_groq_error(response, model=model))
     body = response.json()
     return _parse_json(_extract_content(body))
+
 
 
 
@@ -349,6 +360,21 @@ def _json_recovery_prompt(prompt: str) -> str:
     )
 
 
+def _is_model_not_found_error(response: requests.Response) -> bool:
+    if response.ok:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    error = payload.get("error", {})
+    if not isinstance(error, dict):
+        return False
+    code = str(error.get("code", "")).strip().lower()
+    message = str(error.get("message", "")).strip().lower()
+    return code == "model_not_found" or "does not exist" in message or "do not have access to it" in message
+
+
 def _is_content_string_error(response: requests.Response) -> bool:
     if response.ok:
         return False
@@ -361,6 +387,7 @@ def _is_content_string_error(response: requests.Response) -> bool:
         return False
     message = str(error.get("message", "")).strip().lower()
     return "must be a string" in message or "expected a string" in message or "invalid type for 'messages" in message
+
 
 
 def _is_json_validate_error(response: requests.Response) -> bool:
