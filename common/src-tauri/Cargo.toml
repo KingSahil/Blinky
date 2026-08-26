@@ -22,6 +22,7 @@ tauri-plugin-shell = "2.2"
 tokio = { version = "1.52.3", features = ["full"] }
 tokio-tungstenite = { version = "0.29.0", features = ["native-tls"] }
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Console", "Win32_System_LibraryLoader"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi"] }
+
 
 
