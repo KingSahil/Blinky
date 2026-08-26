@@ -16,9 +16,19 @@ const httpServer = createServer(app);
 // any website the user visits issue cross-origin requests to this server (reading
 // chat lists, marking chats read, triggering summaries). Cross-origin access is
 // only granted for explicitly listed origins via ALLOWED_ORIGINS.
-const allowedOrigins = process.env.ALLOWED_ORIGINS
+const defaultAllowedOrigins = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'tauri://localhost',
+    'http://tauri.localhost',
+    'https://tauri.localhost',
+];
+const envAllowedOrigins = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
     : [];
+const allowedOrigins = [...new Set([...defaultAllowedOrigins, ...envAllowedOrigins])];
 const corsOptions = {
     origin(origin, callback) {
         // No Origin header = same-origin/curl/native client → allow.

@@ -10,8 +10,9 @@ from utils.generalizer import generalize_tool, read_registry_safe, write_registr
 
 @pytest.fixture(autouse=True)
 def mock_plan_browser_action():
-    with patch("agent_router.plan_browser_action", return_value={"match": False}) as m:
-        yield m
+    with patch("agent_router.plan_browser_action", return_value={"match": False}) as m_plan, \
+         patch("main.classify_request", return_value=None):
+        yield m_plan
 
 @pytest.fixture
 def temp_registry(tmp_path):
@@ -48,12 +49,13 @@ async def test_route_cache():
                         mock_send.assert_any_call("123", "processing", data={
                             "message": "Routing to 1 tool call(s) (Confidence: 90%)...",
                             "confidence": 90,
-                            "reasoning": "cached"
+                            "reasoning": "cached",
+                            "percent": 50
                         })
 
 @pytest.mark.asyncio
 async def test_confidence_routing_threshold():
-    # Test that confidence scores below 80 fall back to code generation
+    # Test that confidence scores below 80 fall back to WIL pipeline
     agent_router.ROUTE_CACHE.clear()
     
     routing_decision = {
@@ -67,19 +69,17 @@ async def test_confidence_routing_threshold():
     with patch("agent_router.ask_text_model", return_value=routing_decision) as mock_ask:
         with patch("agent_router.load_registry_async", return_value={"test_tool": {}}):
             with patch("agent_router.send_response") as mock_send:
-                # We will stop/mock early in generation block to avoid actual API call
-                with patch("agent_router.requests.post") as mock_post:
-                    # Mock response to throw exception or return mock content to terminate handles
-                    mock_post.side_effect = Exception("Stop execution in generation phase")
-                    
+                with patch("wil.pipeline.WILPipeline.run", new_callable=AsyncMock) as mock_wil:
+                    mock_wil.return_value = {"synthesized_response": "WIL Answer"}
                     line = json.dumps({"requestId": "123", "query": "low conf query"})
                     await agent_router.handle_request(line)
                     
-                    # Ensure it logged that it is generating custom script due to low confidence
+                    # Ensure it logged that it is retrieving web intelligence due to low confidence
                     mock_send.assert_any_call("123", "processing", data={
-                        "message": "No confident match (Confidence: 75%). Generating custom script...",
+                        "message": "No matching tools. Retrieving web intelligence...",
                         "confidence": 75,
-                        "reasoning": "low confidence matching"
+                        "reasoning": "low confidence matching",
+                        "percent": 25
                     })
 
 @pytest.mark.asyncio
@@ -172,12 +172,13 @@ async def test_multi_tool_concurrent_execution():
                     mock_send.assert_any_call("456", "processing", data={
                         "message": "Routing to 2 tool call(s) (Confidence: 95%)...",
                         "confidence": 95,
-                        "reasoning": "two lookup requests"
+                        "reasoning": "two lookup requests",
+                        "percent": 50
                     })
 
 @pytest.mark.asyncio
 async def test_sufficiency_check_fallback_triggers_generation():
-    # Test that when check_sufficiency fails, it falls back to code generation
+    # Test that when check_sufficiency fails on empty results, it falls back to WIL pipeline
     agent_router.ROUTE_CACHE.clear()
     agent_router.ROUTE_CACHE["insufficient query"] = {
         "match": True,
@@ -196,42 +197,19 @@ async def test_sufficiency_check_fallback_triggers_generation():
         }
     }
 
-    # Custom generated tool return structure
-    mock_gen_response = """
-TOOL_NAME: lookup_custom_details
-DESCRIPTION: Custom generated search
-ARGUMENTS: query
-CODE:
-```python
-import sys
-import json
-print(json.dumps({"custom_result": "done"}))
-```
-"""
-
     with patch("agent_router.load_registry_async", return_value=mock_registry):
-        with patch("agent_router.execute_script") as mock_exec:
-            # First tool execution returns result, second fallback execution returns success
-            mock_exec.side_effect = [
-                (True, {"subscribers": "N/A"}, ""), # tool output
-                (True, {"custom_result": "done"}, "") # fallback tool validation run
-            ]
-            # Fast heuristic check passes, LLM sufficiency returns False
-            with patch("utils.sufficiency_checker.check_sufficiency", return_value=(False, "Missing subscribers count")):
+        with patch("agent_router.execute_script", return_value=(False, {}, "Failed")):
+            with patch("utils.sufficiency_checker.check_sufficiency", return_value=(False, "No results")):
                 with patch("agent_router.send_response") as mock_send:
-                    # Mock the request post to LLM generator
-                    with patch("agent_router.requests.post") as mock_post:
-                        mock_resp = MagicMock()
-                        mock_resp.json.return_value = {"choices": [{"message": {"content": mock_gen_response}}]}
-                        mock_post.return_value = mock_resp
+                    with patch("wil.pipeline.WILPipeline.run", new_callable=AsyncMock) as mock_wil:
+                        mock_wil.return_value = {"synthesized_response": "WIL Answer"}
+                        line = json.dumps({"requestId": "789", "query": "insufficient query"})
+                        await agent_router.handle_request(line)
                         
-                        # Mock generalizer to avoid actual execution in background task
-                        with patch("utils.generalizer.generalize_tool") as mock_gen:
-                            line = json.dumps({"requestId": "789", "query": "insufficient query"})
-                            await agent_router.handle_request(line)
-                            
-                            mock_send.assert_any_call("789", "processing", data={
-                                "message": "Tool execution insufficient or unmatched (Missing subscribers count). Generating custom script...",
-                                "confidence": 90,
-                                "reasoning": "one lookup request"
-                            })
+                        mock_send.assert_any_call("789", "processing", data={
+                            "message": "No matching tools. Retrieving web intelligence...",
+                            "confidence": 90,
+                            "reasoning": "one lookup request",
+                            "percent": 25
+                        })
+

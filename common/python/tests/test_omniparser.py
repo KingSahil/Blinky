@@ -138,9 +138,6 @@ def test_omniparser_local_extraction(monkeypatch):
     # Empty URL triggers local processing mode
     monkeypatch.setenv("BLINKY_OMNIPARSER_API_URL", "")
 
-    provider = OmniParserProvider()
-    assert provider.api_url == ""
-
     # Mock YOLO model boxes
     mock_box = MagicMock()
     mock_xyxy = MagicMock()
@@ -160,20 +157,25 @@ def test_omniparser_local_extraction(monkeypatch):
         {"text": "Submit", "x": 50, "y": 40, "width": 40, "height": 10, "control_type": "text"}
     ]
 
-    with patch("ultralytics.YOLO", return_value=mock_yolo) as mock_yolo_cls, \
-         patch("ocr.get_ocr_provider", return_value=mock_ocr_provider), \
-         patch("pathlib.Path.exists", return_value=True):
-        
-        elements = provider.extract_text(Path("dummy.png"))
-        
-        assert mock_yolo_cls.called
-        assert len(elements) == 1
-        
-        assert elements[0]["x"] == 10
-        assert elements[0]["y"] == 20
-        assert elements[0]["width"] == 100
-        assert elements[0]["height"] == 50
-        assert elements[0]["confidence"] == 0.85
-        assert elements[0]["control_type"] == "Button"
-        # Verify text was overlaid from OCR mapping
-        assert elements[0]["text"] == "Submit"
+    with patch.dict("sys.modules", {"torch": MagicMock(), "timm": MagicMock(), "ultralytics": MagicMock()}):
+        provider = OmniParserProvider()
+        assert provider.api_url == ""
+        assert provider.local_available is True
+
+        with patch("ultralytics.YOLO", return_value=mock_yolo) as mock_yolo_cls, \
+             patch("ocr.get_ocr_provider", return_value=mock_ocr_provider), \
+             patch("pathlib.Path.exists", return_value=True):
+            
+            elements = provider.extract_text(Path("dummy.png"))
+            
+            assert mock_yolo_cls.called
+            assert len(elements) == 1
+            
+            assert elements[0]["x"] == 10
+            assert elements[0]["y"] == 20
+            assert elements[0]["width"] == 100
+            assert elements[0]["height"] == 50
+            assert elements[0]["confidence"] == 0.85
+            assert elements[0]["control_type"] == "Button"
+            # Verify text was overlaid from OCR mapping
+            assert elements[0]["text"] == "Submit"

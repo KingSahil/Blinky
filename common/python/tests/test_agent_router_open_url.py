@@ -172,15 +172,18 @@ class AgentRouterOpenUrlRequestTests(unittest.IsolatedAsyncioTestCase):
         mock_send.assert_any_call("abc", "success", data={"response": "Opened YouTube."})
 
     async def test_whatsapp_open_request_uses_ai_url_resolver(self):
+        from computer_use.tools import ToolResult
         with (
-            patch("agent_router.webbrowser.open", return_value=True) as mock_open,
+            patch("computer_use.agent.open_app_tool", return_value=ToolResult(True, "open_app", "Opened WhatsApp.", {})) as mock_open,
             patch("agent_router.ask_text_model", side_effect=AssertionError("LLM should not be called")),
             patch("agent_router.send_response") as mock_send,
         ):
             await handle_request('{"requestId":"abc","query":"open whatsapp"}')
 
-        mock_open.assert_called_once_with("https://web.whatsapp.com")
+        mock_open.assert_called_once_with("whatsapp")
         mock_send.assert_any_call("abc", "success", data={"response": "Opened WhatsApp."})
+
+
 
     async def test_search_request_bypasses_llm_routing(self):
         with (

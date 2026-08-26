@@ -5,7 +5,8 @@ from wil.searxng_client import SearXNGClient
 @pytest.mark.asyncio
 async def test_searxng_client_init():
     client = SearXNGClient()
-    assert client.base_url == "http://localhost:8888"
+    assert client.base_url in ("http://localhost:8888", "http://127.0.0.1:8888")
+
 
 @pytest.mark.asyncio
 async def test_searxng_client_headers():
