@@ -9,10 +9,16 @@ import { existsSync } from 'fs';
 import { exec, execFile } from 'child_process';
 import systemPrompt from './generated-prompt.cjs';
 
+import { fileURLToPath } from 'url';
+
 const { Client, LocalAuth, Message } = pkg;
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PROJECT_ROOT = join(__dirname, '..', '..');
+
 // ── Module-level constants (system-wide, not per-user) ────────────────────────
-const AUTH_DIR = process.env.WWEBJS_AUTH_DIR || join(process.cwd(), '.wwebjs_auth');
+const AUTH_DIR = process.env.WWEBJS_AUTH_DIR || join(PROJECT_ROOT, '.wwebjs_auth');
 const WATCHDOG_INTERVAL    = 2 * 60 * 1000;
 const WATCHDOG_TIMEOUT     = 30 * 1000;
 const UNREAD_SYNC_INTERVAL = 30 * 1000;
@@ -285,9 +291,9 @@ export class WaUserSession {
         this.io = io;
 
         // Per-user file paths
-        this.settingsFile      = join(process.cwd(), 'data', 'users', sessionId, 'settings.json');
-        this.summaryMemoryFile = join(process.cwd(), 'data', 'users', sessionId, 'summary-memory.json');
-        this.logFile           = join(process.cwd(), 'data', 'users', sessionId, 'wa.log');
+        this.settingsFile      = join(PROJECT_ROOT, 'data', 'users', sessionId, 'settings.json');
+        this.summaryMemoryFile = join(PROJECT_ROOT, 'data', 'users', sessionId, 'summary-memory.json');
+        this.logFile           = join(PROJECT_ROOT, 'data', 'users', sessionId, 'wa.log');
 
         // Per-user runtime state
         this.userSettings        = {};
@@ -390,26 +396,12 @@ export class WaUserSession {
         this.io.to(this.sessionId).emit('log', { level, message });
     }
 
-    // ── Auth / Chromium cleanup ───────────────────────────────────────────────
-    async killOrphanedBrowsers() {
-        if (process.platform !== 'win32') return;
-        return new Promise((resolve) => {
-            const psScript = `
-Get-CimInstance Win32_Process | Where-Object {
-    ($_.Name -eq 'msedge.exe' -or $_.Name -eq 'chrome.exe') -and ($_.CommandLine -like '*session-${this.sessionId}*')
-} | ForEach-Object {
-    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
-}
-`;
-            execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psScript], () => resolve());
-        });
-    }
-
     async cleanupChromiumSingletonFiles() {
         try { await this.killOrphanedBrowsers(); } catch {}
         const sessionDir = join(AUTH_DIR, `session-${this.sessionId}`);
-        for (const file of ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'lock']) {
+        for (const file of ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'lock', 'DevToolsActivePort']) {
             try { await unlink(join(sessionDir, file)); } catch {}
+            try { await unlink(join(sessionDir, 'Default', file)); } catch {}
         }
     }
 
@@ -764,14 +756,21 @@ Get-CimInstance Win32_Process | Where-Object {
     // ── Watchdog & unread sync ────────────────────────────────────────────────
     startWatchdog() {
         if (this.watchdogTimer) clearInterval(this.watchdogTimer);
+        let consecutiveFailures = 0;
         this.watchdogTimer = setInterval(async () => {
             if (this.status !== 'connected' || this.restarting) return;
             try {
                 const state = await withTimeout(this.client.getState(), WATCHDOG_TIMEOUT, 'watchdog getState');
+                consecutiveFailures = 0;
                 this.emit('info', `[WATCHDOG] Client alive — state: ${state}`);
             } catch (err) {
-                this.emit('error', `[WATCHDOG] Client unresponsive (${err.message}) — restarting...`);
-                this.restartClient();
+                consecutiveFailures++;
+                this.emit('error', `[WATCHDOG] Probe ${consecutiveFailures}/3 warning: ${err.message}`);
+                if (consecutiveFailures >= 3) {
+                    this.emit('error', `[WATCHDOG] Client unresponsive after 3 consecutive failures — restarting...`);
+                    consecutiveFailures = 0;
+                    this.restartClient();
+                }
             }
         }, WATCHDOG_INTERVAL);
     }
@@ -869,22 +868,23 @@ Get-CimInstance Win32_Process | Where-Object {
                 clientId: this.sessionId,
                 dataPath: AUTH_DIR,
             }),
-            webVersion: '2.3000.1043123085',
             webVersionCache: {
                 type: 'remote',
-                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}-alpha.html',
-                strict: true
+                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
             },
             puppeteer: {
                 executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || getEdgeOrChromePath() || undefined,
+                headless: true,
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-accelerated-2d-canvas',
                     '--no-first-run',
-                    '--no-zygote',
-                    '--disable-gpu',
+                    '--no-default-browser-check',
+                    '--disable-session-crashed-bubble',
+                    '--hide-crash-restore-bubble',
+                    '--disable-features=Translate,OptimizationHints,MediaRouter',
                     '--disable-extensions',
                 ],
             },
@@ -916,8 +916,12 @@ Get-CimInstance Win32_Process | Where-Object {
             self.emit('success', '[STATUS] WhatsApp client is ready');
             self.io.to(self.sessionId).emit('ready');
             self.startWatchdog();
-            self.startUnreadSync();
-            self.syncUnreadSummaryBuckets();
+            setTimeout(() => {
+                if (self.status === 'connected' && !self.restarting) {
+                    self.startUnreadSync();
+                    self.syncUnreadSummaryBuckets();
+                }
+            }, 10_000);
             if (c.pupPage) {
                 c.pupPage.on('crash', () => {
                     self.emit('error', '[PUPPETEER] Page crashed — restarting...');

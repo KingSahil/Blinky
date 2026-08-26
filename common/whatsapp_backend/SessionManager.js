@@ -1,9 +1,13 @@
-// SessionManager.js — manages multiple per-user WaUserSession instances
 import { readFile, writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { WaUserSession } from './WaUserSession.js';
 
-const SESSIONS_FILE = join(process.cwd(), 'data', 'sessions.json');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PROJECT_ROOT = join(__dirname, '..', '..');
+
+const SESSIONS_FILE = join(PROJECT_ROOT, 'data', 'sessions.json');
 
 // In-memory map of sessionId → WaUserSession
 const sessions = new Map();
@@ -22,7 +26,7 @@ async function loadSessionRegistry() {
 }
 
 async function saveSessionRegistry(registry) {
-    await mkdir(join(process.cwd(), 'data'), { recursive: true });
+    await mkdir(join(PROJECT_ROOT, 'data'), { recursive: true });
     await writeFile(SESSIONS_FILE, JSON.stringify(registry, null, 2), 'utf-8');
 }
 
