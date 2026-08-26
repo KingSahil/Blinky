@@ -163,3 +163,35 @@ def test_parse_retry_wait_seconds() -> None:
     # 3. From error message
     resp3 = response(False, {"error": {"message": "Limit 8000. Please try again in 18.5s."}}, status_code=429)
     assert _parse_retry_wait_seconds(resp3) == 18.5
+
+
+def test_groq_vision_retries_as_text_when_messages_content_must_be_string(tmp_path: Path) -> None:
+    screenshot = tmp_path / "screen.jpg"
+    img = Image.new("RGB", (100, 100), color="red")
+    img.save(screenshot)
+
+    first = response(
+        False,
+        {
+            "error": {
+                "code": "invalid_request_error",
+                "message": "messages[0].content must be a string",
+            }
+        },
+        status_code=400,
+    )
+    second = response(True, groq_body('{"summary":"Parsed successfully from text","steps":[]}'))
+
+    with (
+        patch.dict("os.environ", {"GROQ_API_KEY": "test-key", "BLINKY_GROQ_MODEL": "llama-3.3-70b-versatile"}),
+        patch("ai.groq_client.requests.post", side_effect=[first, second]) as post,
+    ):
+        result = ask_groq_vision("Look at this screen and guide", screenshot)
+
+    assert result["summary"] == "Parsed successfully from text"
+    assert post.call_count == 2
+    # First call had list content (multimodal)
+    assert isinstance(post.call_args_list[0].kwargs["json"]["messages"][0]["content"], list)
+    # Second call fallback had string content
+    assert isinstance(post.call_args_list[1].kwargs["json"]["messages"][0]["content"], str)
+

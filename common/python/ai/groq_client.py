@@ -17,8 +17,8 @@ from utils.logging import get_logger
 LOGGER = get_logger("blinky.groq")
 
 DEFAULT_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
-DEFAULT_GROQ_VISION_MODEL = "qwen/qwen3.6-27b"
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_VISION_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_IMAGE_MAX_DIM = 768
 DEFAULT_IMAGE_QUALITY = 80
 MAX_RATE_LIMIT_WAIT_SECONDS = 35
@@ -27,6 +27,8 @@ DECOMMISSIONED_GROQ_MODELS = {
     "llama-3.2-90b-vision-preview",
     "llama-3.2-11b-vision-preview",
     "meta-llama/llama-4-scout-17b-16e-instruct",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.6-27b",
 }
 
 
@@ -37,6 +39,7 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
 
     model = _active_groq_vision_model()
     groq_url = os.getenv("BLINKY_GROQ_URL", DEFAULT_GROQ_URL).strip() or DEFAULT_GROQ_URL
+    prompt_str = prompt if isinstance(prompt, str) else json.dumps(prompt)
 
     try:
         timeout_val = int(os.getenv("BLINKY_GROQ_TIMEOUT", "90").strip())
@@ -58,7 +61,7 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
             max_items = 10
 
         image_payload = _image_to_data_url(screenshot_path, max_dimension=max_dim)
-        compacted_prompt = _compact_vision_prompt(prompt, max_items=max_items)
+        compacted_prompt = _compact_vision_prompt(prompt_str, max_items=max_items)
         return {
             "model": model,
             "temperature": 0.1,
@@ -76,10 +79,25 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
         }
 
     response = _post_groq_with_retry(groq_url, api_key, build_payload, timeout_val)
+    if _is_content_string_error(response):
+        LOGGER.warning("Groq model '%s' rejected multimodal image array; falling back to OCR text prompt.", model)
+        text_payload = {
+            "model": model,
+            "temperature": 0.1,
+            "max_tokens": 750,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "user", "content": prompt_str}],
+        }
+        response = _post_groq_with_retry(groq_url, api_key, text_payload, timeout_val)
+
     if _is_json_validate_error(response):
         LOGGER.warning("Groq JSON-mode generation failed; retrying vision request without response_format.")
-        retry_payload = _without_response_format(build_payload(1))
-        retry_payload["messages"][0]["content"][0]["text"] = _json_recovery_prompt(prompt)
+        base_payload = text_payload if "_is_content_string_error" in locals() and _is_content_string_error(response) else build_payload(1)
+        retry_payload = _without_response_format(base_payload)
+        if isinstance(retry_payload.get("messages", [{}])[0].get("content"), list):
+            retry_payload["messages"][0]["content"][0]["text"] = _json_recovery_prompt(prompt_str)
+        else:
+            retry_payload["messages"][0]["content"] = _json_recovery_prompt(prompt_str)
         response = _post_groq_with_retry(groq_url, api_key, retry_payload, timeout_val)
 
     if not response.ok:
@@ -96,6 +114,7 @@ def ask_groq_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
 
     model = _active_groq_model()
     groq_url = os.getenv("BLINKY_GROQ_URL", DEFAULT_GROQ_URL).strip() or DEFAULT_GROQ_URL
+    prompt_str = prompt if isinstance(prompt, str) else json.dumps(prompt)
 
     try:
         timeout_val = int(os.getenv("BLINKY_GROQ_TIMEOUT", "90").strip())
@@ -107,20 +126,21 @@ def ask_groq_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
         "temperature": 0.1,
         "max_tokens": max_tokens,
         "response_format": {"type": "json_object"},
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": prompt_str}],
     }
 
     response = _post_groq_with_retry(groq_url, api_key, payload, timeout_val)
     if _is_json_validate_error(response):
         LOGGER.warning("Groq JSON-mode generation failed; retrying text request without response_format.")
         retry_payload = _without_response_format(payload)
-        retry_payload["messages"][0]["content"] = _json_recovery_prompt(prompt)
+        retry_payload["messages"][0]["content"] = _json_recovery_prompt(prompt_str)
         response = _post_groq_with_retry(groq_url, api_key, retry_payload, timeout_val)
 
     if not response.ok:
         raise RuntimeError(_format_groq_error(response, model=model))
     body = response.json()
     return _parse_json(_extract_content(body))
+
 
 
 def _compact_vision_prompt(prompt: str, max_items: int = 25) -> str:
@@ -329,6 +349,20 @@ def _json_recovery_prompt(prompt: str) -> str:
     )
 
 
+def _is_content_string_error(response: requests.Response) -> bool:
+    if response.ok:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    error = payload.get("error", {})
+    if not isinstance(error, dict):
+        return False
+    message = str(error.get("message", "")).strip().lower()
+    return "must be a string" in message or "expected a string" in message or "invalid type for 'messages" in message
+
+
 def _is_json_validate_error(response: requests.Response) -> bool:
     if response.ok:
         return False
@@ -354,9 +388,10 @@ def _active_groq_model() -> str:
 
 def _active_groq_vision_model() -> str:
     model = os.getenv("BLINKY_GROQ_VISION_MODEL", "").strip() or os.getenv("BLINKY_GROQ_MODEL", "").strip()
-    if not model or model in DECOMMISSIONED_GROQ_MODELS or model == "llama-3.3-70b-versatile":
+    if not model or model in DECOMMISSIONED_GROQ_MODELS:
         return DEFAULT_GROQ_VISION_MODEL
     return model
+
 
 
 def _format_groq_error(response: requests.Response, model: str = "") -> str:
