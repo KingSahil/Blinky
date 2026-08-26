@@ -421,128 +421,62 @@ pub fn start_global_click_listener(app: AppHandle) {
 
 
 
-fn create_blinky_orange_cursor() -> windows_sys::Win32::UI::WindowsAndMessaging::HCURSOR {
-    unsafe {
-        use windows_sys::Win32::Graphics::Gdi::{
-            CreateBitmap, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject,
-            BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
-        };
-        use windows_sys::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, ICONINFO};
-
-        let width: i32 = 32;
-        let height: i32 = 32;
-
-        let mut bmi: BITMAPINFO = std::mem::zeroed();
-        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        bmi.bmiHeader.biWidth = width;
-        bmi.bmiHeader.biHeight = -height; // Top-down DIB
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB as u32;
-
-        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let hdc = CreateCompatibleDC(0 as _);
-        let hbm_color = CreateDIBSection(
-            hdc,
-            &bmi,
-            DIB_RGB_COLORS,
-            &mut bits,
-            0 as _,
-            0,
-        );
-
-        if hbm_color.is_null() || bits.is_null() {
-            if !hdc.is_null() {
-                DeleteDC(hdc);
-            }
-            return std::ptr::null_mut();
-        }
-
-        let pixel_slice = std::slice::from_raw_parts_mut(bits as *mut u32, (width * height) as usize);
-        pixel_slice.fill(0);
-
-        for y in 0..height {
-            for x in 0..width {
-                let inside_main_arrow = (x <= (y * 7) / 10 && y <= 21 && (x + y <= 28))
-                    || (x >= 4 && x <= 11 && y >= 12 && y <= 22 && (x as i32 - y as i32) >= -12 && (x as i32 - y as i32) <= -7);
-                
-                if inside_main_arrow {
-                    let is_border = x == 0 || y == 0 || y == 21 || x == (y * 7) / 10
-                        || x == 4 || x == 11 || y == 22 || (x + y == 28);
-                    
-                    let idx = (y * width + x) as usize;
-                    if is_border {
-                        // Dark outline border: ARGB 0xFF6B1800 (BGRA: 0x00, 0x18, 0x6B, 0xFF)
-                        pixel_slice[idx] = 0xFF6B1800;
-                    } else {
-                        // Vibrant Ember Orange fill: ARGB 0xFFFF6F43 (BGRA: 0x43, 0x6F, 0xFF, 0xFF)
-                        pixel_slice[idx] = 0xFFFF6F43;
-                    }
-                }
-            }
-        }
-
-        let mask_bytes_count = ((width * height) / 8) as usize;
-        let mut mask_data = vec![0xFFu8; mask_bytes_count];
-        for y in 0..height {
-            for x in 0..width {
-                let idx = (y * width + x) as usize;
-                if pixel_slice[idx] != 0 {
-                    let byte_idx = idx / 8;
-                    let bit_idx = 7 - (idx % 8);
-                    mask_data[byte_idx] &= !(1 << bit_idx);
-                }
-            }
-        }
-
-        let hbm_mask = CreateBitmap(width, height, 1, 1, mask_data.as_ptr() as *const _);
-
-        let icon_info = ICONINFO {
-            fIcon: 0, // FALSE for cursor
-            xHotspot: 0,
-            yHotspot: 0,
-            hbmMask: hbm_mask,
-            hbmColor: hbm_color,
-        };
-
-        let h_cursor = CreateIconIndirect(&icon_info);
-
-        DeleteObject(hbm_color as _);
-        DeleteObject(hbm_mask as _);
-        DeleteDC(hdc);
-
-        h_cursor
-    }
-}
-
 pub fn set_system_cursor_visibility(visible: bool) {
     unsafe {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            SetSystemCursor, SystemParametersInfoW, OCR_NORMAL, OCR_HAND, OCR_IBEAM, SPI_SETCURSORS,
+            CreateCursor, SetSystemCursor, SystemParametersInfoW, OCR_NORMAL, OCR_HAND, OCR_IBEAM, SPI_SETCURSORS,
         };
 
         if visible {
             // Restore native default system cursors
             SystemParametersInfoW(SPI_SETCURSORS, 0, std::ptr::null_mut(), 0);
         } else {
-            // Replace hardware OS cursor with Ember Orange Blinky cursor (hardware layer topmost above everything)
-            let orange_normal = create_blinky_orange_cursor();
-            if !orange_normal.is_null() {
-                SetSystemCursor(orange_normal, OCR_NORMAL);
+            // Create transparent 32x32 blank cursor masks so our Smart AI Cursor takes center stage
+            let and_mask = [0xFFu8; 128];
+            let xor_mask = [0x00u8; 128];
+            
+            let blank_normal = CreateCursor(
+                0 as _,
+                0,
+                0,
+                32,
+                32,
+                and_mask.as_ptr() as *const _,
+                xor_mask.as_ptr() as *const _,
+            );
+            if !blank_normal.is_null() {
+                SetSystemCursor(blank_normal, OCR_NORMAL);
             }
 
-            let orange_hand = create_blinky_orange_cursor();
-            if !orange_hand.is_null() {
-                SetSystemCursor(orange_hand, OCR_HAND);
+            let blank_hand = CreateCursor(
+                0 as _,
+                0,
+                0,
+                32,
+                32,
+                and_mask.as_ptr() as *const _,
+                xor_mask.as_ptr() as *const _,
+            );
+            if !blank_hand.is_null() {
+                SetSystemCursor(blank_hand, OCR_HAND);
             }
 
-            let orange_ibeam = create_blinky_orange_cursor();
-            if !orange_ibeam.is_null() {
-                SetSystemCursor(orange_ibeam, OCR_IBEAM);
+            let blank_ibeam = CreateCursor(
+                0 as _,
+                0,
+                0,
+                32,
+                32,
+                and_mask.as_ptr() as *const _,
+                xor_mask.as_ptr() as *const _,
+            );
+            if !blank_ibeam.is_null() {
+                SetSystemCursor(blank_ibeam, OCR_IBEAM);
             }
         }
     }
 }
+
 
 
 pub fn register_exit_cursor_restorer() {
