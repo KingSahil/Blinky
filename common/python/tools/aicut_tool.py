@@ -82,6 +82,17 @@ def find_candidate_file(filename_or_path: str, active_dir: str | None = None, fi
     return str(raw_path) if raw_path.exists() else None
 
 
+def _detect_whisper_model(q_lower: str) -> str:
+    """Pick a faster-whisper model size from the query ('small model', etc.)."""
+    model_match = re.search(r"\b(tiny|base|small|medium|large[-\s]?v3?|large)\b", q_lower)
+    if model_match:
+        size = model_match.group(1).lower().replace(" ", "-")
+        if size == "large-v3" or size == "large":
+            return "large-v3"
+        return size
+    return "tiny"
+
+
 def resolve_aicut_request(query: str) -> dict[str, Any] | None:
     """Deterministically parse and classify an AiCut video editor query."""
     if not query:
@@ -232,7 +243,69 @@ def resolve_aicut_request(query: str) -> dict[str, Any] | None:
             "explorer": explorer,
         }
 
-    # 6. Explorer context fallback when explicitly asking for explorer/folder media info
+    # 6. Subtitle / caption patterns (preset-aware)
+    subtitle_pattern = (
+        r"\b(?:burn|add|put|apply|overlay|write)\b.*?\b(?:subtitle|caption|subs?|subtitles|captions)\b"
+        r"|\b(?:subtitle|caption|subs?|subtitles|captions)\b.*?(?:to|on|into|for|this|that|the|with)\b.*?\b(?:video|clip|file|mp4|mov|mkv)"
+        r"|\b(?:subtitle|caption)\b\s+(?:this|that|the)?\s*(?:video|clip|file)"
+    )
+    if re.search(subtitle_pattern, q_lower):
+        # Find preset mention (preset/style keyword or known preset name)
+        preset_match = re.search(r"\b(?:preset|style)\s*(?:of|:)?\s*([a-z][a-z0-9\-]+)", q_lower)
+        preset_name = preset_match.group(1) if preset_match else None
+        if not preset_name:
+            # Known preset names used inline: "with hormozi", "in neon-blur style"
+            known_preset = re.search(r"\b(?:with|in|using|use)\s+([a-z][a-z0-9\-]+)\b", q_lower)
+            if known_preset:
+                preset_name = known_preset.group(1)
+
+        video_match = re.search(r"([^\s\"\']+\.(?:mp4|mov|mkv|avi|webm))", q_lower)
+        srt_match = re.search(r"([^\s\"\']+\.(?:srt|vtt))", q_lower)
+
+        video_file = find_candidate_file(video_match.group(1), active_dir) if video_match else None
+        srt_file = find_candidate_file(srt_match.group(1), active_dir) if srt_match else None
+
+        if not video_file and selected_videos:
+            video_file = selected_videos[0]
+        if not srt_file and media_in_folder:
+            subs = [f for f in media_in_folder if Path(f).suffix.lower() in {".srt", ".vtt"}]
+            if len(subs) == 1:
+                srt_file = subs[0]
+
+        # Return the intent even with only partial file resolution — run_aicut
+        # produces a helpful "missing X" error when a file is absent. When no
+        # SRT is found, the burn auto-transcribes the video's audio locally.
+        return {
+            "action": "subtitles",
+            "video_path": video_file,
+            "srt_path": srt_file,
+            "preset": preset_name,
+            "transcribe": srt_file is None,
+            "model_size": _detect_whisper_model(q_lower),
+            "explorer": explorer,
+        }
+
+    # 7. Transcribe / caption generation patterns (faster-whisper STT)
+    transcribe_pattern = (
+        r"\b(?:transcribe|transcript|subtitle|caption)\b.*?\b(?:audio|video|file|recording|clip)\b"
+        r"|\b(?:get|make|create|write)\b.*?\b(?:subtitles?|captions?|transcript|srt)\b"
+    )
+    if re.search(transcribe_pattern, q_lower):
+        audio_match = re.search(r"([^\s\"\']+\.(?:mp4|mov|mkv|avi|webm|mp3|wav|m4a|flac|ogg))", q_lower)
+        audio_file = find_candidate_file(audio_match.group(1), active_dir) if audio_match else None
+        if not audio_file and selected_videos:
+            audio_file = selected_videos[0]
+        if not audio_file and selected_audios:
+            audio_file = selected_audios[0]
+        if audio_file:
+            return {
+                "action": "transcribe",
+                "audio_path": audio_file,
+                "model_size": _detect_whisper_model(q_lower),
+                "explorer": explorer,
+            }
+
+    # 8. Explorer context fallback when explicitly asking for explorer/folder media info
     if any(k in q_lower for k in ["what videos", "list videos", "show clips", "explorer media", "selected files", "what files are in folder"]):
         return {
             "action": "explorer_context",
@@ -308,6 +381,43 @@ def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
         elif action == "explorer_context":
             return aicut_mcp.get_explorer_context()
 
+        elif action == "subtitles":
+            video_path = payload.get("video_path") or payload.get("input_path")
+            srt_path = payload.get("srt_path") or payload.get("subtitle_path")
+            if not video_path:
+                return {
+                    "success": False,
+                    "error": "No video file specified or found in File Explorer. Please provide a video file (e.g. 'burn subtitles to dance.mp4').",
+                }
+            if not srt_path and not payload.get("transcribe"):
+                return {
+                    "success": False,
+                    "error": "No SRT subtitle file specified or found, and transcription is off. Please provide a subtitle file (e.g. 'burn subtitles from captions.srt to dance.mp4') or ask to transcribe the video audio.",
+                }
+            return aicut_mcp.burn_subtitles(
+                video_path=video_path,
+                srt_path=srt_path,
+                preset=payload.get("preset") or "hormozi",
+                output_path=payload.get("output_path"),
+                transcribe=payload.get("transcribe", False) or srt_path is None,
+                model_size=payload.get("model_size") or "tiny",
+                language=payload.get("language"),
+            )
+
+        elif action == "transcribe":
+            audio_path = payload.get("audio_path") or payload.get("video_path") or payload.get("input_path")
+            if not audio_path:
+                return {
+                    "success": False,
+                    "error": "No audio or video file specified or found. Please provide a media file (e.g. 'transcribe this audio').",
+                }
+            return aicut_mcp.transcribe_audio(
+                audio_path=audio_path,
+                model_size=payload.get("model_size") or "tiny",
+                language=payload.get("language"),
+                srt_output=payload.get("srt_output"),
+            )
+
         else:
             return {"success": False, "error": f"Unknown AiCut action: {action}"}
 
@@ -359,6 +469,34 @@ def format_aicut_summary(result: dict[str, Any], query: str = "") -> str:
             f"- **Combined {len(inputs)} Clips**:\n{clips_str}\n"
             f"- **Saved Output**: `{out}`\n\n"
             f"All video clips joined seamlessly into a single sequence."
+        )
+
+    if action == "subtitles" or "output_path" in result and "preset" in result:
+        vid = result.get("output_path", "")
+        preset = result.get("preset", "hormozi")
+        lines = [
+            f"**Styled Subtitles Burned** \n\n",
+            f"- **Preset**: `{preset}`\n",
+            f"- **Saved Output**: `{vid}`\n",
+        ]
+        # If transcription happened as part of the burn, surface the text
+        trans = result.get("transcription") or {}
+        if trans.get("text"):
+            lines.append(f"- **Transcribed ({trans.get('language')}, {trans.get('model')})**: {trans['text'][:200]}\n")
+        lines.append("\nSubtitles rendered directly into the video frames with the `{0}` style.".format(preset))
+        return "".join(lines)
+
+    if action == "transcribe":
+        srt = result.get("srt_path", "")
+        lang = result.get("language", "?")
+        text = (result.get("text") or "")[:300]
+        segs = len(result.get("segments", []))
+        return (
+            f"**Transcription Complete** \n\n"
+            f"- **SRT File**: `{srt}`\n"
+            f"- **Language**: `{lang}` · **Segments**: `{segs}`\n"
+            f"- **Transcript**: {text}\n\n"
+            f"Caption file ready to use or burn with a subtitle preset."
         )
 
     if "duration_seconds" in result:

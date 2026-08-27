@@ -16,6 +16,9 @@ sounddevice>=0.5.1
 evdev>=1.7.0
 openwakeword>=0.4.0
 
+# Faster Whisper (CTranslate2-based STT) — models cache to ~/.cache/huggingface by default
+faster-whisper>=1.2.1
+
 # AT-SPI bindings (GNOME/KDE backends — phase 8). Arch: python-atspi (system pkg, not pip)
 # python-atspi
 

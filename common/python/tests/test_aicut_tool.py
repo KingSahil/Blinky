@@ -88,3 +88,130 @@ def test_resolve_add_song_with_referenced_files_and_phrasings():
     assert resolved["action"] == "add_song"
     assert resolved["video_path"] == video
     assert resolved["song_path"] == song
+
+
+# ── Subtitle / caption integration ────────────────────────────────────
+
+def test_resolve_subtitle_burn_query():
+    q = "burn subtitles to /tmp/test_video.mp4 with hormozi preset"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "subtitles"
+    assert res["video_path"] == "/tmp/test_video.mp4"
+    assert res["preset"] == "hormozi"
+
+
+def test_resolve_subtitle_subs_shorthand():
+    q = "burn subs from /tmp/test_subs.srt to /tmp/test_video.mp4 using pill-yellow"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "subtitles"
+    assert res["srt_path"] == "/tmp/test_subs.srt"
+    assert res["video_path"] == "/tmp/test_video.mp4"
+    assert res["preset"] == "pill-yellow"
+
+
+def test_resolve_subtitle_inline_preset():
+    q = "subtitle this video with neon-blur"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "subtitles"
+    assert res["preset"] == "neon-blur"
+
+
+def test_resolve_subtitle_no_files_returns_intent():
+    # Intent should be returned even when files are unresolved (run_aicut gives
+    # a helpful "missing X" error).
+    q = "add subtitles to the video"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "subtitles"
+    assert res["video_path"] is None
+
+
+def test_run_subtitle_missing_video_error():
+    res = run_aicut({"action": "subtitles", "srt_path": "/tmp/test_subs.srt"})
+    assert res.get("success") is False
+    assert "No video file" in res.get("error", "")
+
+
+def test_run_subtitle_missing_srt_error():
+    res = run_aicut({"action": "subtitles", "video_path": "/tmp/test_video.mp4"})
+    assert res.get("success") is False
+    assert "No SRT subtitle" in res.get("error", "")
+
+
+def test_format_subtitle_summary():
+    result = {
+        "success": True,
+        "action": "subtitles",
+        "output_path": "/tmp/out.mp4",
+        "preset": "hormozi",
+    }
+    summary = format_aicut_summary(result, "burn subtitles")
+    assert "Styled Subtitles Burned" in summary
+    assert "hormozi" in summary
+
+
+# ── faster-whisper transcription integration ─────────────────────────
+
+def test_resolve_transcribe_query():
+    q = "transcribe this video /tmp/test_video.mp4"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "transcribe"
+    assert res["audio_path"] == "/tmp/test_video.mp4"
+    assert res["model_size"] == "tiny"
+
+
+def test_resolve_make_subtitles_query():
+    q = "make subtitles from /tmp/test_video.mp4"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "transcribe"
+    assert res["audio_path"] == "/tmp/test_video.mp4"
+
+
+def test_resolve_subtitle_no_srt_auto_transcribes():
+    q = "burn subtitles to /tmp/test_video.mp4 with hormozi"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "subtitles"
+    assert res["srt_path"] is None
+    assert res["transcribe"] is True
+
+
+def test_resolve_subtitle_with_srt_does_not_transcribe():
+    q = "burn subtitles from /tmp/test_subs.srt to /tmp/test_video.mp4 with hormozi"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "subtitles"
+    assert res["srt_path"] == "/tmp/test_subs.srt"
+    assert res["transcribe"] is False
+
+
+def test_detect_whisper_model():
+    from tools.aicut_tool import _detect_whisper_model
+    assert _detect_whisper_model("transcribe with small model") == "small"
+    assert _detect_whisper_model("use large-v3") == "large-v3"
+    assert _detect_whisper_model("just transcribe") == "tiny"
+
+
+def test_run_transcribe_missing_audio_error():
+    res = run_aicut({"action": "transcribe"})
+    assert res.get("success") is False
+    assert "No audio or video" in res.get("error", "")
+
+
+def test_format_transcribe_summary():
+    result = {
+        "success": True,
+        "action": "transcribe",
+        "srt_path": "/tmp/out.srt",
+        "language": "en",
+        "text": "hello world",
+        "segments": [{"id": 1}],
+    }
+    summary = format_aicut_summary(result)
+    assert "Transcription Complete" in summary
+    assert "/tmp/out.srt" in summary

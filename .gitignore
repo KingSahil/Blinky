@@ -59,3 +59,8 @@ log[0-9]*.txt
 
 # Whitelist root-level scripts folder
 !/scripts/
+# Whisper/STT model caches (downloaded on demand)
+.huggingface/
+cache/huggingface/
+models/
+*.bin

@@ -398,7 +398,172 @@ MCP_TOOL_SCHEMAS = [
             "properties": {},
         },
     },
+    {
+        "name": "aicut_burn_subtitles",
+        "description": "Burn styled subtitles into a video using a named preset. If srt_path is omitted, the video's audio is transcribed locally with faster-whisper (private, on-device) and burned automatically. Supports 16 presets: hormozi, word-karaoke, pill-yellow, pill-red, typewriter, color-switch, hormozi-clean, keyword-green, lecture-dual, documentary, cinematic-lowerthird, quiet-minimal, glassmorphism, neon-blur, meme-impact, retro-yellow.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "video_path": {"type": "string", "description": "Path to the video file to subtitle."},
+                "srt_path": {"type": "string", "description": "Optional path to an existing SRT subtitle file. If omitted, audio is transcribed automatically with faster-whisper."},
+                "preset": {"type": "string", "description": "Style preset name (default: hormozi).", "default": "hormozi"},
+                "output_path": {"type": "string", "description": "Optional destination path for the subtitled video."},
+                "transcribe": {"type": "boolean", "description": "Force transcription even if an SRT is provided (default false).", "default": False},
+                "model_size": {"type": "string", "description": "faster-whisper model size for auto-transcription (tiny/base/small/medium/large-v3, default tiny).", "default": "tiny"},
+                "language": {"type": "string", "description": "Optional language hint for transcription (e.g. 'en', 'hi'). Auto-detected if omitted."},
+            },
+            "required": ["video_path"],
+        },
+    },
+    {
+        "name": "aicut_transcribe_audio",
+        "description": "Transcribe audio or video to an SRT file using faster-whisper (local, private, no cloud). Returns segments with timestamps.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "audio_path": {"type": "string", "description": "Path to audio or video file to transcribe."},
+                "model_size": {"type": "string", "description": "Whisper model size: tiny (fast), base, small, medium, large-v3 (accurate). Default tiny.", "default": "tiny"},
+                "language": {"type": "string", "description": "Optional language hint (e.g. 'en'). Auto-detected if omitted."},
+                "srt_output": {"type": "string", "description": "Optional destination path for the SRT file. Defaults to <input>.srt next to the source."},
+            },
+            "required": ["audio_path"],
+        },
+    },
 ]
+
+
+def transcribe_audio(
+    audio_path: str,
+    model_size: str = "tiny",
+    language: str | None = None,
+    srt_output: str | None = None,
+) -> dict[str, Any]:
+    """Transcribe audio/video to SRT using faster-whisper (local, private).
+
+    Returns {"success", "srt_path", "segments", "language", "text"}.
+    If srt_output is None, writes alongside the input as <stem>.srt.
+    """
+    a_path = Path(audio_path).resolve()
+    if not a_path.exists():
+        return {"success": False, "error": f"Audio/video file not found: {audio_path}"}
+
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError as exc:
+        return {
+            "success": False,
+            "error": "faster-whisper not installed. Run: uv pip install --python .venv/bin/python faster-whisper",
+        }
+
+    try:
+        model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        segments_iter, info = model.transcribe(str(a_path), language=language)
+
+        segments = []
+        srt_lines: list[str] = []
+        for i, seg in enumerate(segments_iter, 1):
+            segments.append(
+                {
+                    "id": i,
+                    "start": round(seg.start, 2),
+                    "end": round(seg.end, 2),
+                    "text": seg.text.strip(),
+                }
+            )
+            start_ts = _srt_timestamp(seg.start)
+            end_ts = _srt_timestamp(seg.end)
+            srt_lines.append(f"{i}\n{start_ts} --> {end_ts}\n{seg.text.strip()}\n")
+
+        if not srt_output:
+            srt_output = str(a_path.with_suffix(".srt"))
+
+        out = Path(srt_output).resolve()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("\n".join(srt_lines), encoding="utf-8")
+
+        return {
+            "success": True,
+            "srt_path": str(out),
+            "segments": segments,
+            "language": info.language,
+            "language_probability": round(info.language_probability, 3),
+            "text": " ".join(s["text"] for s in segments),
+            "model": model_size,
+        }
+    except Exception as exc:
+        return {"success": False, "error": f"Transcription failed: {exc}"}
+
+
+def _srt_timestamp(seconds: float) -> str:
+    """Convert seconds to SRT timestamp (HH:MM:SS,mmm)."""
+    ms = int(round(seconds * 1000))
+    h, rem = divmod(ms, 3600000)
+    m, rem = divmod(rem, 60000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def burn_subtitles(
+    video_path: str,
+    srt_path: str | None = None,
+    preset: str = "hormozi",
+    output_path: str | None = None,
+    *,
+    transcribe: bool = False,
+    model_size: str = "tiny",
+    language: str | None = None,
+) -> dict[str, Any]:
+    """Burn styled subtitles into a video using the subtitles preset system.
+
+    If srt_path is None (or transcribe=True), the video's audio is first
+    transcribed locally with faster-whisper into an SRT, then burned.
+    """
+    # Resolve the subtitles package (sibling of aicut: common/python)
+    import sys as _sys
+
+    common_python = ROOT_DIR.parent / "python"
+    if str(common_python) not in _sys.path:
+        _sys.path.insert(0, str(common_python))
+
+    from subtitles.presets import PRESETS, list_presets
+    from subtitles.render import burn
+
+    v_path = Path(video_path).resolve()
+
+    if not v_path.exists():
+        return {"success": False, "error": f"Video file not found: {video_path}"}
+    if preset not in PRESETS:
+        available = ", ".join(PRESETS)
+        return {
+            "success": False,
+            "error": f"Unknown subtitle preset '{preset}'. Available: {available}",
+        }
+
+    # Auto-transcribe when no SRT given (or explicitly requested)
+    transcribe_result = None
+    if srt_path is None or transcribe:
+        transcribe_result = transcribe_audio(str(v_path), model_size=model_size, language=language)
+        if not transcribe_result.get("success"):
+            return transcribe_result
+        srt_path = transcribe_result["srt_path"]
+
+    assert srt_path is not None  # guaranteed by transcribe or caller
+    s_path = Path(srt_path).resolve()
+    if not s_path.exists():
+        return {"success": False, "error": f"SRT file not found: {srt_path}"}
+
+    if not output_path:
+        output_path = resolve_output_path(str(v_path), "_subtitled")
+
+    out = Path(output_path).resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    result = burn(v_path, s_path, preset, out)
+    if result.get("success"):
+        result["preset"] = preset
+        if transcribe_result:
+            result["transcription"] = transcribe_result
+    return result
 
 
 def handle_mcp_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -458,6 +623,23 @@ def handle_mcp_request(request: dict[str, Any]) -> dict[str, Any]:
                 res = get_media_info(file_path=args["file_path"])
             elif tool_name == "aicut_get_explorer_context":
                 res = get_explorer_context()
+            elif tool_name == "aicut_burn_subtitles":
+                res = burn_subtitles(
+                    video_path=args["video_path"],
+                    srt_path=args.get("srt_path"),
+                    preset=args.get("preset", "hormozi"),
+                    output_path=args.get("output_path"),
+                    transcribe=args.get("transcribe", False),
+                    model_size=args.get("model_size", "tiny"),
+                    language=args.get("language"),
+                )
+            elif tool_name == "aicut_transcribe_audio":
+                res = transcribe_audio(
+                    audio_path=args["audio_path"],
+                    model_size=args.get("model_size", "tiny"),
+                    language=args.get("language"),
+                    srt_output=args.get("srt_output"),
+                )
             else:
                 return {
                     "jsonrpc": "2.0",
@@ -547,8 +729,25 @@ def run_cli_direct(args_json_str: str):
             res = get_media_info(file_path=data.get("file_path") or data.get("input_path", ""))
         elif action in {"explorer", "explorer_context", "get_explorer_context"}:
             res = get_explorer_context()
+        elif action in {"subtitle", "subtitles", "burn_subtitles", "burn_subs", "add_captions"}:
+            res = burn_subtitles(
+                video_path=data.get("video_path") or data.get("input_path", ""),
+                srt_path=data.get("srt_path") or data.get("subtitle_path"),
+                preset=data.get("preset", "hormozi"),
+                output_path=data.get("output_path"),
+                transcribe=data.get("transcribe", False),
+                model_size=data.get("model_size", "tiny"),
+                language=data.get("language"),
+            )
+        elif action in {"transcribe", "transcribe_audio", "stt", "speech_to_text", "subtitle_gen"}:
+            res = transcribe_audio(
+                audio_path=data.get("audio_path") or data.get("input_path", ""),
+                model_size=data.get("model_size", "tiny"),
+                language=data.get("language"),
+                srt_output=data.get("srt_output"),
+            )
         else:
-            res = {"error": f"Unknown action: {action}", "available_actions": ["trim", "add_song", "merge", "media_info", "explorer_context"]}
+            res = {"error": f"Unknown action: {action}", "available_actions": ["trim", "add_song", "merge", "media_info", "explorer_context", "subtitles"]}
 
         print(json.dumps(res, indent=2))
     except Exception as err:
