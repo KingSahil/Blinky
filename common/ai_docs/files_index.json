@@ -180,5 +180,10 @@
       "path": "windows/requirements.txt",
       "desc": "Python dependencies for capture, OCR, UIA, requests, and platform-specific tooling"
     }
-  ]
+  ],
+  "common/aicut/aicut_mcp.py": "Model Context Protocol server for AiCut video editing operations.",
+  "common/aicut/build/AIVideoEditor.exe": "Compiled C++ high-performance video editor executable.",
+  "common/python/tools/aicut_tool.py": "Blinky tool integrating AiCut with chat drag-and-drop file attachments and Explorer context.",
+  "common/python/utils/explorer.py": "Windows COM Shell.Application inspector for active File Explorer paths and media selection.",
+  "common/ai_docs/10_aicut_video_editor.md": "AiCut video editor and Model Context Protocol architecture documentation."
 }

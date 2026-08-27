@@ -264,3 +264,17 @@ WebSocket hook. Appends `:9001` when needed, tracks connection state, parses JSO
 ### `common/mobile/AGENTS.md`
 
 Project instruction: check the exact Expo versioned docs before editing mobile code.
+
+
+### `common/aicut/`
+- **`aicut_mcp.py`**: Model Context Protocol stdio server exposing `aicut_trim_video`, `aicut_add_song`, `aicut_merge_videos`, `aicut_get_media_info`, and `aicut_get_explorer_context`.
+- **`build/AIVideoEditor.exe`**: Compiled C++ binary implementing `TrimEngine`, `MusicMergeEngine`, and `MergeEngine`.
+- **`src/` & `include/`**: C++ source and headers for CLI parsing and video processing engines.
+
+### `common/python/tools/aicut_tool.py`
+- Deterministic query parser for video editing intents (`trim`, `add_song`, `merge`, `media_info`).
+- Resolves file references from prompt attachments and active Windows Explorer context.
+- Formats markdown summary responses.
+
+### `common/python/utils/explorer.py`
+- Windows COM `Shell.Application` integration to query active Explorer directory paths, selected files, and directory media files.

@@ -32,6 +32,7 @@ Blinky has four major interaction modes:
 ```text
 c:\projects\Jarvis
 ├── common/
+│   ├── aicut/               Embedded C++ Video Editor & MCP Server (AIVideoEditor.exe, aicut_mcp.py)
 │   ├── ai/              Documentation hub
 │   ├── frontend/src/    React/Tauri command bar and overlay views
 │   ├── mobile/          Expo remote controller

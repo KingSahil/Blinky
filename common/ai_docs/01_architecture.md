@@ -168,3 +168,16 @@ Settings are persisted to `.env` through `get_settings` / `save_settings` in Rus
 - Linux overlay positioning avoids the GNOME top panel by moving the overlay below the panel when `XDG_CURRENT_DESKTOP` contains `GNOME`.
 - UIA is Windows-only. On non-Windows, screen understanding relies primarily on screenshot/OCR paths.
 - `common/mobile/AGENTS.md` says Expo docs must be checked before editing mobile code.
+
+## 10. Embedded AiCut Video Editor & MCP Subsystem
+
+Blinky embeds the **AiCut** C++ video editing engine in `common/aicut/`.
+
+### Architecture & Data Flow
+1. **Frontend**: Users can drag & drop video/audio files into the CommandBar or highlight files in Windows File Explorer.
+2. **Intent Classification**: `main.py` classifies `VIDEO_EDIT` intent in **<50ms** via `tools.aicut_tool.resolve_aicut_request`.
+3. **Execution**: `aicut_tool.py` calls `common/aicut/aicut_mcp.py` which executes `common/aicut/build/AIVideoEditor.exe`.
+4. **Operations**:
+   - **Trim**: Lossless FFmpeg stream copying without re-encoding.
+   - **Add Song**: Audio mixing with `amix=inputs=2:duration=longest` and AAC encoding.
+   - **Merge**: Multi-clip concatenation with aspect-ratio-preserving scaling (`scale`, `pad`) and audio channel normalization (`aformat`).
