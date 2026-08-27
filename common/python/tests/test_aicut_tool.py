@@ -1,6 +1,6 @@
 ﻿import pytest
 from pathlib import Path
-from tools.aicut_tool import resolve_aicut_request, run_aicut, format_aicut_summary, find_candidate_file
+from tools.aicut_tool import AICUT_ROOT, resolve_aicut_request, run_aicut, format_aicut_summary, find_candidate_file
 
 def test_resolve_trim_query():
     q = "trim dance.mp4 from 10 to 25 seconds"

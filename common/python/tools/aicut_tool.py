@@ -19,7 +19,10 @@ _COMMON_DIR = Path(__file__).resolve().parent.parent
 if str(_COMMON_DIR) not in sys.path:
     sys.path.insert(0, str(_COMMON_DIR))
 
-AICUT_ROOT = Path(r"C:\Projects\AiCut")
+_COMMON_ROOT = Path(__file__).resolve().parent.parent.parent
+AICUT_ROOT = _COMMON_ROOT / "aicut"
+if not AICUT_ROOT.exists():
+    AICUT_ROOT = Path(r"C:\Projects\AiCut")
 AICUT_MCP_PY = AICUT_ROOT / "aicut_mcp.py"
 
 try:
