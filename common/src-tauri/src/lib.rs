@@ -385,6 +385,7 @@ async fn save_settings(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn get_active_shortcut_from_env(app: &AppHandle) -> String {
     if let Ok(root) = project_root(app) {
         let env_vars = read_env_file(&root);
@@ -990,24 +991,32 @@ pub fn run() {
                 }
             }
 
-            // Register Win+Space (Super+Space) exclusively for push-to-talk voice recording
-            let win_space_shortcut = Shortcut::new(Some(Modifiers::SUPER), Code::Space);
-            let ptt_handle = app_handle.clone();
-            if let Err(err) = app
-                .global_shortcut()
-                .on_shortcut(win_space_shortcut, move |_app, _shortcut, event| {
-                    if let Some(command) = ptt_handle.get_webview_window("command") {
-                        if event.state() == ShortcutState::Pressed {
-                            let _ = command.show();
-                            let _ = command.set_focus();
-                            let _ = command.emit("blinky://push-to-talk", true);
-                        } else if event.state() == ShortcutState::Released {
-                            let _ = command.emit("blinky://push-to-talk", false);
+            // Register global push-to-talk voice recording shortcuts (Ctrl+Space and Win+Space)
+            for (mods, name) in [
+                (Modifiers::CONTROL, "Ctrl+Space"),
+                (Modifiers::SUPER, "Win+Space"),
+            ] {
+                let shortcut = Shortcut::new(Some(mods), Code::Space);
+                let ptt_handle = app_handle.clone();
+                if let Err(err) = app
+                    .global_shortcut()
+                    .on_shortcut(shortcut, move |_app, _shortcut, event| {
+                        if let Some(command) = ptt_handle.get_webview_window("command") {
+                            if event.state() == ShortcutState::Pressed {
+                                let _ = command.show();
+                                let _ = command.set_focus();
+                                let _ = command.emit("blinky://push-to-talk", true);
+                            } else if event.state() == ShortcutState::Released {
+                                let _ = command.emit("blinky://push-to-talk", false);
+                            }
                         }
+                    })
+                {
+                    // Win+Space is reserved by Windows OS for keyboard layout switching; Ctrl+Space acts as primary
+                    if mods != Modifiers::SUPER {
+                        eprintln!("Failed to register {name} push-to-talk shortcut: {err}");
                     }
-                })
-            {
-                eprintln!("Failed to register Win+Space push-to-talk shortcut: {err}");
+                }
             }
 
             Ok(())

@@ -995,6 +995,17 @@ export function CommandBar() {
     await new Promise(resolve => setTimeout(resolve, 300));
     void showOverlay();
 
+    // Ensure AudioContext is initialized before starting recording (e.g. on hotkey first start)
+    try {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      } else if (audioCtxRef.current.state === 'suspended') {
+        await audioCtxRef.current.resume();
+      }
+    } catch (ctxErr) {
+      console.warn('AudioContext initialization note:', ctxErr);
+    }
+
     let stream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1009,8 +1020,14 @@ export function CommandBar() {
         }
       };
       
-      // Setup VAD using the shared global AudioContext which was initialized during toggleRecording
-      const audioCtx = audioCtxRef.current!;
+      // Setup VAD using AudioContext
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+      }
+      if (audioCtxRef.current.state === 'suspended') {
+        await audioCtxRef.current.resume();
+      }
+      const audioCtx = audioCtxRef.current;
       const source = audioCtx.createMediaStreamSource(stream);
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
       
@@ -1174,6 +1191,12 @@ export function CommandBar() {
         if (agentResult.computer_use) {
           result = agentResult;
         } else {
+          // Immediately speak explanation/action as autopilot starts so AI speaks without waiting for clicks to finish
+          if (shouldSpeakAfter && agentResult.summary) {
+            void speakText(agentResult.summary, getDisplaySteps(agentResult.steps || []), { includeSteps: false });
+            hasStreamedTtsRef.current = true;
+          }
+
           // Vision-guided autopilot loop (screen-based clicking)
           const isSingleAction = isSingleActionQuery(queryText);
           let firstObservation: TutorResult | null = null;
@@ -1255,6 +1278,12 @@ export function CommandBar() {
           await logDebugMessage(`[executeTutor] (Standard) Step 1: instruction="${step.instruction}", target_ref="${step.target_ref}", target_text="${step.target_text}", hasMatch=${!!step.match}`);
         }
 
+        // Immediately start voice readback before autopilot action
+        if (shouldSpeakAfter && result.summary) {
+          void speakText(result.summary, getDisplaySteps(result.steps || []), { includeSteps: !showGuideCompletionSummary });
+          hasStreamedTtsRef.current = true;
+        }
+
         // Auto-trigger autopilot click for locator fast path results with click instructions
         const clickStep = result.steps?.find((s) => s.instruction && s.match);
         if (clickStep) {
@@ -1331,22 +1360,8 @@ export function CommandBar() {
       if (inputRef.current) {
         inputRef.current.style.height = 'auto';
       }
-      if (shouldSpeakAfter) {
-        if (!hasStreamedTtsRef.current && result.summary) {
-          void speakText(result.summary, currentGuideSteps, { includeSteps: !showGuideCompletionSummary });
-        } else {
-          if (speechBufferRef.current.trim()) {
-            pushToTtsQueue(speechBufferRef.current.trim());
-            speechBufferRef.current = '';
-          }
-          
-          if (currentGuideSteps.length > 0) {
-            const stepText = currentGuideSteps.map((s, i) => `Step ${i + 1}. ${s.instruction}`).join('. ');
-            pushToTtsQueue(`Steps: ${stepText}`, true);
-          }
-
-          void processTtsFetchQueueRef.current();
-        }
+      if (shouldSpeakAfter && !hasStreamedTtsRef.current && result.summary) {
+        void speakText(result.summary, currentGuideSteps, { includeSteps: !showGuideCompletionSummary });
       }
     } catch (error) {
       if (cancelledRunIdsRef.current.has(runId)) {
@@ -1410,10 +1425,10 @@ export function CommandBar() {
     };
   }, []);
 
-  // Global shortcut to toggle voice recording via Win+Space
+  // Global shortcut to toggle voice recording via Ctrl+Space / Win+Space
   useEffect(() => {
     const handleVoiceShortcut = (event: KeyboardEvent) => {
-      if ((event.key === ' ' || event.code === 'Space') && event.metaKey) {
+      if ((event.key === ' ' || event.code === 'Space') && (event.metaKey || event.ctrlKey)) {
         event.preventDefault();
         if (!isRunning && !isTranscribing) {
           toggleRecording();
@@ -1484,7 +1499,7 @@ export function CommandBar() {
 
 
 
-  const isVoiceActive = isSpeaking || isRecording || isTtsActive;
+  const isVoiceActive = isSpeaking || isRecording || isTtsActive || (isRunning && workflowStartedWithReadbackRef.current);
 
   useEffect(() => {
     isRecordingRef.current = isRecording;

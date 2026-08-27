@@ -25,29 +25,45 @@ export interface SpeechStep {
   instruction?: string;
 }
 
+export function cleanSpokenText(text: string): string {
+  let cleaned = (text || '')
+    // Remove markdown links [text](url) -> text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // Remove citation markers [1], [2], etc.
+    .replace(/\[\d+\]/g, '')
+    // Remove markdown formatting characters (*, _, `, #)
+    .replace(/[*_`#~]/g, '')
+    // Remove robotic prefixes like "Step 1:", "Step 1.", "Step 2 -", "Steps:"
+    .replace(/\bstep\s*\d+[\s:.-]+/gi, '')
+    .replace(/\bsteps[\s:.-]+/gi, '')
+    // Clean up multiple spaces and empty punctuation
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (cleaned.length > 0) {
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }
+  return cleaned;
+}
+
 export function buildSpeechContent(
   summaryText: string,
   stepsList: SpeechStep[] = [],
   options: { includeSteps?: boolean } = {},
 ): string {
-  const summary = summaryText.trim();
-  if (!options.includeSteps || stepsList.length === 0) {
+  const summary = cleanSpokenText(summaryText);
+  if (summary) {
     return summary;
   }
 
-  const stepText = stepsList
-    .map((step, idx) => {
-      const instruction = step.instruction?.trim();
-      if (!instruction) return null;
-      return `Step ${step.step || idx + 1}. ${instruction}`;
-    })
-    .filter(Boolean)
-    .join(' ');
+  if (stepsList.length > 0) {
+    const firstValidStep = stepsList.find((s) => s.instruction?.trim());
+    if (firstValidStep?.instruction) {
+      return cleanSpokenText(firstValidStep.instruction);
+    }
+  }
 
-  if (!stepText) return summary;
-  if (!summary) return stepText;
-
-  return `${summary.replace(/[.!?]+$/, '')}. Steps: ${stepText}`;
+  return '';
 }
 
 export function getSarvamErrorMessage(payload: unknown, status: number): string {

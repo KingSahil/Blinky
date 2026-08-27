@@ -123,9 +123,6 @@ export function Overlay() {
         glowContainerRef.current.style.setProperty('--vad-opacity', volume > 0 ? (0.2 + volume * 0.8).toString() : '0');
         glowContainerRef.current.style.setProperty('--glow-scale', (1 + volume * 0.2).toString());
         glowContainerRef.current.style.setProperty('--glow-speed', `${4 - volume * 2.5}s`);
-        if (volume > 0.05) {
-          setIsVoiceActive(true);
-        }
       }
     });
 
@@ -137,7 +134,6 @@ export function Overlay() {
       setAgentCursorVisible(event.payload.visible);
       if (!event.payload.visible) {
         isAgentActingRef.current = false;
-        isVoiceActiveRef.current = false;
         if (cursorRef.current) {
           cursorRef.current.style.opacity = '0';
         }
@@ -211,16 +207,14 @@ export function Overlay() {
         };
       }
 
-      // Grace period before restoring native cursor
+      // Safety fallback timeout in case of unexpected backend crash (20 seconds)
       actingTimeoutRef.current = setTimeout(() => {
         isAgentActingRef.current = false;
-        if (!isVoiceActiveRef.current) {
-          setAgentCursorVisible(false);
-          if (cursorRef.current) {
-            cursorRef.current.style.opacity = '0';
-          }
+        setAgentCursorVisible(false);
+        if (cursorRef.current) {
+          cursorRef.current.style.opacity = '0';
         }
-      }, 1200);
+      }, 20000);
     });
 
     const unlistenAgentDone = listen('blinky://agent-cursor-done', () => {
@@ -228,15 +222,13 @@ export function Overlay() {
         clearTimeout(actingTimeoutRef.current);
         actingTimeoutRef.current = null;
       }
-      actingTimeoutRef.current = setTimeout(() => {
-        isAgentActingRef.current = false;
-        if (!isVoiceActiveRef.current) {
-          setAgentCursorVisible(false);
-          if (cursorRef.current) {
-            cursorRef.current.style.opacity = '0';
-          }
+      isAgentActingRef.current = false;
+      if (!isVoiceActiveRef.current) {
+        setAgentCursorVisible(false);
+        if (cursorRef.current) {
+          cursorRef.current.style.opacity = '0';
         }
-      }, 350);
+      }
     });
 
     return () => {

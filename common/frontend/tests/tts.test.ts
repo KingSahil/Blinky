@@ -45,7 +45,7 @@ describe('buildSarvamTtsPayload', () => {
 });
 
 describe('buildSpeechContent', () => {
-  test('keeps automatic voice readback short by default', () => {
+  test('keeps automatic voice readback short and natural', () => {
     expect(
       buildSpeechContent('Open Extensions from the sidebar.', [
         { step: 1, instruction: 'Click Extensions.' },
@@ -54,23 +54,22 @@ describe('buildSpeechContent', () => {
     ).toBe('Open Extensions from the sidebar.');
   });
 
-  test('can include steps for manual readback', () => {
+  test('strips robotic Step 1 prefixes from summary or instructions', () => {
     expect(
-      buildSpeechContent(
-        'Open Extensions from the sidebar.',
-        [{ step: 1, instruction: 'Click Extensions.' }],
-        { includeSteps: true },
-      ),
-    ).toBe('Open Extensions from the sidebar. Steps: Step 1. Click Extensions.');
+      buildSpeechContent('Step 1: click reddit', []),
+    ).toBe('Click reddit');
+
+    expect(
+      buildSpeechContent('Step 1. Click on the Reddit icon.', []),
+    ).toBe('Click on the Reddit icon.');
   });
 
-  test('speaks action guide steps cleanly when summary is hidden', () => {
+  test('speaks fallback step cleanly without step numbers when summary is empty', () => {
     expect(
       buildSpeechContent(
         '',
-        [{ step: 3, instruction: 'Click the Install button for the extension.' }],
-        { includeSteps: true },
+        [{ step: 3, instruction: 'Step 3: Click the Install button for the extension.' }],
       ),
-    ).toBe('Step 3. Click the Install button for the extension.');
+    ).toBe('Click the Install button for the extension.');
   });
 });
