@@ -18,21 +18,21 @@ from pathlib import Path
 from .presets import PRESETS, build_ass, build_ass_text
 
 
-def render_ass(srt_path: str | Path, preset_name: str) -> str:
+def render_ass(srt_path: str | Path, preset_name: str, words_data: list[dict] | None = None) -> str:
     """Generate the styled ASS document for a preset."""
     if preset_name not in PRESETS:
         raise KeyError(f"Unknown preset '{preset_name}'. Available: {', '.join(PRESETS)}")
-    return build_ass(srt_path, preset_name)
+    return build_ass(srt_path, preset_name, words_data=words_data)
 
 
-def _write_temp_ass(srt_path: str | Path, preset_name: str) -> Path:
+def _write_temp_ass(srt_path: str | Path, preset_name: str, words_data: list[dict] | None = None) -> Path:
     import tempfile
 
     fd, tmp = tempfile.mkstemp(suffix=".ass", prefix="blinky_subs_")
     import os
 
     os.close(fd)
-    Path(tmp).write_text(render_ass(srt_path, preset_name), encoding="utf-8")
+    Path(tmp).write_text(render_ass(srt_path, preset_name, words_data=words_data), encoding="utf-8")
     return Path(tmp)
 
 
@@ -42,6 +42,7 @@ def burn(
     preset_name: str,
     out_path: str | Path,
     *,
+    words_data: list[dict] | None = None,
     preset_overrides: dict | None = None,
     font_dir: str | None = None,
 ) -> dict:
@@ -60,13 +61,14 @@ def burn(
         return {"success": False, "error": f"Unknown preset: {preset_name}"}
 
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp_ass = _write_temp_ass(srt, preset_name)
+    tmp_ass = _write_temp_ass(srt, preset_name, words_data=words_data)
     try:
         # Quote/escape the ASS path for the filter string
         ass_escaped = str(tmp_ass).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-        filter_str = f"ass={ass_escaped}"
+        filter_str = f"ass=filename='{ass_escaped}'"
         if font_dir:
-            filter_str += f":fontsdir={font_dir}"
+            font_dir_escaped = str(font_dir).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+            filter_str += f":fontsdir='{font_dir_escaped}'"
 
         cmd = [
             "ffmpeg", "-y",
@@ -116,11 +118,12 @@ def preview(
     out.parent.mkdir(parents=True, exist_ok=True)
     try:
         ass_escaped = str(tmp_ass).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+        filter_str = f"ass=filename='{ass_escaped}'"
         # colorsrc generates a constant-color frame; length covers all subs
         cmd = [
             "ffmpeg", "-y",
             "-f", "lavfi", "-i", f"color=c={bg}:s={text_size}x1080:d=4",
-            "-vf", f"ass={ass_escaped}",
+            "-vf", filter_str,
             "-ss", str(at_seconds),
             "-frames:v", "1",
             str(out),

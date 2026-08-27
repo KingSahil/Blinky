@@ -452,14 +452,15 @@ def transcribe_audio(
     except ImportError as exc:
         return {
             "success": False,
-            "error": "faster-whisper not installed. Run: uv pip install --python .venv/bin/python faster-whisper",
+            "error": "faster-whisper not installed. Run: pip install faster-whisper (or bun run setup:python)",
         }
 
     try:
         model = WhisperModel(model_size, device="cpu", compute_type="int8")
-        segments_iter, info = model.transcribe(str(a_path), language=language)
+        segments_iter, info = model.transcribe(str(a_path), language=language, word_timestamps=True)
 
         segments = []
+        words = []
         srt_lines: list[str] = []
         for i, seg in enumerate(segments_iter, 1):
             segments.append(
@@ -470,6 +471,15 @@ def transcribe_audio(
                     "text": seg.text.strip(),
                 }
             )
+            if hasattr(seg, "words") and seg.words:
+                for w in seg.words:
+                    w_text = w.word.strip()
+                    if w_text:
+                        words.append({
+                            "start": round(w.start, 2),
+                            "end": round(w.end, 2),
+                            "word": w_text,
+                        })
             start_ts = _srt_timestamp(seg.start)
             end_ts = _srt_timestamp(seg.end)
             srt_lines.append(f"{i}\n{start_ts} --> {end_ts}\n{seg.text.strip()}\n")
@@ -485,6 +495,7 @@ def transcribe_audio(
             "success": True,
             "srt_path": str(out),
             "segments": segments,
+            "words": words,
             "language": info.language,
             "language_probability": round(info.language_probability, 3),
             "text": " ".join(s["text"] for s in segments),
@@ -506,12 +517,13 @@ def _srt_timestamp(seconds: float) -> str:
 def burn_subtitles(
     video_path: str,
     srt_path: str | None = None,
-    preset: str = "hormozi",
+    preset: str = "instagram",
     output_path: str | None = None,
     *,
     transcribe: bool = False,
     model_size: str = "tiny",
     language: str | None = None,
+    words_data: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Burn styled subtitles into a video using the subtitles preset system.
 
@@ -546,6 +558,8 @@ def burn_subtitles(
         if not transcribe_result.get("success"):
             return transcribe_result
         srt_path = transcribe_result["srt_path"]
+        if not words_data:
+            words_data = transcribe_result.get("words")
 
     assert srt_path is not None  # guaranteed by transcribe or caller
     s_path = Path(srt_path).resolve()
@@ -558,7 +572,7 @@ def burn_subtitles(
     out = Path(output_path).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    result = burn(v_path, s_path, preset, out)
+    result = burn(v_path, s_path, preset, out, words_data=words_data)
     if result.get("success"):
         result["preset"] = preset
         if transcribe_result:

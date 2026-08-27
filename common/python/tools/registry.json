@@ -1,4 +1,4 @@
-﻿{
+{
   "lookup_youtube_stats": {
     "name": "lookup_youtube_stats",
     "description": "Lookup subscriber counts, views, and growth from a YouTube channel by handle or name",
@@ -56,12 +56,18 @@
   },
   "aicut_tool": {
     "name": "aicut_tool",
-    "description": "AI Video Editor (AiCut) for trimming videos, adding background music/songs, merging video clips, inspecting media, and querying active Windows File Explorer context.",
+    "description": "AI Video Editor (AiCut) for trimming videos, adding background music/songs, merging video clips, burning styled subtitles (Instagram Reels / TikTok word-by-word pop, hormozi, neon-blur, glassmorphism, etc.), transcribing audio to SRT via faster-whisper, inspecting media, and querying active Windows File Explorer context.",
     "filepath": "python/tools/aicut_tool.py",
     "arguments": [
       "action",
       "video_path",
       "song_path",
+      "srt_path",
+      "preset",
+      "transcribe",
+      "model_size",
+      "language",
+      "input_paths",
       "inputs",
       "output_path",
       "start_seconds",

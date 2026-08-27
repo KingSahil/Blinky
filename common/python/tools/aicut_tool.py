@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 AiCut Video Editor Tool for Blinky.
 Provides intelligent video trimming, background music merging, multi-video concatenation,
@@ -91,6 +91,89 @@ def _detect_whisper_model(q_lower: str) -> str:
             return "large-v3"
         return size
     return "tiny"
+
+
+PRESET_ALIASES: dict[str, str] = {
+    "instagram-green": "instagram-green",
+    "insta-green": "instagram-green",
+    "insta green": "instagram-green",
+    "instagram-pop": "instagram-pop",
+    "insta-pop": "instagram-pop",
+    "insta pop": "instagram-pop",
+    "instagram": "instagram",
+    "insta": "instagram",
+    "reels": "instagram",
+    "reel": "instagram",
+    "tiktok": "instagram",
+    "word-by-word": "instagram",
+    "word by word": "instagram",
+    "wordbyword": "instagram",
+    "hormozi-clean": "hormozi-clean",
+    "clean hormozi": "hormozi-clean",
+    "hormozi": "hormozi",
+    "harumuzi": "hormozi",
+    "hormuzi": "hormozi",
+    "alex hormozi": "hormozi",
+    "word-karaoke": "word-karaoke",
+    "karaoke": "word-karaoke",
+    "pill-yellow": "pill-yellow",
+    "yellow pill": "pill-yellow",
+    "yellow box": "pill-yellow",
+    "pill-red": "pill-red",
+    "red pill": "pill-red",
+    "red box": "pill-red",
+    "typewriter": "typewriter",
+    "type writer": "typewriter",
+    "typing": "typewriter",
+    "color-switch": "color-switch",
+    "color switch": "color-switch",
+    "colorful": "color-switch",
+    "keyword-green": "keyword-green",
+    "green keyword": "keyword-green",
+    "lecture-dual": "lecture-dual",
+    "lecture": "lecture-dual",
+    "documentary": "documentary",
+    "docu": "documentary",
+    "bbc": "documentary",
+    "cinematic-lowerthird": "cinematic-lowerthird",
+    "cinematic": "cinematic-lowerthird",
+    "lower-third": "cinematic-lowerthird",
+    "lower third": "cinematic-lowerthird",
+    "quiet-minimal": "quiet-minimal",
+    "minimal": "quiet-minimal",
+    "quiet": "quiet-minimal",
+    "glassmorphism": "glassmorphism",
+    "glass": "glassmorphism",
+    "frosted": "glassmorphism",
+    "neon-blur": "neon-blur",
+    "neon": "neon-blur",
+    "cyber": "neon-blur",
+    "glow": "neon-blur",
+    "meme-impact": "meme-impact",
+    "meme": "meme-impact",
+    "impact": "meme-impact",
+    "retro-yellow": "retro-yellow",
+    "retro": "retro-yellow",
+}
+
+
+def _detect_preset_name(q_lower: str) -> str | None:
+    """Detect named subtitle preset or alias anywhere in query."""
+    for alias in sorted(PRESET_ALIASES.keys(), key=len, reverse=True):
+        if re.search(r"\b" + re.escape(alias) + r"\b", q_lower):
+            return PRESET_ALIASES[alias]
+
+    preset_match = re.search(r"\b(?:preset|style)\s*(?:of|:)?\s*([a-z][a-z0-9\-]+)", q_lower)
+    if preset_match:
+        val = preset_match.group(1).lower().strip()
+        return PRESET_ALIASES.get(val, val)
+
+    known_preset = re.search(r"\b(?:with|in|using|use)\s+([a-z][a-z0-9\-]+)\b", q_lower)
+    if known_preset:
+        val = known_preset.group(1).lower().strip()
+        return PRESET_ALIASES.get(val, val)
+
+    return None
 
 
 def resolve_aicut_request(query: str) -> dict[str, Any] | None:
@@ -243,27 +326,30 @@ def resolve_aicut_request(query: str) -> dict[str, Any] | None:
             "explorer": explorer,
         }
 
+    known_presets_regex = r"instagram|insta|reels|tiktok|word-by-word|word-karaoke|karaoke|hormozi|pill-yellow|pill-red|typewriter|color-switch|neon-blur|neon|glassmorphism|meme-impact|meme|retro-yellow|retro|documentary|cinematic-lowerthird|quiet-minimal|keyword-green|lecture-dual"
     # 6. Subtitle / caption patterns (preset-aware)
     subtitle_pattern = (
-        r"\b(?:burn|add|put|apply|overlay|write)\b.*?\b(?:subtitle|caption|subs?|subtitles|captions)\b"
-        r"|\b(?:subtitle|caption|subs?|subtitles|captions)\b.*?(?:to|on|into|for|this|that|the|with)\b.*?\b(?:video|clip|file|mp4|mov|mkv)"
+        r"\b(?:burn|add|put|apply|overlay|write|want|need|use|with|in)\b.*?\b(?:subtitle|caption|subs?|subtitles|captions)\b"
+        r"|\b(?:" + known_presets_regex + r")\b.*?\b(?:subtitles?|captions?|subs?)\b"
+        r"|\b(?:subtitle|caption|subs?|subtitles|captions)\b.*?(?:to|on|into|for|this|that|the|with|in|like)\b.*?\b(?:video|clip|file|mp4|mov|mkv)?"
         r"|\b(?:subtitle|caption)\b\s+(?:this|that|the)?\s*(?:video|clip|file)"
+        r"|\b(?:word\s+by\s+word|instagram|reels|tiktok)\b"
     )
     if re.search(subtitle_pattern, q_lower):
-        # Find preset mention (preset/style keyword or known preset name)
-        preset_match = re.search(r"\b(?:preset|style)\s*(?:of|:)?\s*([a-z][a-z0-9\-]+)", q_lower)
-        preset_name = preset_match.group(1) if preset_match else None
-        if not preset_name:
-            # Known preset names used inline: "with hormozi", "in neon-blur style"
-            known_preset = re.search(r"\b(?:with|in|using|use)\s+([a-z][a-z0-9\-]+)\b", q_lower)
-            if known_preset:
-                preset_name = known_preset.group(1)
+        preset_name = _detect_preset_name(q_lower)
+        if not preset_name and ("instagram" in q_lower or "word by word" in q_lower or "reels" in q_lower or "tiktok" in q_lower):
+            preset_name = "instagram"
 
         video_match = re.search(r"([^\s\"\']+\.(?:mp4|mov|mkv|avi|webm))", q_lower)
         srt_match = re.search(r"([^\s\"\']+\.(?:srt|vtt))", q_lower)
 
         video_file = find_candidate_file(video_match.group(1), active_dir) if video_match else None
         srt_file = find_candidate_file(srt_match.group(1), active_dir) if srt_match else None
+
+        if not video_file and video_match:
+            video_file = video_match.group(1)
+        if not srt_file and srt_match:
+            srt_file = srt_match.group(1)
 
         if not video_file and selected_videos:
             video_file = selected_videos[0]
@@ -279,7 +365,7 @@ def resolve_aicut_request(query: str) -> dict[str, Any] | None:
             "action": "subtitles",
             "video_path": video_file,
             "srt_path": srt_file,
-            "preset": preset_name,
+            "preset": preset_name or "instagram",
             "transcribe": srt_file is None,
             "model_size": _detect_whisper_model(q_lower),
             "explorer": explorer,
@@ -289,10 +375,13 @@ def resolve_aicut_request(query: str) -> dict[str, Any] | None:
     transcribe_pattern = (
         r"\b(?:transcribe|transcript|subtitle|caption)\b.*?\b(?:audio|video|file|recording|clip)\b"
         r"|\b(?:get|make|create|write)\b.*?\b(?:subtitles?|captions?|transcript|srt)\b"
+        r"|\btranscribe\b"
     )
     if re.search(transcribe_pattern, q_lower):
         audio_match = re.search(r"([^\s\"\']+\.(?:mp4|mov|mkv|avi|webm|mp3|wav|m4a|flac|ogg))", q_lower)
         audio_file = find_candidate_file(audio_match.group(1), active_dir) if audio_match else None
+        if not audio_file and audio_match:
+            audio_file = audio_match.group(1)
         if not audio_file and selected_videos:
             audio_file = selected_videos[0]
         if not audio_file and selected_audios:
@@ -394,10 +483,12 @@ def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
                     "success": False,
                     "error": "No SRT subtitle file specified or found, and transcription is off. Please provide a subtitle file (e.g. 'burn subtitles from captions.srt to dance.mp4') or ask to transcribe the video audio.",
                 }
+            raw_preset = (payload.get("preset") or "instagram").lower().strip()
+            resolved_preset = PRESET_ALIASES.get(raw_preset, raw_preset)
             return aicut_mcp.burn_subtitles(
                 video_path=video_path,
                 srt_path=srt_path,
-                preset=payload.get("preset") or "hormozi",
+                preset=resolved_preset,
                 output_path=payload.get("output_path"),
                 transcribe=payload.get("transcribe", False) or srt_path is None,
                 model_size=payload.get("model_size") or "tiny",

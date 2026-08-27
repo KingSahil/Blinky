@@ -3,8 +3,9 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ArrowUp, Loader2, Minus, Sparkles, X, Settings, Check, QrCode } from 'lucide-react';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import QRCode from 'qrcode';
-import { linkCitationMarkers } from './lib/citations';
+import { linkCitationMarkers, preprocessMarkdown } from './lib/citations';
 import { runTutor, showOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, openUrl } from './lib/tauri';
 
 export function App() {
@@ -752,32 +753,62 @@ export function App() {
                 <Sparkles size={14} className="summary-sparkle" />
                 <span className="command-status">
                   <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
                     components={{
-                      a: ({ node, href, children, ...props }) => (
-                        <a
-                          href={href}
-                          className={
-                            /^\d+$/.test(Array.isArray(children) ? children.join('') : String(children || ''))
-                              ? 'citation-link'
-                              : undefined
-                          }
-                          {...props}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            if (href) {
-                              void openUrl(href);
-                            }
-                          }}
-                        >
-                          {/^\d+$/.test(Array.isArray(children) ? children.join('') : String(children || ''))
-                            ? `[${Array.isArray(children) ? children.join('') : String(children || '')}]`
-                            : children}
-                        </a>
-                      )
+                      a: ({ node, href, children, ...props }: any) => {
+                        const linkText = Array.isArray(children) ? children.join('') : String(children || '');
+                        const isCitation = /^\d+$/.test(linkText);
+                        return (
+                          <a
+                            href={href}
+                            className={isCitation ? 'citation-link' : 'markdown-link'}
+                            title={isCitation ? `Open source [${linkText}]` : href}
+                            {...props}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (href) {
+                                void openUrl(href);
+                              }
+                            }}
+                          >
+                            {isCitation ? `[${linkText}]` : children}
+                          </a>
+                        );
+                      },
+                      p: ({ children }: any) => <p className="markdown-p">{children}</p>,
+                      li: ({ children }: any) => <li className="markdown-li">{children}</li>,
+                      ul: ({ children }: any) => <ul className="markdown-ul">{children}</ul>,
+                      ol: ({ children }: any) => <ol className="markdown-ol">{children}</ol>,
+                      strong: ({ children }: any) => <strong className="markdown-strong">{children}</strong>,
+                      em: ({ children }: any) => <em className="markdown-em">{children}</em>,
+                      h1: ({ children }: any) => <h1 className="markdown-h1">{children}</h1>,
+                      h2: ({ children }: any) => <h2 className="markdown-h2">{children}</h2>,
+                      h3: ({ children }: any) => <h3 className="markdown-h3">{children}</h3>,
+                      h4: ({ children }: any) => <h4 className="markdown-h4">{children}</h4>,
+                      table: ({ children }: any) => (
+                        <div className="markdown-table-wrapper">
+                          <table className="markdown-table">{children}</table>
+                        </div>
+                      ),
+                      thead: ({ children }: any) => <thead className="markdown-thead">{children}</thead>,
+                      tbody: ({ children }: any) => <tbody className="markdown-tbody">{children}</tbody>,
+                      tr: ({ children }: any) => <tr className="markdown-tr">{children}</tr>,
+                      th: ({ children }: any) => <th className="markdown-th">{children}</th>,
+                      td: ({ children }: any) => <td className="markdown-td">{children}</td>,
+                      blockquote: ({ children }: any) => <blockquote className="markdown-blockquote">{children}</blockquote>,
+                      hr: () => <hr className="markdown-hr" />,
+                      code: ({ inline, className, children, ...props }: any) => {
+                        const isInline = inline ?? !String(children).includes('\n');
+                        return isInline ? (
+                          <code className="markdown-inline-code" {...props}>{children}</code>
+                        ) : (
+                          <pre className="markdown-pre"><code className="markdown-code-block" {...props}>{children}</code></pre>
+                        );
+                      },
                     }}
                   >
-                    {linkCitationMarkers(status)}
+                    {preprocessMarkdown(status)}
                   </ReactMarkdown>
                 </span>
               </div>

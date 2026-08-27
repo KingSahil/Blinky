@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import QRCode from 'qrcode';
 import { runAutopilotLoop, extractTextToType, shouldPressEnterAfterTyping, isScrollAction, getScrollDirection, isClickInstruction, isSingleActionQuery } from './lib/autopilot';
 import {
@@ -16,7 +17,7 @@ import {
 } from './lib/guidance';
 import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility } from './lib/tauri';
 
-import { linkCitationMarkers } from './lib/citations';
+import { linkCitationMarkers, preprocessMarkdown } from './lib/citations';
 import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvamErrorMessage } from './lib/tts';
 import { SarvamSpeechToTextStream, SarvamTextToSpeechStream } from './lib/sarvamStream';
 import { AdaptiveTransportManager } from './lib/adaptiveTransport';
@@ -73,8 +74,8 @@ function ExternalMarkdownLink({ href, children }: AnchorHTMLAttributes<HTMLAncho
   return (
     <a
       href={href}
-      className={isCitation ? 'citation-link' : undefined}
-      title={isCitation ? `Open source ${linkText}` : undefined}
+      className={isCitation ? 'citation-link' : 'markdown-link'}
+      title={isCitation ? `Open source [${linkText}]` : href}
       onClick={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -1846,37 +1847,65 @@ export function CommandBar() {
 
   const markdownComponents = {
     p: ({ children }: any) => {
-      return <p>{highlightText(children)}</p>;
+      return <p className="markdown-p">{highlightText(children)}</p>;
     },
     li: ({ children }: any) => {
-      return <li>{highlightText(children)}</li>;
+      return <li className="markdown-li">{highlightText(children)}</li>;
+    },
+    ul: ({ children }: any) => {
+      return <ul className="markdown-ul">{children}</ul>;
+    },
+    ol: ({ children }: any) => {
+      return <ol className="markdown-ol">{children}</ol>;
     },
     strong: ({ children }: any) => {
-      return <strong>{highlightText(children)}</strong>;
+      return <strong className="markdown-strong">{highlightText(children)}</strong>;
     },
     em: ({ children }: any) => {
-      return <em>{highlightText(children)}</em>;
+      return <em className="markdown-em">{highlightText(children)}</em>;
     },
     a: (props: any) => {
       return <ExternalMarkdownLink {...props} children={highlightText(props.children)} />;
     },
     h1: ({ children }: any) => {
-      return <h1>{highlightText(children)}</h1>;
+      return <h1 className="markdown-h1">{highlightText(children)}</h1>;
     },
     h2: ({ children }: any) => {
-      return <h2>{highlightText(children)}</h2>;
+      return <h2 className="markdown-h2">{highlightText(children)}</h2>;
     },
     h3: ({ children }: any) => {
-      return <h3>{highlightText(children)}</h3>;
+      return <h3 className="markdown-h3">{highlightText(children)}</h3>;
     },
     h4: ({ children }: any) => {
-      return <h4>{highlightText(children)}</h4>;
+      return <h4 className="markdown-h4">{highlightText(children)}</h4>;
     },
     h5: ({ children }: any) => {
-      return <h5>{highlightText(children)}</h5>;
+      return <h5 className="markdown-h5">{highlightText(children)}</h5>;
     },
     h6: ({ children }: any) => {
-      return <h6>{highlightText(children)}</h6>;
+      return <h6 className="markdown-h6">{highlightText(children)}</h6>;
+    },
+    table: ({ children }: any) => {
+      return (
+        <div className="markdown-table-wrapper">
+          <table className="markdown-table">{children}</table>
+        </div>
+      );
+    },
+    thead: ({ children }: any) => <thead className="markdown-thead">{children}</thead>,
+    tbody: ({ children }: any) => <tbody className="markdown-tbody">{children}</tbody>,
+    tr: ({ children }: any) => <tr className="markdown-tr">{children}</tr>,
+    th: ({ children }: any) => <th className="markdown-th">{highlightText(children)}</th>,
+    td: ({ children }: any) => <td className="markdown-td">{highlightText(children)}</td>,
+    blockquote: ({ children }: any) => <blockquote className="markdown-blockquote">{children}</blockquote>,
+    hr: () => <hr className="markdown-hr" />,
+    code: ({ inline, className, children, ...props }: any) => {
+      const isInline = inline ?? !String(children).includes('\n');
+      return isInline ? (
+        <code className="markdown-inline-code" {...props}>{children}</code>
+      ) : (
+        <pre className="markdown-pre"><code className="markdown-code-block" {...props}>{children}</code></pre>
+      );
     },
   };
 
@@ -2336,7 +2365,9 @@ export function CommandBar() {
                   <Sparkles size={14} className="summary-sparkle" />
                   <div className="command-summary-text-container">
                     <span className="command-status">
-                      <ReactMarkdown components={markdownComponents as any}>{linkCitationMarkers(status)}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents as any}>
+                        {preprocessMarkdown(status)}
+                      </ReactMarkdown>
                     </span>
                     {steps.length > 0 && sarvamApiKey && (
                       <button

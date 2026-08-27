@@ -30,3 +30,35 @@ export function extractReferenceUrls(markdown: string): string[] {
 
   return urls;
 }
+
+/**
+ * Preprocesses markdown text before rendering:
+ * 1. Formats inline / unseparated tables into clean GFM Markdown Tables.
+ * 2. Ensures appropriate spacing before and after markdown headers and tables.
+ * 3. Links citation markers [1], [2] to their reference URLs.
+ */
+export function preprocessMarkdown(markdown: string): string {
+  if (!markdown) return '';
+  let text = markdown;
+
+  // 1. Separate table separator rows |---|---| on the same line as headers
+  text = text.replace(/(\|[^\n\r]+?\|)\s*(\|(?:\s*:?-+:?\s*\|)+)/g, '$1\n$2');
+
+  // 2. Separate data rows placed on the same line after separators
+  text = text.replace(/(\|(?:\s*:?-+:?\s*\|)+)\s*(\|[^\n\r]+?\|)/g, '$1\n$2');
+
+  // 3. Separate consecutive data rows placed on the same line
+  while (/(\|[^\n\r]+?\|)\s{2,}(\|[^\n\r]+?\|)/.test(text) || /(\|[^\n\r]+?\|)\s+(\|[^\n\r]+?\|)/.test(text)) {
+    const next = text.replace(/(\|[^\n\r]+?\|)\s+(\|[^\n\r]+?\|)/g, '$1\n$2');
+    if (next === text) break;
+    text = next;
+  }
+
+  // 4. Ensure double newline before table if immediately following regular text without a newline
+  text = text.replace(/([^\n\r|])\s*(\|[^\n\r]+?\|[\r\n]+\|(?:\s*:?-+:?\s*\|)+)/g, '$1\n\n$2');
+
+  // 5. Connect citation markers [1], [2] to sources
+  text = linkCitationMarkers(text);
+
+  return text;
+}

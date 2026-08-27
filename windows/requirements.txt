@@ -16,6 +16,7 @@ PyYAML>=6.0.1
 openwakeword>=0.1.0
 scipy>=1.11.0
 sounddevice>=0.5.1
+faster-whisper>=1.2.1
 
 opencv-python-headless>=4.8.0.76; sys_platform == 'win32'
 winrt-runtime>=2.0.0; sys_platform == 'win32'

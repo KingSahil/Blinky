@@ -47,7 +47,21 @@ flowchart TD
   - Audio: `aformat=sample_rates=44100:channel_layouts=stereo`
   - Concat: `concat=n=N:v=1:a=1`
 
-### 4. Inspecting Media Metadata (`media_info`)
+### 4. Burning Styled Subtitles (`subtitles`)
+- **Tool**: `aicut_burn_subtitles`
+- **Behavior**: Converts `.srt` subtitles into styled `.ass` (Advanced SubStation Alpha) and burns them directly into video frames with FFmpeg `libass`.
+- **Auto-Transcription**: If no `.srt` file is supplied, it automatically transcribes the video audio using `faster-whisper` first, generates the SRT, and burns it in one pass.
+- **16 Presets**:
+  - *Viral*: `hormozi` (yellow keyword pop), `word-karaoke` (`\k` fill), `pill-yellow`, `pill-red`, `typewriter`, `color-switch`
+  - *Business/Edu*: `hormozi-clean`, `keyword-green`, `lecture-dual`
+  - *Cinematic*: `documentary` (BBC compliant), `cinematic-lowerthird`, `quiet-minimal`, `glassmorphism`
+  - *Stylized*: `neon-blur` (magenta glow), `meme-impact` (Anton bold), `retro-yellow` (Bebas Neue)
+
+### 5. Local Speech-to-Text Transcription (`transcribe`)
+- **Tool**: `aicut_transcribe_audio`
+- **Behavior**: Transcribes audio/video to `.srt` locally on-device using CTranslate2-accelerated `faster-whisper` (`tiny`, `base`, `small`, `medium`, `large-v3`). No cloud API keys or external servers required.
+
+### 6. Inspecting Media Metadata (`media_info`)
 - **Tool**: `aicut_get_media_info`
 - **Behavior**: Calls `ffprobe` to retrieve video resolution, duration, frame rate, audio sample rate, and codec info.
 
