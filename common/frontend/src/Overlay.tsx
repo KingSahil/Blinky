@@ -32,10 +32,11 @@ export function Overlay() {
   const [offsets, setOffsets] = useState({ x: 0, y: 0 });
   const offsetsRef = useRef({ x: 0, y: 0 });
 
-  const [cursorPos, setCursorPos] = useState<{ x: number, y: number } | null>(null);
-  const cursorPosRef = useRef<{ x: number, y: number } | null>(null);
+  const cursorRef = useRef<HTMLDivElement>(null);
+  const currentPosRef = useRef<{ x: number; y: number }>({ x: -100, y: -100 });
+  const activeGlideAnimRef = useRef<Animation | null>(null);
+
   const [agentCursorVisible, setAgentCursorVisible] = useState(false);
-  const [isAgentActing, setIsAgentActing] = useState(false);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [isClicking, setIsClicking] = useState(false);
 
@@ -78,8 +79,10 @@ export function Overlay() {
       if (pos.x !== 0 || pos.y !== 0) {
         const cssX = (pos.x / pixelRatio) - offsetsRef.current.x;
         const cssY = (pos.y / pixelRatio) - offsetsRef.current.y;
-        setCursorPos({ x: cssX, y: cssY });
-        cursorPosRef.current = { x: cssX, y: cssY };
+        currentPosRef.current = { x: cssX, y: cssY };
+        if (cursorRef.current) {
+          cursorRef.current.style.transform = `translate3d(${cssX}px, ${cssY}px, 0)`;
+        }
       }
     });
   }, [pixelRatio]);
@@ -97,11 +100,17 @@ export function Overlay() {
         hideVoiceTimeoutRef.current = null;
       }
       setAgentCursorVisible(true);
+      if (cursorRef.current && !isAgentActingRef.current) {
+        cursorRef.current.style.opacity = '1';
+      }
     } else {
       if (hideVoiceTimeoutRef.current) clearTimeout(hideVoiceTimeoutRef.current);
       hideVoiceTimeoutRef.current = setTimeout(() => {
         if (!isAgentActingRef.current) {
           setAgentCursorVisible(false);
+          if (cursorRef.current) {
+            cursorRef.current.style.opacity = '0';
+          }
         }
       }, 500);
     }
@@ -128,19 +137,21 @@ export function Overlay() {
       setAgentCursorVisible(event.payload.visible);
       if (!event.payload.visible) {
         isAgentActingRef.current = false;
-        setIsAgentActing(false);
         isVoiceActiveRef.current = false;
+        if (cursorRef.current) {
+          cursorRef.current.style.opacity = '0';
+        }
       }
     });
 
     const unlistenNativeMove = listen<{ x: number, y: number }>('blinky://native-cursor-move', (event) => {
       const cssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
       const cssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
+      currentPosRef.current = { x: cssX, y: cssY };
       
-      // Follow the user's cursor when the agent is not actively gliding/acting
-      if (!isAgentActingRef.current) {
-        setCursorPos({ x: cssX, y: cssY });
-        cursorPosRef.current = { x: cssX, y: cssY };
+      // Update DOM transform directly when not actively gliding
+      if (!isAgentActingRef.current && cursorRef.current) {
+        cursorRef.current.style.transform = `translate3d(${cssX}px, ${cssY}px, 0)`;
       }
     });
 
@@ -153,42 +164,61 @@ export function Overlay() {
         clearTimeout(hideVoiceTimeoutRef.current);
         hideVoiceTimeoutRef.current = null;
       }
+      if (activeGlideAnimRef.current) {
+        activeGlideAnimRef.current.cancel();
+        activeGlideAnimRef.current = null;
+      }
 
       isAgentActingRef.current = true;
 
-      // Current native cursor starting position
-      const startCssX = cursorPosRef.current?.x ?? ((event.payload.x / pixelRatio) - offsetsRef.current.x);
-      const startCssY = cursorPosRef.current?.y ?? ((event.payload.y / pixelRatio) - offsetsRef.current.y);
-
+      const startCssX = currentPosRef.current.x;
+      const startCssY = currentPosRef.current.y;
       const targetCssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
       const targetCssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
 
-      // 1. Instantly place AI cursor at the native position and make visible (transition: none)
-      setCursorPos({ x: startCssX, y: startCssY });
-      setIsAgentActing(false);
-      setAgentCursorVisible(true);
+      const el = cursorRef.current;
+      if (el) {
+        // Place AI cursor at start position and make visible
+        el.style.transform = `translate3d(${startCssX}px, ${startCssY}px, 0)`;
+        el.style.opacity = '1';
+        setAgentCursorVisible(true);
 
-      // 2. In the next frame, start the smooth glide to target with isAgentActing=true (transition: transform 0.6s ...)
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          setIsAgentActing(true);
-          setCursorPos({ x: targetCssX, y: targetCssY });
-          cursorPosRef.current = { x: targetCssX, y: targetCssY };
-        });
-      });
+        // Hardware GPU glide animation from start to target
+        const anim = el.animate(
+          [
+            { transform: `translate3d(${startCssX}px, ${startCssY}px, 0)` },
+            { transform: `translate3d(${targetCssX}px, ${targetCssY}px, 0)` }
+          ],
+          {
+            duration: 600,
+            easing: 'cubic-bezier(0.2, 0.85, 0.25, 1)',
+            fill: 'forwards'
+          }
+        );
+        activeGlideAnimRef.current = anim;
 
-      // 3. Trigger click ripple ring as cursor arrives at target (~480ms into the glide)
-      setTimeout(() => {
-        setIsClicking(true);
-        setTimeout(() => setIsClicking(false), 350);
-      }, 480);
+        anim.onfinish = () => {
+          el.style.transform = `translate3d(${targetCssX}px, ${targetCssY}px, 0)`;
+          currentPosRef.current = { x: targetCssX, y: targetCssY };
+          try {
+            anim.cancel();
+          } catch {}
+          activeGlideAnimRef.current = null;
 
-      // 4. Grace period before transitioning back to native cursor
+          // Trigger click ripple ring
+          setIsClicking(true);
+          setTimeout(() => setIsClicking(false), 350);
+        };
+      }
+
+      // Grace period before restoring native cursor
       actingTimeoutRef.current = setTimeout(() => {
         isAgentActingRef.current = false;
-        setIsAgentActing(false);
         if (!isVoiceActiveRef.current) {
           setAgentCursorVisible(false);
+          if (cursorRef.current) {
+            cursorRef.current.style.opacity = '0';
+          }
         }
       }, 1200);
     });
@@ -200,9 +230,11 @@ export function Overlay() {
       }
       actingTimeoutRef.current = setTimeout(() => {
         isAgentActingRef.current = false;
-        setIsAgentActing(false);
         if (!isVoiceActiveRef.current) {
           setAgentCursorVisible(false);
+          if (cursorRef.current) {
+            cursorRef.current.style.opacity = '0';
+          }
         }
       }, 350);
     });
@@ -432,26 +464,26 @@ export function Overlay() {
         <div className="fullscreen-edge-lighting-gradient" />
       </div>
 
-      {agentCursorVisible && cursorPos && (
-        <div 
-          className={`agent-cursor-wrapper ${isAgentActing ? 'agent-acting' : (isVoiceActive ? 'voice-following' : 'following-user')}`}
-          style={{
-            transform: `translate3d(${cursorPos.x}px, ${cursorPos.y}px, 0)`,
-          }}
-        >
-          {isClicking && <div className="agent-cursor-click-ring" />}
-          <svg className="agent-cursor" viewBox="0 0 24 24" width="28" height="28" fill="var(--accent-strong)" xmlns="http://www.w3.org/2000/svg">
-            <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z"/>
-          </svg>
-          {isVoiceActive && (
-            <div className="agent-visualizer">
-              <div className="bar" />
-              <div className="bar" />
-              <div className="bar" />
-            </div>
-          )}
-        </div>
-      )}
+      <div 
+        ref={cursorRef}
+        className="agent-cursor-wrapper"
+        style={{
+          opacity: agentCursorVisible ? 1 : 0,
+          transform: `translate3d(${currentPosRef.current.x}px, ${currentPosRef.current.y}px, 0)`,
+        }}
+      >
+        {isClicking && <div className="agent-cursor-click-ring" />}
+        <svg className="agent-cursor" viewBox="0 0 24 24" width="28" height="28" fill="var(--accent-strong)" xmlns="http://www.w3.org/2000/svg">
+          <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z"/>
+        </svg>
+        {isVoiceActive && (
+          <div className="agent-visualizer">
+            <div className="bar" />
+            <div className="bar" />
+            <div className="bar" />
+          </div>
+        )}
+      </div>
 
 
 

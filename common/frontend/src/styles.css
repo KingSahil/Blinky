@@ -2608,19 +2608,10 @@ h3 {
   display: flex;
   align-items: center;
   gap: 6px;
-  will-change: transform;
-}
-
-.agent-cursor-wrapper.following-user {
-  transition: none !important;
-}
-
-.agent-cursor-wrapper.voice-following {
-  transition: transform 0.08s ease-out;
-}
-
-.agent-cursor-wrapper.agent-acting {
-  transition: transform 0.6s cubic-bezier(0.2, 0.85, 0.25, 1) !important;
+  will-change: transform, opacity;
+  transform: translate3d(-100px, -100px, 0);
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
 }
 
 .agent-cursor-click-ring {
