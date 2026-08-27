@@ -1453,15 +1453,17 @@ export function CommandBar() {
     };
   }, []);
 
-  // Synchronize cursor visibility, hide native cursor in Windows, and track pointer inside CommandBar
+  // Agent mode toggle no longer hides native cursor directly (tradeoff A: AI cursor only when acting/voice)
   useEffect(() => {
-    void emit('blinky://agent-cursor-visibility', { visible: agentModeEnabled });
-    void setAgentCursorVisibility(agentModeEnabled);
     if (typeof document !== 'undefined') {
       document.body.classList.toggle('agent-mode-active', agentModeEnabled);
     }
     if (agentModeEnabled) {
       void showOverlay();
+    } else {
+      // Ensure native cursor restored and AI cursor hidden when exiting agent mode
+      void emit('blinky://agent-cursor-visibility', { visible: false });
+      void setAgentCursorVisibility(false);
     }
   }, [agentModeEnabled]);
 
