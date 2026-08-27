@@ -14,7 +14,6 @@
     "tauri:build": "bun tauri build",
     "preview": "vite preview --config common/frontend/vite.config.ts",
     "typecheck": "tsc -p common/frontend/tsconfig.json --noEmit",
-    "setup": "powershell -ExecutionPolicy Bypass -File setup.ps1",
     "setup:win": "powershell -ExecutionPolicy Bypass -File setup.ps1",
     "setup:linux": "chmod +x setup.sh && ./setup.sh",
     "setup:python": "powershell -ExecutionPolicy Bypass -File windows/scripts/setup-python.ps1",
