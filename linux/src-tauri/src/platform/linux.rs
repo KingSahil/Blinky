@@ -15,6 +15,10 @@ use tauri::WebviewWindow;
 /// The only compositor-dependent piece is cursor positioning; when GNOME/KDE
 /// backends land (phase 8), only that function changes.
 
+pub fn get_cursor_position_impl() -> Result<(i32, i32), String> {
+    Ok((0, 0))
+}
+
 pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
     move_cursor(x, y)?;
     // ydotool click 0xC0 = left button down+up

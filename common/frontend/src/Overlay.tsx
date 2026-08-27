@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { getHighlightSteps } from './lib/guidance';
 import type { TutorResult } from './lib/types';
-import { logDebugMessage, setAgentCursorVisibility } from './lib/tauri';
+import { getCursorPosition, logDebugMessage, setAgentCursorVisibility } from './lib/tauri';
 
 interface GlobalClick {
   x: number;
@@ -32,13 +32,15 @@ export function Overlay() {
   const [offsets, setOffsets] = useState({ x: 0, y: 0 });
   const offsetsRef = useRef({ x: 0, y: 0 });
 
+  const [cursorPos, setCursorPos] = useState<{ x: number, y: number } | null>(null);
+  const cursorPosRef = useRef<{ x: number, y: number } | null>(null);
   const [agentCursorVisible, setAgentCursorVisible] = useState(false);
+  const [isAgentActing, setIsAgentActing] = useState(false);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [isClicking, setIsClicking] = useState(false);
-  const cursorRef = useRef<HTMLDivElement>(null);
+
   const isAgentActingRef = useRef(false);
   const actingTimeoutRef = useRef<any>(null);
-  const lastNativePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const isVoiceActiveRef = useRef(false);
   const hideVoiceTimeoutRef = useRef<any>(null);
 
@@ -70,42 +72,40 @@ export function Overlay() {
     return () => window.removeEventListener('resize', updateOffsets);
   }, [updateOffsets]);
 
-  // Sync native cursor blanking with AI cursor visibility (tradeoff A: hide native only when AI visible)
+  // Initialize native cursor position on mount
+  useEffect(() => {
+    void getCursorPosition().then((pos) => {
+      if (pos.x !== 0 || pos.y !== 0) {
+        const cssX = (pos.x / pixelRatio) - offsetsRef.current.x;
+        const cssY = (pos.y / pixelRatio) - offsetsRef.current.y;
+        setCursorPos({ x: cssX, y: cssY });
+        cursorPosRef.current = { x: cssX, y: cssY };
+      }
+    });
+  }, [pixelRatio]);
+
+  // Sync native cursor blanking with AI cursor visibility
   useEffect(() => {
     void setAgentCursorVisibility(agentCursorVisible);
   }, [agentCursorVisible]);
 
   useEffect(() => {
     isVoiceActiveRef.current = isVoiceActive;
-    // When voice becomes active, morph native -> AI (no double cursor)
     if (isVoiceActive) {
       if (hideVoiceTimeoutRef.current) {
         clearTimeout(hideVoiceTimeoutRef.current);
         hideVoiceTimeoutRef.current = null;
       }
-      // Place AI at last native pos instantly then fade in
-      if (cursorRef.current) {
-        const cssX = (lastNativePosRef.current.x / pixelRatio) - offsetsRef.current.x;
-        const cssY = (lastNativePosRef.current.y / pixelRatio) - offsetsRef.current.y;
-        cursorRef.current.classList.remove('agent-acting');
-        cursorRef.current.classList.add('voice-following');
-        cursorRef.current.style.transform = `translate3d(${cssX}px, ${cssY}px, 0)`;
-      }
       setAgentCursorVisible(true);
     } else {
-      // Delay hide to avoid flicker on brief pauses, but hide if not agent acting
       if (hideVoiceTimeoutRef.current) clearTimeout(hideVoiceTimeoutRef.current);
       hideVoiceTimeoutRef.current = setTimeout(() => {
         if (!isAgentActingRef.current) {
           setAgentCursorVisible(false);
-          if (cursorRef.current) {
-            cursorRef.current.classList.remove('voice-following');
-            cursorRef.current.style.transform = 'translate3d(-100px, -100px, 0)';
-          }
         }
-      }, 600);
+      }, 500);
     }
-  }, [isVoiceActive, pixelRatio]);
+  }, [isVoiceActive]);
 
   useEffect(() => {
     const unlistenVad = listen<{ volume: number }>('blinky://vad-update', (event) => {
@@ -128,89 +128,83 @@ export function Overlay() {
       setAgentCursorVisible(event.payload.visible);
       if (!event.payload.visible) {
         isAgentActingRef.current = false;
+        setIsAgentActing(false);
         isVoiceActiveRef.current = false;
-        if (cursorRef.current) {
-          cursorRef.current.classList.remove('agent-acting', 'voice-following');
-          cursorRef.current.style.transform = 'translate3d(-100px, -100px, 0)';
-        }
-      } else if (cursorRef.current) {
-        // Morph from native position
-        const cssX = (lastNativePosRef.current.x / pixelRatio) - offsetsRef.current.x;
-        const cssY = (lastNativePosRef.current.y / pixelRatio) - offsetsRef.current.y;
-        cursorRef.current.style.transform = `translate3d(${cssX}px, ${cssY}px, 0)`;
       }
     });
 
-
     const unlistenNativeMove = listen<{ x: number, y: number }>('blinky://native-cursor-move', (event) => {
-      lastNativePosRef.current = { x: event.payload.x, y: event.payload.y };
-      // Only follow native when AI is visible for voice and not busy acting (tradeoff A: smooth morph, no double cursor)
-      if (isVoiceActiveRef.current && !isAgentActingRef.current && cursorRef.current) {
-        const cssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
-        const cssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
-        cursorRef.current.style.transform = `translate3d(${cssX}px, ${cssY}px, 0)`;
+      const cssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
+      const cssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
+      
+      // Follow the user's cursor when the agent is not actively gliding/acting
+      if (!isAgentActingRef.current) {
+        setCursorPos({ x: cssX, y: cssY });
+        cursorPosRef.current = { x: cssX, y: cssY };
       }
     });
 
     const unlistenAgentMove = listen<{ x: number, y: number, instruction?: string }>('blinky://agent-cursor-move', (event) => {
-      // Morph native -> AI: show at last native pos first if hidden (no double cursor)
-      if (cursorRef.current) {
-        const wasActing = isAgentActingRef.current;
-        if (!wasActing) {
-          const startX = (lastNativePosRef.current.x / pixelRatio) - offsetsRef.current.x;
-          const startY = (lastNativePosRef.current.y / pixelRatio) - offsetsRef.current.y;
-          cursorRef.current.classList.remove('voice-following');
-          // Place instantly at native before glide (transition: none briefly)
-          cursorRef.current.style.transition = 'none';
-          cursorRef.current.style.transform = `translate3d(${startX}px, ${startY}px, 0)`;
-          // Force reflow then restore transition for glide
-          void cursorRef.current.offsetWidth;
-          cursorRef.current.style.transition = '';
-        }
-      }
-      setAgentCursorVisible(true);
-      isAgentActingRef.current = true;
       if (actingTimeoutRef.current) {
         clearTimeout(actingTimeoutRef.current);
+        actingTimeoutRef.current = null;
       }
       if (hideVoiceTimeoutRef.current) {
         clearTimeout(hideVoiceTimeoutRef.current);
         hideVoiceTimeoutRef.current = null;
       }
 
-      if (cursorRef.current) {
-        cursorRef.current.classList.remove('voice-following', 'following-user');
-        cursorRef.current.classList.add('agent-acting');
-        const cssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
-        const cssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
-        cursorRef.current.style.transform = `translate3d(${cssX}px, ${cssY}px, 0)`;
-      }
+      isAgentActingRef.current = true;
 
-      // Trigger click pulse ring after gliding to target
+      // Current native cursor starting position
+      const startCssX = cursorPosRef.current?.x ?? ((event.payload.x / pixelRatio) - offsetsRef.current.x);
+      const startCssY = cursorPosRef.current?.y ?? ((event.payload.y / pixelRatio) - offsetsRef.current.y);
+
+      const targetCssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
+      const targetCssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
+
+      // 1. Instantly place AI cursor at the native position and make visible (transition: none)
+      setCursorPos({ x: startCssX, y: startCssY });
+      setIsAgentActing(false);
+      setAgentCursorVisible(true);
+
+      // 2. In the next frame, start the smooth glide to target with isAgentActing=true (transition: transform 0.6s ...)
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setIsAgentActing(true);
+          setCursorPos({ x: targetCssX, y: targetCssY });
+          cursorPosRef.current = { x: targetCssX, y: targetCssY };
+        });
+      });
+
+      // 3. Trigger click ripple ring as cursor arrives at target (~480ms into the glide)
       setTimeout(() => {
         setIsClicking(true);
-        setTimeout(() => setIsClicking(false), 300);
-      }, 360);
+        setTimeout(() => setIsClicking(false), 350);
+      }, 480);
 
-      // Hide AI and restore native after grace period unless voice still active
+      // 4. Grace period before transitioning back to native cursor
       actingTimeoutRef.current = setTimeout(() => {
         isAgentActingRef.current = false;
-        if (cursorRef.current) {
-          cursorRef.current.classList.remove('agent-acting');
-        }
+        setIsAgentActing(false);
         if (!isVoiceActiveRef.current) {
           setAgentCursorVisible(false);
-          if (cursorRef.current) {
-            cursorRef.current.style.transform = 'translate3d(-100px, -100px, 0)';
-          }
-        } else if (cursorRef.current) {
-          // Return to voice-following mode
-          cursorRef.current.classList.add('voice-following');
-          const cssX = (lastNativePosRef.current.x / pixelRatio) - offsetsRef.current.x;
-          const cssY = (lastNativePosRef.current.y / pixelRatio) - offsetsRef.current.y;
-          cursorRef.current.style.transform = `translate3d(${cssX}px, ${cssY}px, 0)`;
         }
-      }, 2500);
+      }, 1200);
+    });
+
+    const unlistenAgentDone = listen('blinky://agent-cursor-done', () => {
+      if (actingTimeoutRef.current) {
+        clearTimeout(actingTimeoutRef.current);
+        actingTimeoutRef.current = null;
+      }
+      actingTimeoutRef.current = setTimeout(() => {
+        isAgentActingRef.current = false;
+        setIsAgentActing(false);
+        if (!isVoiceActiveRef.current) {
+          setAgentCursorVisible(false);
+        }
+      }, 350);
     });
 
     return () => {
@@ -219,6 +213,7 @@ export function Overlay() {
       unlistenVis.then((dispose) => dispose());
       unlistenNativeMove.then((dispose) => dispose());
       unlistenAgentMove.then((dispose) => dispose());
+      unlistenAgentDone.then((dispose) => dispose());
       if (actingTimeoutRef.current) {
         clearTimeout(actingTimeoutRef.current);
       }
@@ -437,10 +432,12 @@ export function Overlay() {
         <div className="fullscreen-edge-lighting-gradient" />
       </div>
 
-      {agentCursorVisible && (
+      {agentCursorVisible && cursorPos && (
         <div 
-          ref={cursorRef}
-          className="agent-cursor-wrapper"
+          className={`agent-cursor-wrapper ${isAgentActing ? 'agent-acting' : (isVoiceActive ? 'voice-following' : 'following-user')}`}
+          style={{
+            transform: `translate3d(${cursorPos.x}px, ${cursorPos.y}px, 0)`,
+          }}
         >
           {isClicking && <div className="agent-cursor-click-ring" />}
           <svg className="agent-cursor" viewBox="0 0 24 24" width="28" height="28" fill="var(--accent-strong)" xmlns="http://www.w3.org/2000/svg">

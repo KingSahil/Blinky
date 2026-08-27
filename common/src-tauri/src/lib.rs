@@ -16,8 +16,9 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use platform::{
-    click_screen_point_impl, configure_overlay_passthrough, open_url_impl, register_exit_cursor_restorer,
-    scroll_at_point_impl, set_system_cursor_visibility, set_window_capture_exclusion,
+    click_screen_point_impl, configure_overlay_passthrough, get_cursor_position_impl,
+    open_url_impl, register_exit_cursor_restorer, scroll_at_point_impl,
+    set_system_cursor_visibility, set_window_capture_exclusion,
     start_global_click_listener, type_text_impl,
 };
 
@@ -176,6 +177,11 @@ fn open_url(url: String) -> Result<(), String> {
     }
 
     open_url_impl(trimmed)
+}
+
+#[tauri::command]
+fn get_cursor_position() -> Result<(i32, i32), String> {
+    get_cursor_position_impl()
 }
 
 #[tauri::command]
@@ -916,7 +922,8 @@ pub fn run() {
             pause_wake_word,
             resume_wake_word,
             confirm_recipe_save,
-            set_agent_cursor_visibility
+            set_agent_cursor_visibility,
+            get_cursor_position
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {

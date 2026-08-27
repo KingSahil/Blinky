@@ -12,17 +12,26 @@ pub struct GlobalClick {
     pub scale_factor: f64,
 }
 
+pub fn get_cursor_position_impl() -> Result<(i32, i32), String> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut point = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut point) } != 0 {
+        Ok((point.x, point.y))
+    } else {
+        Err("Failed to get cursor position".to_string())
+    }
+}
+
 pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
         MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK,
     };
-    use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetCursorPos, GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN,
+        GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN,
         SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
-
 
     let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
     let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
@@ -31,10 +40,6 @@ pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
     if width <= 1 || height <= 1 {
         return Err("Cannot determine virtual screen size".to_string());
     }
-
-    // Save native cursor position so user cursor is not displaced
-    let mut original_cursor = POINT { x: 0, y: 0 };
-    let has_original = unsafe { GetCursorPos(&mut original_cursor) } != 0;
 
     let absolute_x = ((x - left) as i64 * 65535 / (width - 1) as i64) as i32;
     let absolute_y = ((y - top) as i64 * 65535 / (height - 1) as i64) as i32;
@@ -53,11 +58,9 @@ pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
         )
     };
 
-    // Restore original native cursor position
-    if has_original {
-        unsafe {
-            SetCursorPos(original_cursor.x, original_cursor.y);
-        }
+    // Keep hardware cursor at the clicked location so restore is seamless
+    unsafe {
+        SetCursorPos(x, y);
     }
 
     if sent != inputs.len() as u32 {
@@ -373,15 +376,13 @@ pub fn start_global_click_listener(app: AppHandle) {
                     last_cursor_x = pt.x;
                     last_cursor_y = pt.y;
                     if let Some(overlay) = app.get_webview_window("overlay") {
-                        if overlay.is_visible().unwrap_or(false) {
-                            let _ = overlay.emit(
-                                "blinky://native-cursor-move",
-                                serde_json::json!({
-                                    "x": pt.x,
-                                    "y": pt.y
-                                }),
-                            );
-                        }
+                        let _ = overlay.emit(
+                            "blinky://native-cursor-move",
+                            serde_json::json!({
+                                "x": pt.x,
+                                "y": pt.y
+                            }),
+                        );
                     }
                 }
             }

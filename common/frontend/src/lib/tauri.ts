@@ -115,3 +115,15 @@ export async function setAgentCursorVisibility(visible: boolean): Promise<void> 
   }
 }
 
+export async function getCursorPosition(): Promise<{ x: number; y: number }> {
+  if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+    try {
+      const [x, y] = await invoke<[number, number]>('get_cursor_position');
+      return { x, y };
+    } catch {
+      return { x: 0, y: 0 };
+    }
+  }
+  return { x: 0, y: 0 };
+}
+

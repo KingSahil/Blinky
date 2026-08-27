@@ -1359,6 +1359,7 @@ export function CommandBar() {
       cancelledRunIdsRef.current.delete(runId);
       if (runIdRef.current === runId) {
         setIsRunning(false);
+        void emit('blinky://agent-cursor-done', {});
         if (!shouldSpeakAfter && !isRecording && !isSpeaking) {
           void resumeWakeWord();
         }
@@ -1374,6 +1375,7 @@ export function CommandBar() {
     setStatus('Stopped.');
     setSteps([]);
     void hideOverlay();
+    void emit('blinky://agent-cursor-done', {});
     stopSpeaking();
     if (!isRecording) {
       void resumeWakeWord();

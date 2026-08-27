@@ -56,32 +56,45 @@ export async function runAutopilotLoop({
     try {
       if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
         await emit('blinky://agent-cursor-move', { x: point.x, y: point.y, instruction: nextStep.instruction });
-        // Allow virtual cursor to animate smoothly to the target point
-        await new Promise((r) => setTimeout(r, 240));
+        // Allow virtual cursor to glide smoothly to the target point (~600ms glide animation)
+        await new Promise((r) => setTimeout(r, 620));
       }
     } catch {}
-
-
 
     await act(point, nextStep);
 
     attempts += 1;
 
     if (!observeAfterAction) {
+      try {
+        if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+          await emit('blinky://agent-cursor-done', {});
+        }
+      } catch {}
       return { finalResult: current, attempts, stopReason: 'single_action' };
     }
-
 
     await wait();
 
     const after = await observe();
     const afterStep = after.steps.find((candidate) => candidate.instruction.trim());
     if (afterStep && getStepSignature(afterStep) === beforeSignature) {
+      try {
+        if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+          await emit('blinky://agent-cursor-done', {});
+        }
+      } catch {}
       return { finalResult: after, attempts, stopReason: 'unchanged_after_action' };
     }
 
     current = after;
   }
+
+  try {
+    if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+      await emit('blinky://agent-cursor-done', {});
+    }
+  } catch {}
 
   return { finalResult: current, attempts, stopReason: 'max_attempts' };
 }

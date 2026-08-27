@@ -2598,54 +2598,47 @@ h3 {
 /* Tradeoff A: hardware cursor hidden only via Win32 SetSystemCursor when AI visible, not via CSS */
  /* (removed body.agent-mode-active cursor:none to prevent native disappearing over overlay when AI hidden) */
 
-/* Agent Custom Companion Cursor (Clicky-style) and Visualizer — Tradeoff A: only on act/voice, morphs from native */
+/* Agent Custom Companion Cursor (Clicky-style) and Visualizer */
 .agent-cursor-wrapper {
-
   position: fixed;
   top: 0;
   left: 0;
   pointer-events: none;
-  z-index: 10000;
+  z-index: 100000;
   display: flex;
   align-items: center;
   gap: 6px;
-  will-change: transform, opacity;
-  transform: translate3d(-100px, -100px, 0);
-  opacity: 0;
-  transition: opacity 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
 }
 
 .agent-cursor-wrapper.following-user {
   transition: none !important;
-  opacity: 1;
 }
 
 .agent-cursor-wrapper.voice-following {
-  transition: transform 0.18s ease-out, opacity 0.28s ease-out;
-  opacity: 1;
+  transition: transform 0.08s ease-out;
 }
 
 .agent-cursor-wrapper.agent-acting {
-  transition: transform 0.45s cubic-bezier(0.2, 0.85, 0.25, 1), opacity 0.28s ease-out;
-  opacity: 1;
+  transition: transform 0.6s cubic-bezier(0.2, 0.85, 0.25, 1) !important;
 }
-
 
 .agent-cursor-click-ring {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 24px;
-  height: 24px;
+  top: 2px;
+  left: 3px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   border: 2px solid var(--accent-strong, #ff8b6a);
+  box-shadow: 0 0 12px var(--accent-strong, #ff8b6a);
   pointer-events: none;
-  animation: clickRipple 0.35s cubic-bezier(0, 0, 0.2, 1) forwards;
+  animation: clickRipple 0.38s cubic-bezier(0, 0, 0.2, 1) forwards;
 }
 
 @keyframes clickRipple {
   0% {
-    transform: translate(-50%, -50%) scale(0.3);
+    transform: translate(-50%, -50%) scale(0.2);
     opacity: 1;
   }
   100% {
