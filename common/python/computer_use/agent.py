@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import platform
 import re
@@ -293,3 +293,4 @@ def wants_help_menu(question: str, observation: dict[str, Any] | None) -> bool:
     process = str(active_app.get("process", "")).lower()
     app_context = str(observation.get("app_context", "")).lower() if isinstance(observation, dict) else ""
     return process in {"code.exe", "code"} or "shortcut: alt+h" in app_context
+

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
@@ -28,7 +28,7 @@ Student request:
 Decide on the best intent category for the request, whether Blinky needs to inspect the user's screen to answer (needs_screen), and whether it is a continuation.
 
 Intents to choose from:
-1. `COMPUTER_USE`: The student wants to control their Linux desktop — open/list windows, click buttons, type text, press keys, or perform sequential actions on running applications (e.g. "type hello world", "list windows", "click the search box", "press Enter").
+1. `COMPUTER_USE`: The student wants to control their Linux desktop â€” open/list windows, click buttons, type text, press keys, or perform sequential actions on running applications (e.g. "type hello world", "list windows", "click the search box", "press Enter").
 2. `OPEN_APP`: The user explicitly requests to open, launch, or start a local desktop application (e.g. "open Spotify", "launch vscode", "start WhatsApp"). Extract the app name to "app_name".
    - Note: Do NOT classify web destinations, sites, or domains (e.g. YouTube, GitHub, Gmail, ChatGPT, or URLs) as `OPEN_APP`. Route those to `DESKTOP_AUTOMATION`.
 3. `MEDIA_PLAYBACK`: The user requests to play a song/artist/playlist, pause/stop/resume playback, seek (fast-forward or rewind), or skip to the next/previous track on Spotify or YouTube (e.g. "play blinding lights", "pause the music", "skip 1 minute in song", "go back 10 seconds", "next song", "prev track"). Extract the following parameters if applicable:
@@ -39,18 +39,18 @@ Intents to choose from:
 4. `SYSTEM_SHORTCUT`: The user requests to trigger or press a keyboard shortcut (e.g. "press alt+tab", "do ctrl+s"). Extract the shortcut combination to "shortcut".
 5. `WEB_SEARCH`: The user is asking for real-time, current/fresh facts, news, weather, comparisons, or recommendations requiring external web lookup (e.g. "what is the price of Bitcoin?", "search gaming chair reviews", "latest news on AI", "who won the match?", "weather in Tokyo").
 6. `INFORMATIONAL_CHAT`: The user is greeting you, asking about your identity, explaining concepts, starting a normal conversation, or asking general questions that don't need screen context or web search (e.g. "hello", "who are you", "what is a variable in Python?").
-7. `WHATSAPP`: The user wants to interact with WhatsApp — summarize a chat, list chats, or check WhatsApp connection status (e.g. "summarize hackathon crew", "summarize my whatsapp group", "list my whatsapp chats", "check whatsapp status", "whatsapp status"). Extract: the WhatsApp action to "wa_action" (one of: "summarize", "chats", "status"), and the group or chat name to "wa_chat_name" (if mentioned).
+7. `WHATSAPP`: The user wants to interact with WhatsApp â€” summarize a chat, list chats, or check WhatsApp connection status (e.g. "summarize hackathon crew", "summarize my whatsapp group", "list my whatsapp chats", "check whatsapp status", "whatsapp status"). Extract: the WhatsApp action to "wa_action" (one of: "summarize", "chats", "status"), and the group or chat name to "wa_chat_name" (if mentioned).
 8. `DESKTOP_AUTOMATION`: Any step-by-step guidance on the user's active desktop screen/application UI (e.g. "how do I install python extension?", "click the install button", "where is the settings tab?").
 
 Compound-request rule (IMPORTANT):
 - If the request combines OPENING an app WITH a follow-up action inside it
  (e.g. "open vivaldi and search youtube.com", "open firefox and type hello",
- "launch vscode then open a file"), classify as `COMPUTER_USE` — NOT OPEN_APP,
+ "launch vscode then open a file"), classify as `COMPUTER_USE` â€” NOT OPEN_APP,
  NOT DESKTOP_AUTOMATION. It is a multi-step automation task for the agent loop.
 
 Rules for needs_screen:
 - needs_screen is true ONLY when the student wants guidance tied to visible UI (like clicking, opening, selecting, locating, highlighting, installing, or navigating something in an app, menu, button, tab, or window).
-- needs_screen is false for COMPUTER_USE, OPEN_APP, MEDIA_PLAYBACK, SYSTEM_SHORTCUT, WEB_SEARCH, INFORMATIONAL_CHAT, and WHATSAPP.
+- needs_screen is false for COMPUTER_USE, OPEN_APP, MEDIA_PLAYBACK, SYSTEM_SHORTCUT, WEB_SEARCH, INFORMATIONAL_CHAT, WHATSAPP, and VIDEO_EDIT.
 
 Rules for is_continuation:
 - is_continuation is true ONLY if the request is a short follow-up or query directly continuing or asking about the status/next step of the previous active goal/task (e.g. "what next?", "done", "now what?", "it is not showing up", "continue").
@@ -289,3 +289,4 @@ def _is_interactive_prompt_control(item: dict) -> bool:
         "textbox",
         "combobox",
     }
+

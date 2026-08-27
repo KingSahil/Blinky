@@ -2491,3 +2491,163 @@ body.agent-mode-active * {
 }
 
 
+
+
+/* ==========================================================================
+   Media Attachment & Drag-and-Drop Dropzone
+   ========================================================================== */
+
+.command-dropzone-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 28px;
+  background: rgba(18, 18, 22, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 2px dashed var(--accent-strong, #ff8b6a);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  z-index: 99;
+  pointer-events: none;
+  animation: dropzonePulse 1.5s ease-in-out infinite alternate;
+  box-shadow: 0 0 30px rgba(255, 139, 106, 0.25), inset 0 0 20px rgba(255, 139, 106, 0.15);
+}
+
+@keyframes dropzonePulse {
+  from {
+    border-color: rgba(255, 139, 106, 0.6);
+    box-shadow: 0 0 20px rgba(255, 139, 106, 0.15);
+  }
+  to {
+    border-color: rgba(255, 139, 106, 1);
+    box-shadow: 0 0 35px rgba(255, 139, 106, 0.35);
+  }
+}
+
+.command-dropzone-icon-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--accent-strong, #ff8b6a);
+}
+
+.command-dropzone-text {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+  letter-spacing: 0.02em;
+}
+
+.command-attachments-tray {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.command-attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 6px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 11px;
+  color: var(--text-strong, #f3f4f6);
+  max-width: 220px;
+  transition: all 0.2s ease;
+}
+
+.command-attachment-chip:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 139, 106, 0.4);
+}
+
+.command-attachment-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: #000;
+}
+
+.command-attachment-chip.video {
+  border-color: rgba(99, 102, 241, 0.3);
+  background: rgba(99, 102, 241, 0.1);
+  color: #c7d2fe;
+}
+
+.command-attachment-chip.audio {
+  border-color: rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.1);
+  color: #fde68a;
+}
+
+.command-attachment-chip.image {
+  border-color: rgba(236, 72, 153, 0.3);
+  background: rgba(236, 72, 153, 0.1);
+  color: #fbcfe8;
+}
+
+.command-attachment-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.command-attachment-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #9ca3af);
+  cursor: pointer;
+  padding: 0;
+  transition: all 0.15s ease;
+}
+
+.command-attachment-remove:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.command-attach-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-muted, #9ca3af);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.command-attach-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border-color: rgba(255, 139, 106, 0.4);
+}
+
+.command-attach-btn.has-attachments {
+  background: rgba(255, 139, 106, 0.15);
+  color: var(--accent-strong, #ff8b6a);
+  border-color: rgba(255, 139, 106, 0.4);
+}

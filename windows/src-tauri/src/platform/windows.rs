@@ -356,9 +356,12 @@ pub fn start_global_click_listener(app: AppHandle) {
                 }
             }
 
-            let is_shift_down = unsafe { (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x10 /* VK_SHIFT */) as u16 & 0x8000) != 0 };
+            let is_win_down = unsafe {
+                (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x5B /* VK_LWIN */) as u16 & 0x8000 != 0)
+                    || (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x5C /* VK_RWIN */) as u16 & 0x8000 != 0)
+            };
             let is_space_down = unsafe { (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x20 /* VK_SPACE */) as u16 & 0x8000) != 0 };
-            let ptt_down = is_shift_down && is_space_down;
+            let ptt_down = is_win_down && is_space_down;
             if ptt_down != was_ptt_down {
                 was_ptt_down = ptt_down;
                 let _ = app.emit("blinky://push-to-talk", ptt_down);

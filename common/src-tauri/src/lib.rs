@@ -967,6 +967,7 @@ pub fn run() {
             let app_handle = app.handle().clone();
             start_global_click_listener(app_handle.clone());
 
+            // Register Ctrl+Shift+Enter and Ctrl+Shift+Space for toggling / hiding the command window
             for code in [Code::Enter, Code::Space] {
                 let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), code);
                 let app_handle = app_handle.clone();
@@ -974,20 +975,32 @@ pub fn run() {
                     app.global_shortcut()
                         .on_shortcut(shortcut, move |_app, _shortcut, event| {
                             if event.state() == ShortcutState::Pressed {
-                                let active = get_active_shortcut_from_env(&app_handle);
-                                let is_match = match code {
-                                    Code::Enter => active == "Enter",
-                                    Code::Space => active == "Space",
-                                    _ => false,
-                                };
-                                if is_match {
-                                    toggle_command_window(&app_handle);
-                                }
+                                toggle_command_window(&app_handle);
                             }
                         })
                 {
-                    eprintln!("Failed to register command shortcut {code:?}: {err}");
+                    eprintln!("Failed to register command window shortcut {code:?}: {err}");
                 }
+            }
+
+            // Register Win+Space (Super+Space) exclusively for push-to-talk voice recording
+            let win_space_shortcut = Shortcut::new(Some(Modifiers::SUPER), Code::Space);
+            let ptt_handle = app_handle.clone();
+            if let Err(err) = app
+                .global_shortcut()
+                .on_shortcut(win_space_shortcut, move |_app, _shortcut, event| {
+                    if let Some(command) = ptt_handle.get_webview_window("command") {
+                        if event.state() == ShortcutState::Pressed {
+                            let _ = command.show();
+                            let _ = command.set_focus();
+                            let _ = command.emit("blinky://push-to-talk", true);
+                        } else if event.state() == ShortcutState::Released {
+                            let _ = command.emit("blinky://push-to-talk", false);
+                        }
+                    }
+                })
+            {
+                eprintln!("Failed to register Win+Space push-to-talk shortcut: {err}");
             }
 
             Ok(())
@@ -1033,8 +1046,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
 fn toggle_command_window(app: &AppHandle) {
     if let Some(command) = app.get_webview_window("command") {
         let is_visible = command.is_visible().unwrap_or(false);
-        let is_focused = command.is_focused().unwrap_or(false);
-        if is_visible && is_focused {
+        if is_visible {
             let _ = command.hide();
         } else {
             let _ = command.emit("blinky://open-command", ());

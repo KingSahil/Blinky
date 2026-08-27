@@ -1,6 +1,7 @@
 import { emit, listen } from '@tauri-apps/api/event';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode } from 'lucide-react';
+import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import QRCode from 'qrcode';
@@ -20,6 +21,27 @@ import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvam
 import { SarvamSpeechToTextStream, SarvamTextToSpeechStream } from './lib/sarvamStream';
 import { AdaptiveTransportManager } from './lib/adaptiveTransport';
 import type { TutorConversationMessage, TutorProgress, TutorResult } from './lib/types';
+
+
+interface AttachedMedia {
+  path: string;
+  name: string;
+  type: 'video' | 'image' | 'audio' | 'other';
+  previewUrl?: string;
+}
+
+function getMediaType(filePath: string): 'video' | 'image' | 'audio' | 'other' {
+  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+  if (['mp4', 'mov', 'mkv', 'avi', 'webm', 'flv', 'wmv', 'm4v'].includes(ext)) return 'video';
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'].includes(ext)) return 'image';
+  if (['mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg', 'wma'].includes(ext)) return 'audio';
+  return 'other';
+}
+
+function getFileName(filePath: string): string {
+  const parts = filePath.split(/[\\/]/);
+  return parts[parts.length - 1] || filePath;
+}
 
 interface TargetClickedPayload {
   step?: number;
@@ -68,6 +90,55 @@ function ExternalMarkdownLink({ href, children }: AnchorHTMLAttributes<HTMLAncho
 
 export function CommandBar() {
   const [question, setQuestion] = useState('');
+  const [attachedFiles, setAttachedFiles] = useState<AttachedMedia[]>([]);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const addAttachedFiles = (paths: string[]) => {
+    setAttachedFiles((prev) => {
+      const existing = new Set(prev.map((f) => f.path));
+      const newItems: AttachedMedia[] = [];
+      for (const p of paths) {
+        if (!existing.has(p) && p.trim()) {
+          const type = getMediaType(p);
+          let previewUrl: string | undefined = undefined;
+          try {
+            if (type === 'image') {
+              previewUrl = convertFileSrc(p);
+            }
+          } catch {
+            // ignore
+          }
+          newItems.push({
+            path: p,
+            name: getFileName(p),
+            type,
+            previewUrl,
+          });
+          existing.add(p);
+        }
+      }
+      return [...prev, ...newItems];
+    });
+  };
+
+  const removeAttachedFile = (pathToRemove: string) => {
+    setAttachedFiles((prev) => prev.filter((f) => f.path !== pathToRemove));
+  };
+
+  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const paths: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const nativePath = (file as any).path || (file as any).webkitRelativePath || file.name;
+      if (nativePath) paths.push(nativePath);
+    }
+    addAttachedFiles(paths);
+    e.target.value = '';
+  };
+
   const [isRunning, setIsRunning] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [agentModeEnabled, setAgentModeEnabled] = useState(false);
@@ -1336,6 +1407,51 @@ export function CommandBar() {
     };
   }, []);
 
+  // Global shortcut to toggle voice recording via Win+Space
+  useEffect(() => {
+    const handleVoiceShortcut = (event: KeyboardEvent) => {
+      if ((event.key === ' ' || event.code === 'Space') && event.metaKey) {
+        event.preventDefault();
+        if (!isRunning && !isTranscribing) {
+          toggleRecording();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleVoiceShortcut);
+    return () => {
+      window.removeEventListener('keydown', handleVoiceShortcut);
+    };
+  }, [isRunning, isTranscribing, isRecording]);
+
+  // Setup native Tauri and web drag-and-drop listener
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === 'enter' || event.payload.type === 'over') {
+          setIsDraggingOver(true);
+        } else if (event.payload.type === 'leave') {
+          setIsDraggingOver(false);
+        } else if (event.payload.type === 'drop') {
+          setIsDraggingOver(false);
+          const droppedPaths = event.payload.paths || [];
+          if (droppedPaths.length > 0) {
+            addAttachedFiles(droppedPaths);
+          }
+        }
+      })
+      .then((u) => {
+        unlisten = u;
+      })
+      .catch((err) => {
+        console.warn('onDragDropEvent failed:', err);
+      });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   // Synchronize cursor visibility, hide native cursor in Windows, and track pointer inside CommandBar
   useEffect(() => {
     void emit('blinky://agent-cursor-visibility', { visible: agentModeEnabled });
@@ -1873,7 +1989,7 @@ export function CommandBar() {
                   className={`dropdown-option ${shortcut === 'Space' ? 'active' : ''}`}
                   onClick={() => updateShortcut('Space')}
                 >
-                  <span>Ctrl + Shift + Space</span>
+                  <span>Ctrl + Win + Space</span>
                   {shortcut === 'Space' && <Check size={14} className="active-dot" />}
                 </button>
               </div>
@@ -1977,7 +2093,7 @@ export function CommandBar() {
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>Push-to-Talk (Hold to speak)</span>
-                  <code style={{ background: 'rgba(255, 139, 106, 0.15)', color: 'var(--accent-strong, #ff8b6a)', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>Shift + Space</code>
+                  <code style={{ background: 'rgba(255, 139, 106, 0.15)', color: 'var(--accent-strong, #ff8b6a)', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>Win + Space</code>
                 </div>
               </div>
             </div>
@@ -2015,17 +2131,90 @@ export function CommandBar() {
           </div>
         )}
 
-        <div className="command-stack">
+        {isDraggingOver && (
+          <div className="command-dropzone-overlay">
+            <div className="command-dropzone-icon-row">
+              <Film size={24} />
+              <ImageIcon size={24} />
+              <Music size={24} />
+            </div>
+            <span className="command-dropzone-text">Drop videos or images to reference in AiCut</span>
+          </div>
+        )}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="video/*,image/*,audio/*"
+          style={{ display: 'none' }}
+          onChange={handleFileInputChange}
+        />
+
+        <div
+          className="command-stack"
+          onDragOver={(e) => { e.preventDefault(); setIsDraggingOver(true); }}
+          onDragLeave={(e) => { e.preventDefault(); setIsDraggingOver(false); }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDraggingOver(false);
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+              const paths: string[] = [];
+              for (let i = 0; i < e.dataTransfer.files.length; i++) {
+                const f = e.dataTransfer.files[i];
+                const p = (f as any).path || f.name;
+                if (p) paths.push(p);
+              }
+              addAttachedFiles(paths);
+            }
+          }}
+        >
           <div className="command-input" onClick={() => inputRef.current?.focus()}>
+            {attachedFiles.length > 0 && (
+              <div className="command-attachments-tray">
+                {attachedFiles.map((file) => (
+                  <div key={file.path} className={`command-attachment-chip ${file.type}`} title={file.path}>
+                    {file.previewUrl ? (
+                      <img src={file.previewUrl} alt="" className="command-attachment-thumb" />
+                    ) : file.type === 'video' ? (
+                      <Film size={13} />
+                    ) : file.type === 'audio' ? (
+                      <Music size={13} />
+                    ) : (
+                      <ImageIcon size={13} />
+                    )}
+                    <span className="command-attachment-name">{file.name}</span>
+                    <button
+                      type="button"
+                      className="command-attachment-remove"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeAttachedFile(file.path);
+                      }}
+                      title="Remove file"
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             <textarea
               ref={inputRef}
               rows={1}
               value={question}
               onChange={handleInputChange}
-              placeholder={isRecording ? "Listening... click mic to stop" : isTranscribing ? "Transcribing voice..." : "Ask anything..."}
+              placeholder={isRecording ? "Listening... click mic to stop (Win+Space)" : isTranscribing ? "Transcribing voice..." : "Ask anything... (Win+Space to speak)"}
               disabled={isTranscribing}
               autoFocus
               onKeyDown={(event) => {
+                if ((event.key === ' ' || event.code === 'Space') && event.metaKey) {
+                  event.preventDefault();
+                  if (!isRunning && !isTranscribing) {
+                    toggleRecording();
+                  }
+                  return;
+                }
                 if (event.key === 'Enter' && !event.shiftKey) {
                   event.preventDefault();
                   void submit(event);
@@ -2034,6 +2223,18 @@ export function CommandBar() {
             />
             <div className="command-input-actions">
               <div className="command-input-actions-left">
+                <button
+                  type="button"
+                  className={`command-attach-btn ${attachedFiles.length > 0 ? 'has-attachments' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    fileInputRef.current?.click();
+                  }}
+                  disabled={isRunning || isTranscribing}
+                  title="Attach video or image reference (or drag & drop)"
+                >
+                  <Paperclip size={16} />
+                </button>
                 <button
                   type="button"
                   className={`command-websearch-btn ${webSearchEnabled ? 'active' : ''}`}
@@ -2076,7 +2277,7 @@ export function CommandBar() {
                     toggleRecording();
                   }}
                   disabled={isRunning || isTranscribing}
-                  title={isRecording ? "Stop recording" : "Record voice command"}
+                  title={isRecording ? "Stop recording (Win+Space)" : "Record voice command (Win+Space)"}
                 >
                   {isTranscribing ? (
                     <Loader2 className="spin" size={16} />

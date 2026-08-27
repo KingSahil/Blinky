@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-# ── sys.path setup: must run before any platform-specific imports ──
+# â”€â”€ sys.path setup: must run before any platform-specific imports â”€â”€
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _COMMON_PY = str(_SCRIPT_DIR)
 if _COMMON_PY not in sys.path:
@@ -180,9 +180,9 @@ def run(
     """
     RULE: Screenshots/OCR are ONLY taken when BOTH web_search_enabled=False
     AND agent_mode=False. The priority order is:
-      1. web_search_enabled → SearXNG pipeline (no OCR, no screenshots)
-      2. agent_mode        → MCP desktop automation (no OCR, no screenshots)
-      3. default           → vision pipeline with screenshots + OCR
+      1. web_search_enabled â†’ SearXNG pipeline (no OCR, no screenshots)
+      2. agent_mode        â†’ MCP desktop automation (no OCR, no screenshots)
+      3. default           â†’ vision pipeline with screenshots + OCR
     """
     started = time.perf_counter()
     warnings: list[str] = []
@@ -195,7 +195,7 @@ def run(
         from utils.window import set_ignored_overlay_rects
         set_ignored_overlay_rects(ignored_rects)
 
-    # PATH 1: Web search — purely SearXNG, never touches the screen
+    # PATH 1: Web search â€” purely SearXNG, never touches the screen
     if web_search_enabled:
         return run_web_intelligence(question, conversation_history, started, warnings)
 
@@ -215,7 +215,7 @@ def run(
     )
     skip_preflight = should_skip_preflight_for_local_fast_path(question) or has_progress
 
-    # RULE: agent_mode NEVER forces screen context — it goes through preflight
+    # RULE: agent_mode NEVER forces screen context â€” it goes through preflight
 
     # for intent classification (COMPUTER_USE, OPEN_APP, etc.)
     if agent_mode:
@@ -246,6 +246,9 @@ def run(
     if intent == "WEB_SEARCH":
         LOGGER.info("Automatically enabling web search mode for classified intent: WEB_SEARCH")
         web_search_enabled = True
+    elif intent == "VIDEO_EDIT":
+        LOGGER.info("Routing to AiCut video editor for intent: VIDEO_EDIT")
+        return run_aicut_tool(extracted_params, question, started, warnings)
     elif intent == "WHATSAPP":
         LOGGER.info("Routing to WhatsApp tool for intent: WHATSAPP")
         wa_action = str(extracted_params.get("wa_action") or "status").lower().strip()
@@ -271,7 +274,7 @@ def run(
         # Reroute: if the query contains action verbs beyond just "open",
         # treat it as COMPUTER_USE so the full tool loop runs.
         if intent == "OPEN_APP" and _has_computer_use_action(question):
-            LOGGER.info("Rerouting OPEN_APP → COMPUTER_USE (query contains action verbs)")
+            LOGGER.info("Rerouting OPEN_APP â†’ COMPUTER_USE (query contains action verbs)")
             intent = "COMPUTER_USE"
 
         from computer_use.agent import STOP_SPOTIFY_RE
@@ -405,7 +408,7 @@ def run(
     print("__BLINKY_CAPTURED__", flush=True)
 
     # Locator fast-path: screenshot-only, no LLM. NEVER runs for app-opening
-    # queries ("open X", "open X and Y") — those belong to the app launcher /
+    # queries ("open X", "open X and Y") â€” those belong to the app launcher /
     # agent loop, and a fuzzy OCR match on the app name would click the wrong
     # thing (e.g. matching "search youtube.com" to the word "search").
     locator_result = None
@@ -605,6 +608,18 @@ def classify_request(
     agent_mode: bool = False,
 ) -> dict | None:
     try:
+        from tools.aicut_tool import resolve_aicut_request
+        aicut_match = resolve_aicut_request(question)
+        if aicut_match and aicut_match.get("action") != "explorer_context":
+            return {
+                "intent": "VIDEO_EDIT",
+                "needs_screen": False,
+                "is_continuation": False,
+                "extracted_params": aicut_match,
+            }
+    except Exception as exc:
+        LOGGER.debug("Fast-path AiCut resolution failed: %s", exc)
+    try:
         from tools.whatsapp_tool import resolve_whatsapp_request
         wa_match = resolve_whatsapp_request(question)
         if wa_match:
@@ -664,6 +679,32 @@ def answer_without_screen(question: str, conversation_history: list[dict] | None
     if not summary:
         raise RuntimeError("The chat model returned an empty reply.")
     return {"summary": summary, "steps": []}
+
+
+def run_aicut_tool(
+    params: dict,
+    question: str,
+    started: float,
+    warnings: list[str],
+) -> dict:
+    """Call AiCut video editor and return a Blinky-formatted result."""
+    from tools.aicut_tool import run_aicut, format_aicut_summary
+    action = params.get("action", "video edit")
+    _emit_status("aicut", f"Editing video with AiCut ({action})...")
+    res = run_aicut(params)
+    summary = format_aicut_summary(res, question)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": summary,
+        "steps": [],
+        "active_app": {"title": "AiCut Video Editor", "process": "AIVideoEditor.exe", "supported": True},
+        "ocr": {"count": 0, "items": []},
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+        "is_continuation": False,
+        "aicut": res,
+    }
 
 
 def run_whatsapp_tool(
@@ -1368,3 +1409,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
