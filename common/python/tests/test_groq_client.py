@@ -222,6 +222,6 @@ def test_groq_vision_retries_with_default_model_when_model_not_found(tmp_path: P
     assert result["summary"] == "Recovered with default model"
     assert post.call_count == 2
     assert post.call_args_list[0].kwargs["json"]["model"] == "non-existent-model"
-    assert post.call_args_list[1].kwargs["json"]["model"] == "qwen/qwen3.6-27b"
+    assert post.call_args_list[1].kwargs["json"]["model"] == "qwen/qwen3.8-27b"
 
 

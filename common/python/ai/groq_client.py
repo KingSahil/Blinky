@@ -17,8 +17,8 @@ from utils.logging import get_logger
 LOGGER = get_logger("blinky.groq")
 
 DEFAULT_GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
-DEFAULT_GROQ_VISION_MODEL = "qwen/qwen3.6-27b"
+DEFAULT_GROQ_MODEL = "qwen/qwen3.8-27b"
+DEFAULT_GROQ_VISION_MODEL = "qwen/qwen3.8-27b"
 DEFAULT_IMAGE_MAX_DIM = 768
 DEFAULT_IMAGE_QUALITY = 80
 MAX_RATE_LIMIT_WAIT_SECONDS = 35
@@ -28,7 +28,14 @@ DECOMMISSIONED_GROQ_MODELS = {
     "llama-3.2-90b-vision-preview",
     "llama-3.2-11b-vision-preview",
     "meta-llama/llama-4-scout-17b-16e-instruct",
+    "qwen/qwen3.6-27b",
 }
+
+
+def _ensure_json_in_prompt(prompt: str) -> str:
+    if "json" not in prompt.lower():
+        return f"{prompt}\n\nRespond with a valid JSON object."
+    return prompt
 
 
 def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
@@ -39,6 +46,7 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
     model = _active_groq_vision_model()
     groq_url = os.getenv("BLINKY_GROQ_URL", DEFAULT_GROQ_URL).strip() or DEFAULT_GROQ_URL
     prompt_str = prompt if isinstance(prompt, str) else json.dumps(prompt)
+    prompt_str = _ensure_json_in_prompt(prompt_str)
 
     try:
         timeout_val = int(os.getenv("BLINKY_GROQ_TIMEOUT", "90").strip())
@@ -64,7 +72,7 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
         return {
             "model": model,
             "temperature": 0.1,
-            "max_tokens": 750,
+            "max_tokens": 1024,
             "response_format": {"type": "json_object"},
             "messages": [
                 {
@@ -88,7 +96,7 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
         text_payload = {
             "model": model,
             "temperature": 0.1,
-            "max_tokens": 750,
+            "max_tokens": 1024,
             "response_format": {"type": "json_object"},
             "messages": [{"role": "user", "content": prompt_str}],
         }
@@ -111,7 +119,7 @@ def ask_groq_vision(prompt: str, screenshot_path: Path) -> dict[str, Any]:
     return _validate_response(_parse_json(content))
 
 
-def ask_groq_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
+def ask_groq_text(prompt: str, max_tokens: int = 1024) -> dict[str, Any]:
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("GROQ_API_KEY is required when BLINKY_AI_PROVIDER=groq.")
@@ -119,6 +127,8 @@ def ask_groq_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
     model = _active_groq_model()
     groq_url = os.getenv("BLINKY_GROQ_URL", DEFAULT_GROQ_URL).strip() or DEFAULT_GROQ_URL
     prompt_str = prompt if isinstance(prompt, str) else json.dumps(prompt)
+    prompt_str = _ensure_json_in_prompt(prompt_str)
+    effective_max_tokens = max(max_tokens, 1024)
 
     try:
         timeout_val = int(os.getenv("BLINKY_GROQ_TIMEOUT", "90").strip())
@@ -128,7 +138,7 @@ def ask_groq_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
     payload = {
         "model": model,
         "temperature": 0.1,
-        "max_tokens": max_tokens,
+        "max_tokens": effective_max_tokens,
         "response_format": {"type": "json_object"},
         "messages": [{"role": "user", "content": prompt_str}],
     }
@@ -348,6 +358,7 @@ def _without_response_format(payload: dict[str, Any]) -> dict[str, Any]:
     retry_payload = json.loads(json.dumps(payload))
     retry_payload.pop("response_format", None)
     retry_payload["temperature"] = 0
+    retry_payload["max_tokens"] = max(retry_payload.get("max_tokens", 1024), 1500)
     return retry_payload
 
 
@@ -502,7 +513,9 @@ def _parse_json(text: str) -> dict[str, Any]:
 
     # 3. Attempt direct JSON parsing
     try:
-        return json.loads(cleaned)
+        res = json.loads(cleaned)
+        if isinstance(res, dict):
+            return res
     except json.JSONDecodeError:
         pass
 
@@ -510,16 +523,77 @@ def _parse_json(text: str) -> dict[str, Any]:
     match = re.search(r"(\{[\s\S]*\})", cleaned)
     if match:
         try:
-            return json.loads(match.group(1))
+            res = json.loads(match.group(1))
+            if isinstance(res, dict):
+                return res
         except json.JSONDecodeError:
             pass
 
-    # 5. Extract summary if partially formed JSON
+    # 5. Attempt auto-repair on truncated JSON
+    start_idx = cleaned.find("{")
+    if start_idx != -1:
+        truncated = cleaned[start_idx:].strip()
+        in_string = False
+        escape = False
+        for ch in truncated:
+            if ch == "\\" and not escape:
+                escape = True
+            elif ch == '"' and not escape:
+                in_string = not in_string
+                escape = False
+            else:
+                escape = False
+
+        candidate = truncated
+        if in_string:
+            candidate += '"'
+
+        candidate = re.sub(r",\s*$", "", candidate)
+        candidate = re.sub(r":\s*$", ': ""', candidate)
+
+        open_brackets = candidate.count("[") - candidate.count("]")
+        open_braces = candidate.count("{") - candidate.count("}")
+
+        candidate += "]" * max(0, open_brackets)
+        candidate += "}" * max(0, open_braces)
+
+        try:
+            res = json.loads(candidate)
+            if isinstance(res, dict):
+                return res
+        except json.JSONDecodeError:
+            pass
+
+    # 6. Regex fallback for Preflight / Routing intents
+    intent_match = re.search(r'"intent"\s*:\s*"([^"]+)"', cleaned, re.IGNORECASE)
+    if intent_match:
+        intent = intent_match.group(1).upper()
+        needs_screen_match = re.search(r'"needs_screen"\s*:\s*(true|false)', cleaned, re.IGNORECASE)
+        needs_screen = "true" in needs_screen_match.group(1).lower() if needs_screen_match else False
+        is_cont_match = re.search(r'"is_continuation"\s*:\s*(true|false)', cleaned, re.IGNORECASE)
+        is_cont = "true" in is_cont_match.group(1).lower() if is_cont_match else False
+        return {
+            "intent": intent,
+            "needs_screen": needs_screen,
+            "is_continuation": is_cont,
+            "extracted_params": {},
+        }
+
+    # 7. Regex fallback for summary
     summary_match = re.search(r'"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', cleaned)
     if summary_match:
         return {"summary": summary_match.group(1), "steps": []}
 
-    # Final fallback attempt or raise
+    # 8. Regex fallback for router match
+    match_val = re.search(r'"match"\s*:\s*(true|false)', cleaned, re.IGNORECASE)
+    if match_val:
+        return {
+            "match": "true" in match_val.group(1).lower(),
+            "confidence": 80,
+            "reasoning": "Extracted via fallback parser",
+            "arguments": {},
+        }
+
     return json.loads(cleaned)
 
 
