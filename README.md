@@ -232,15 +232,28 @@ ollama pull gemma4:e4b
 
 ---
 
-### 2️⃣ Install Dependencies
-#### Windows
+### 2️⃣ Install Dependencies (One-click)
+#### Windows - single script (recommended)
+```powershell
+powershell -ExecutionPolicy Bypass -File setup.ps1
+# or: bun run setup        # same
+```
+Handles Bun/Rust/Python checks, `bun install`, `.venv` + `playwright`, `.env` creation, and prints next steps. Idempotent, clear errors.
+
+#### Windows - manual
 ```powershell
 bun install
 bun run setup:python
 bun run check:ollama
 ```
 
-#### Linux
+#### Linux - single script (recommended)
+```bash
+chmod +x setup.sh && ./setup.sh
+# or: bun run setup:linux
+```
+
+#### Linux - manual
 ```bash
 bun install
 bun run linux:setup:python
