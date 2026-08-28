@@ -108,7 +108,7 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
       }
 
       console.log("[Mobile] 🚀 Starting Expo mobile development server on port 8081...");
-      mobileProc = spawn(["bun", "run", "start", "--", "-c"], {
+      mobileProc = spawn(["bun", "run", "start"], {
         cwd: "common/mobile",
         stdout: "inherit",
         stderr: "inherit",
@@ -121,8 +121,27 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
 
     }
 
-    // Attempt to launch on device (Expo Go or custom package)
-    setTimeout(async () => {
+    // Wait for Metro packager to be ready before opening the app on device
+    (async () => {
+      const maxAttempts = 40;
+      let ready = false;
+      for (let i = 0; i < maxAttempts; i++) {
+        try {
+          const res = await fetch("http://localhost:8081/status", { signal: AbortSignal.timeout(1000) });
+          if (res.status === 200) {
+            ready = true;
+            break;
+          }
+        } catch {}
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      if (ready) {
+        console.log("[Mobile] 📱 Metro is ready. Opening app on device...");
+      } else {
+        console.warn("[Mobile] ⚠️ Metro bundler readiness check timed out. Attempting launch anyway...");
+      }
+
       try {
         const launchExpo = spawn([adb, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
         await launchExpo.exited;
@@ -132,7 +151,7 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
           await launchCustom.exited;
         } catch {}
       }
-    }, 1500);
+    })();
 
     return mobileProc;
   } catch (err: any) {
