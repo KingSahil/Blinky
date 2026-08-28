@@ -40,8 +40,8 @@ Intents to choose from:
 5. `WEB_SEARCH`: The user is asking for real-time, current/fresh facts, news, weather, comparisons, or recommendations requiring external web lookup (e.g. "what is the price of Bitcoin?", "search gaming chair reviews", "latest news on AI", "who won the match?", "weather in Tokyo").
 6. `INFORMATIONAL_CHAT`: The user is greeting you, asking about your identity, explaining concepts, starting a normal conversation, or asking general questions that don't need screen context or web search (e.g. "hello", "who are you", "what is a variable in Python?").
 7. `WHATSAPP`: The user wants to interact with WhatsApp — summarize a chat, list chats, or check WhatsApp connection status (e.g. "summarize hackathon crew", "summarize my whatsapp group", "list my whatsapp chats", "check whatsapp status", "whatsapp status"). Extract: the WhatsApp action to "wa_action" (one of: "summarize", "chats", "status"), and the group or chat name to "wa_chat_name" (if mentioned).
-8. `VIDEO_EDIT`: The user wants to edit a video, trim a clip, add/mix background music, merge multiple video clips, burn styled subtitles/captions with presets (e.g. "instagram", "hormozi", "word-by-word", "neon-blur", "pill-yellow", "glassmorphism", "documentary", etc.), transcribe audio/video to SRT captions via faster-whisper, or inspect media info (e.g. "trim dance.mp4 from 10 to 25s", "add song edm.mp3 to video.mp4", "merge clip1.mp4 and clip2.mp4", "burn subtitles to dance.mp4 with instagram preset", "i want word by word instagram like", "transcribe lecture.mp4 with small model"). Extract the relevant parameters:
-    - "action": one of "trim", "add_song", "merge", "subtitles", "transcribe", "media_info"
+8. `VIDEO_EDIT`: The user wants to edit a video, trim a clip, add/mix background music, merge multiple video clips, burn styled subtitles/captions with presets (e.g. "instagram", "hormozi", "word-by-word", "neon-blur", "pill-yellow", "glassmorphism", "documentary", etc.), transcribe audio/video to SRT captions via faster-whisper, inspect media info, or perform multi-step editing pipelines (e.g. "trim dance.mp4 from 10 to 25s", "add song edm.mp3 to video.mp4", "merge clip1.mp4 and clip2.mp4", "merge them all and add captions", "burn subtitles to dance.mp4 with instagram preset", "i want word by word instagram like", "transcribe lecture.mp4 with small model"). Extract the relevant parameters:
+    - "action": one of "trim", "add_song", "merge", "subtitles", "transcribe", "media_info", "pipeline"
     - "video_path": video path or filename
     - "song_path": audio/song path or filename to mix
     - "srt_path": subtitle file path (if burning existing SRT)
@@ -51,6 +51,7 @@ Intents to choose from:
     - "end_seconds": trim end time in seconds (float)
     - "music_volume": background music volume (float between 0.0 and 1.0)
     - "input_paths": list of video paths when merging clips
+    - "subtitles": boolean whether subtitles/captions should be burned (default false unless captions requested)
 9. `DESKTOP_AUTOMATION`: Any step-by-step guidance on the user's active desktop screen/application UI (e.g. "how do I install python extension?", "click the install button", "where is the settings tab?").
 
 Compound-request rule (IMPORTANT):
@@ -81,7 +82,7 @@ Return valid JSON in the following format only:
     "wa_chat_name": "extracted WhatsApp group or chat name",
     "media_action": "play or pause or resume or stop or seek or next or prev",
     "seek_seconds": 10,
-    "action": "trim or add_song or merge or subtitles or transcribe or media_info",
+    "action": "trim or add_song or merge or subtitles or transcribe or media_info or pipeline",
     "video_path": "extracted video path or filename",
     "song_path": "extracted song or audio path",
     "srt_path": "extracted subtitle path",
@@ -90,7 +91,8 @@ Return valid JSON in the following format only:
     "start_seconds": 0.0,
     "end_seconds": 10.0,
     "music_volume": 0.25,
-    "input_paths": ["video1.mp4", "video2.mp4"]
+    "input_paths": ["video1.mp4", "video2.mp4"],
+    "subtitles": false
   }}
 }}
 """.strip()

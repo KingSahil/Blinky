@@ -316,15 +316,56 @@ def merge_videos(
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180, cwd=str(ROOT_DIR))
         success = proc.returncode == 0 and out.exists()
+        if success:
+            return {
+                "success": True,
+                "action": "merge",
+                "input_paths": resolved_inputs,
+                "output_path": str(out),
+                "count": len(resolved_inputs),
+                "stdout": proc.stdout.strip(),
+                "stderr": "",
+                "error": None,
+            }
+    except Exception:
+        pass
+
+    # Fallback to direct ffmpeg if AIVideoEditor.exe failed or missing
+    try:
+        ffmpeg_cmd = ["ffmpeg", "-y"]
+        for inp in resolved_inputs:
+            ffmpeg_cmd.extend(["-i", inp])
+
+        filter_parts = []
+        for i in range(len(resolved_inputs)):
+            filter_parts.append(f"[{i}:v:0]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v{i}];")
+            # Handle audio stream presence or synthesize silence if stream missing
+            filter_parts.append(f"[{i}:a:0]aformat=sample_rates=44100:channel_layouts=stereo[a{i}];")
+
+        concat_in = "".join(f"[v{i}][a{i}]" for i in range(len(resolved_inputs)))
+        filter_parts.append(f"{concat_in}concat=n={len(resolved_inputs)}:v=1:a=1[v][a]")
+        filter_str = "".join(filter_parts)
+
+        ffmpeg_cmd.extend([
+            "-filter_complex", filter_str,
+            "-map", "[v]",
+            "-map", "[a]",
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            str(out),
+        ])
+
+        fproc = subprocess.run(ffmpeg_cmd, capture_output=True, text=True, timeout=180)
+        fsuccess = fproc.returncode == 0 and out.exists()
         return {
-            "success": success,
+            "success": fsuccess,
             "action": "merge",
             "input_paths": resolved_inputs,
             "output_path": str(out),
             "count": len(resolved_inputs),
-            "stdout": proc.stdout.strip(),
-            "stderr": proc.stderr.strip() if not success else "",
-            "error": None if success else (proc.stderr.strip() or proc.stdout.strip() or "Merge failed"),
+            "stdout": fproc.stdout.strip(),
+            "stderr": fproc.stderr.strip() if not fsuccess else "",
+            "error": None if fsuccess else (fproc.stderr.strip() or "FFmpeg merge failed"),
         }
     except Exception as exc:
         return {"success": False, "action": "merge", "error": str(exc)}

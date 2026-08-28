@@ -294,3 +294,80 @@ def test_build_ass_neon_blur():
     ass = build_ass_text(srt, "neon-blur")
     assert "CYBER" in ass
     assert "\\c&HFFFF00&" in ass  # Cyan active highlight tag
+
+
+# ── Composite / Pipeline video editing integration ──────────────────
+
+def test_resolve_merge_with_audio_and_captions_explorer(monkeypatch):
+    monkeypatch.setattr(
+        "tools.aicut_tool.get_active_explorer_context",
+        lambda: {
+            "active_directory": "C:\\Users\\sahil\\Downloads\\Video",
+            "selected_files": [
+                "C:\\Users\\sahil\\Downloads\\Video\\quicksort.mp4",
+                "C:\\Users\\sahil\\Downloads\\Video\\scuba.mp4",
+                "C:\\Users\\sahil\\Downloads\\Video\\HIP HOP BEATS.mp3",
+            ],
+            "selected_videos": [
+                "C:\\Users\\sahil\\Downloads\\Video\\quicksort.mp4",
+                "C:\\Users\\sahil\\Downloads\\Video\\scuba.mp4",
+            ],
+            "selected_audios": [
+                "C:\\Users\\sahil\\Downloads\\Video\\HIP HOP BEATS.mp3",
+            ],
+            "media_files_in_folder": [],
+        },
+    )
+    q = "merged them all and add captions in the merged video"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "pipeline"
+    assert len(res["input_paths"]) == 2
+    assert "quicksort.mp4" in res["input_paths"][0]
+    assert "scuba.mp4" in res["input_paths"][1]
+    assert "HIP HOP BEATS.mp3" in res["song_path"]
+    assert res["subtitles"] is True
+    assert res["preset"] == "instagram"
+
+
+def test_resolve_merge_and_audio_explicit_query():
+    q = "merge clip1.mp4 and clip2.mp4 with beats.mp3"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "pipeline"
+    assert len(res["input_paths"]) == 2
+    assert res["song_path"] is not None
+    assert "beats.mp3" in res["song_path"]
+
+
+def test_resolve_merge_and_subtitles_explicit_query():
+    q = "merge clip1.mp4 and clip2.mp4 and add captions with hormozi"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "pipeline"
+    assert len(res["input_paths"]) == 2
+    assert res["subtitles"] is True
+    assert res["preset"] == "hormozi"
+
+
+def test_format_pipeline_summary():
+    result = {
+        "success": True,
+        "action": "pipeline",
+        "output_path": "C:\\Video\\final_merged.mp4",
+        "steps_completed": [
+            {"action": "merge", "input_paths": ["C:\\Video\\clip1.mp4", "C:\\Video\\clip2.mp4"]},
+            {"action": "add_song", "song_path": "C:\\Video\\beats.mp3", "music_volume": 0.25},
+            {"action": "subtitles", "preset": "instagram", "transcription": {"language": "en", "text": "QuickSort algorithm demonstration"}},
+        ],
+    }
+    summary = format_aicut_summary(result)
+    assert "Video Edited Successfully" in summary
+    assert "Combined 2 Clips" in summary
+    assert "clip1.mp4" in summary
+    assert "Audio Track Added" in summary
+    assert "beats.mp3" in summary
+    assert "Captions Burned" in summary
+    assert "instagram" in summary
+    assert "final_merged.mp4" in summary
+
