@@ -19,10 +19,23 @@ _COMMON_DIR = Path(__file__).resolve().parent.parent
 if str(_COMMON_DIR) not in sys.path:
     sys.path.insert(0, str(_COMMON_DIR))
 
-_COMMON_ROOT = Path(__file__).resolve().parent.parent.parent
-AICUT_ROOT = _COMMON_ROOT / "aicut"
-if not AICUT_ROOT.exists():
-    AICUT_ROOT = Path(r"C:\Projects\AiCut")
+def _find_aicut_root() -> Path:
+    candidates = [
+        Path(__file__).resolve().parent.parent.parent / "aicut",
+        Path(__file__).resolve().parent.parent.parent.parent / "common" / "aicut",
+        Path(__file__).resolve().parent.parent / "aicut",
+        Path(r"C:\Projects\Blinky\common\aicut"),
+        Path(r"C:\Projects\AiCut"),
+    ]
+    for c in candidates:
+        if (c / "aicut_mcp.py").is_file():
+            return c.resolve()
+    for c in candidates:
+        if c.exists():
+            return c.resolve()
+    return candidates[0].resolve()
+
+AICUT_ROOT = _find_aicut_root()
 AICUT_MCP_PY = AICUT_ROOT / "aicut_mcp.py"
 
 try:
@@ -58,6 +71,12 @@ def find_candidate_file(filename_or_path: str, active_dir: str | None = None, fi
         Path.home() / "Videos",
         Path.home() / "Downloads",
         Path.home() / "Desktop",
+        Path.home() / "OneDrive" / "Desktop",
+        Path.home() / "OneDrive" / "Videos",
+        Path.home() / "OneDrive" / "Documents",
+        Path.home() / "OneDrive" / "Pictures",
+        Path.home() / "Pictures",
+        Path.home() / "Documents",
     ])
 
     clean_name = raw_path.name.lower()
@@ -439,15 +458,26 @@ def resolve_aicut_request(query: str) -> dict[str, Any] | None:
 
 def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute AiCut command or multi-step pipeline directly via aicut_mcp module."""
-    if not AICUT_ROOT.exists():
-        return {"success": False, "error": f"AiCut repository not found at {AICUT_ROOT}"}
+    root = _find_aicut_root()
+    mcp_file = root / "aicut_mcp.py"
+    if not mcp_file.exists():
+        return {"success": False, "error": f"AiCut engine (aicut_mcp.py) not found at {root}"}
 
-    # Import directly from aicut_mcp.py in AiCut directory
-    if str(AICUT_ROOT) not in sys.path:
-        sys.path.insert(0, str(AICUT_ROOT))
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
 
     try:
-        import aicut_mcp
+        try:
+            import aicut_mcp
+        except ImportError:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("aicut_mcp", str(mcp_file))
+            if spec and spec.loader:
+                aicut_mcp = importlib.util.module_from_spec(spec)
+                sys.modules["aicut_mcp"] = aicut_mcp
+                spec.loader.exec_module(aicut_mcp)
+            else:
+                raise
 
         action = payload.get("action", "")
         input_paths = payload.get("input_paths") or payload.get("inputs") or []

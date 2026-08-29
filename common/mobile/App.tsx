@@ -82,15 +82,28 @@ const getExpoHostIp = (): string | null => {
   return host || null;
 };
 
-const checkIpAddress = (ip: string, port = 9001, timeoutMs = 800): Promise<string> => {
+const checkIpAddress = (ip: string, port = 9001, timeoutMs = 1200): Promise<string> => {
   return new Promise((resolve, reject) => {
     let ws: WebSocket | null = null;
-    const timer = setTimeout(() => {
+    let isDone = false;
+
+    const cleanup = () => {
+      if (isDone) return;
+      isDone = true;
+      if (timer) clearTimeout(timer);
       if (ws) {
         try {
+          ws.onopen = null;
+          ws.onerror = null;
+          ws.onclose = null;
           ws.close();
         } catch (e) {}
+        ws = null;
       }
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
       reject(new Error('Timeout'));
     }, timeoutMs);
 
@@ -98,26 +111,21 @@ const checkIpAddress = (ip: string, port = 9001, timeoutMs = 800): Promise<strin
       ws = new WebSocket(`ws://${ip}:${port}`);
       
       ws.onopen = () => {
-        clearTimeout(timer);
-        try {
-          ws?.close();
-        } catch (e) {}
+        cleanup();
         resolve(ip);
       };
       
       ws.onerror = () => {
-        clearTimeout(timer);
-        try {
-          ws?.close();
-        } catch (e) {}
+        cleanup();
         reject(new Error('Connection error'));
       };
       
       ws.onclose = () => {
-        clearTimeout(timer);
+        cleanup();
+        reject(new Error('Closed'));
       };
     } catch (e) {
-      clearTimeout(timer);
+      cleanup();
       reject(e);
     }
   });
@@ -128,18 +136,24 @@ const scanSubnet = async (
   onProgress?: (msg: string) => void
 ): Promise<string | null> => {
   const port = 9001;
-  const timeoutMs = 600;
-  const concurrency = 35;
+  const timeoutMs = 1200;
+  const concurrency = 15;
   
-  const ips: string[] = [];
+  // Prioritize common host IP suffixes first for faster discovery
+  const prioritySuffixes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 20, 50, 100, 101, 102, 105, 110, 150, 200, 254];
+  const remainingSuffixes: number[] = [];
   for (let i = 1; i <= 254; i++) {
-    ips.push(`${subnet}.${i}`);
+    if (!prioritySuffixes.includes(i)) {
+      remainingSuffixes.push(i);
+    }
   }
+  const orderedSuffixes = [...prioritySuffixes, ...remainingSuffixes];
+  const ips = orderedSuffixes.map(i => `${subnet}.${i}`);
 
   for (let i = 0; i < ips.length; i += concurrency) {
     const batch = ips.slice(i, i + concurrency);
     if (onProgress) {
-      onProgress(`Searching subnet (checking IPs ${i + 1} to ${Math.min(i + concurrency, 254)})...`);
+      onProgress(`Scanning Wi-Fi subnet ${subnet}.x (${i + 1}/${ips.length})...`);
     }
     
     const promises = batch.map(ip => 
@@ -943,32 +957,40 @@ export default function App() {
           AsyncStorage.getItem(TOKEN_STORAGE_KEY),
         ]);
         const detectedIp = getExpoHostIp();
-        const initialIp = savedIp || detectedIp || 'localhost';
-        setIpAddress(initialIp);
+        const initialIp = savedIp || detectedIp || '';
         if (savedToken) setRemoteToken(savedToken);
-        connect(initialIp, savedToken || undefined);
+        if (initialIp && initialIp !== 'localhost') {
+          setIpAddress(initialIp);
+          connect(initialIp, savedToken || undefined);
+        } else {
+          // If no saved IP, prompt the user with settings and launch quiet discovery
+          setShowSettings(true);
+          handleAutoDiscoverQuietly();
+        }
       } catch (e) {
         console.error('Failed to load host IP address', e);
-        const fallback = getExpoHostIp() || 'localhost';
-        setIpAddress(fallback);
-        connect(fallback, undefined);
+        setShowSettings(true);
+        handleAutoDiscoverQuietly();
       }
     }
     loadIp();
   }, []);
 
-  // Quietly auto-discover and connect on start
+  // When connection succeeds, auto-close the settings card
+  useEffect(() => {
+    if (isConnected) {
+      setShowSettings(false);
+    }
+  }, [isConnected]);
+
+  // Quietly auto-discover and connect on start or when disconnected
   useEffect(() => {
     let active = true;
     if (status === 'disconnected' || status === 'error') {
       const timer = setTimeout(async () => {
         if (!active) return;
         try {
-          const deviceIp = await Network.getIpAddressAsync();
-          if (deviceIp && deviceIp !== '0.0.0.0' && deviceIp !== '127.0.0.1') {
-            console.log('Auto-discovery scan started...');
-            handleAutoDiscoverQuietly();
-          }
+          handleAutoDiscoverQuietly();
         } catch (e) {}
       }, 2500);
       return () => {
@@ -980,22 +1002,38 @@ export default function App() {
 
   const handleAutoDiscoverQuietly = async () => {
     try {
-      const ip = await Network.getIpAddressAsync();
-      if (!ip || ip === '0.0.0.0') return;
-      const ipParts = ip.split('.');
-      if (ipParts.length !== 4) return;
-      const subnet = `${ipParts[0]}.${ipParts[1]}.${ipParts[2]}`;
-      const foundIp = await scanSubnet(subnet);
-      if (foundIp) {
-        setIpAddress(foundIp);
-        await AsyncStorage.setItem(STORAGE_KEY, foundIp);
-        connect(foundIp, remoteToken || undefined);
+      const subnetsToScan: string[] = [];
+      try {
+        const ip = await Network.getIpAddressAsync();
+        if (ip && ip !== '0.0.0.0' && ip.includes('.')) {
+          const ipParts = ip.split('.');
+          if (ipParts.length === 4) {
+            subnetsToScan.push(`${ipParts[0]}.${ipParts[1]}.${ipParts[2]}`);
+          }
+        }
+      } catch (e) {}
+
+      // Common Wi-Fi router subnets fallback
+      for (const fallbackSubnet of ['192.168.1', '192.168.0', '192.168.2', '10.0.0']) {
+        if (!subnetsToScan.includes(fallbackSubnet)) {
+          subnetsToScan.push(fallbackSubnet);
+        }
+      }
+
+      for (const subnet of subnetsToScan) {
+        const foundIp = await scanSubnet(subnet);
+        if (foundIp) {
+          setIpAddress(foundIp);
+          await AsyncStorage.setItem(STORAGE_KEY, foundIp);
+          connect(foundIp, remoteToken || undefined);
+          break;
+        }
       }
     } catch (err) {}
   };
 
   const validateIp = (ip: string): boolean => {
-    const trimmed = ip.trim();
+    const trimmed = ip.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '');
     if (!trimmed) return false;
     const ipPattern = /^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+(:\d+)?$/;
     const ipv4Pattern = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}(:\d+)?$/;
@@ -1004,40 +1042,62 @@ export default function App() {
 
   const handleConnect = async () => {
     triggerHaptic('medium');
-    if (!validateIp(ipAddress)) {
-      Alert.alert('Invalid Address', 'Please enter a valid IP address or hostname.');
+    const cleanedIp = ipAddress.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/+$/, '');
+    if (!validateIp(cleanedIp)) {
+      Alert.alert('Invalid Address', 'Please enter a valid IP address (e.g. 192.168.1.4).');
       return;
     }
+    setIpAddress(cleanedIp);
     try {
       await Promise.all([
-        AsyncStorage.setItem(STORAGE_KEY, ipAddress.trim()),
+        AsyncStorage.setItem(STORAGE_KEY, cleanedIp),
         AsyncStorage.setItem(TOKEN_STORAGE_KEY, remoteToken.trim()),
       ]);
     } catch (e) {}
-    connect(ipAddress, remoteToken || undefined);
+    connect(cleanedIp, remoteToken || undefined);
   };
 
   const handleAutoDiscover = async () => {
     triggerHaptic('medium');
     setIsDiscovering(true);
-    setDiscoveryProgress('Getting network details...');
+    setDiscoveryProgress('Detecting Wi-Fi network...');
     try {
-      const ip = await Network.getIpAddressAsync();
-      if (!ip || ip === '0.0.0.0') {
-        Alert.alert('Discovery Failed', 'Could not get device IP address.');
-        return;
+      const subnetsToScan: string[] = [];
+      try {
+        const ip = await Network.getIpAddressAsync();
+        if (ip && ip !== '0.0.0.0' && ip.includes('.')) {
+          const ipParts = ip.split('.');
+          if (ipParts.length === 4) {
+            subnetsToScan.push(`${ipParts[0]}.${ipParts[1]}.${ipParts[2]}`);
+          }
+        }
+      } catch (e) {}
+
+      for (const fallbackSubnet of ['192.168.1', '192.168.0', '192.168.2', '10.0.0']) {
+        if (!subnetsToScan.includes(fallbackSubnet)) {
+          subnetsToScan.push(fallbackSubnet);
+        }
       }
-      const ipParts = ip.split('.');
-      const subnet = `${ipParts[0]}.${ipParts[1]}.${ipParts[2]}`;
-      const foundIp = await scanSubnet(subnet, (msg) => {
-        setDiscoveryProgress(msg);
-      });
-      if (foundIp) {
-        setIpAddress(foundIp);
-        await AsyncStorage.setItem(STORAGE_KEY, foundIp);
-        connect(foundIp, remoteToken || undefined);
+
+      let found: string | null = null;
+      for (const subnet of subnetsToScan) {
+        setDiscoveryProgress(`Scanning Wi-Fi subnet ${subnet}.x...`);
+        found = await scanSubnet(subnet, (msg) => {
+          setDiscoveryProgress(msg);
+        });
+        if (found) break;
+      }
+
+      if (found) {
+        setIpAddress(found);
+        await AsyncStorage.setItem(STORAGE_KEY, found);
+        connect(found, remoteToken || undefined);
+        Alert.alert('Blinky Connected!', `Found Blinky PC at ${found}`);
       } else {
-        Alert.alert('Blinky Not Found', 'Make sure the desktop app is running and connected.');
+        Alert.alert(
+          'Blinky PC Not Found',
+          'Could not automatically discover your PC. Please check your PC\'s Wi-Fi IP address in Windows (e.g. 192.168.1.4), enter it above, and tap "Establish Link".'
+        );
       }
     } catch (err: any) {
       Alert.alert('Error', `Discovery failed: ${err.message}`);
@@ -1101,10 +1161,19 @@ export default function App() {
               <Text style={styles.title}>BLINKY</Text>
             </View>
             <View style={styles.headerRight}>
-              <View style={styles.statusRowHeader}>
-                <View style={[styles.statusDotHeader, { backgroundColor: isConnected ? '#FF5A36' : '#EF4444' }]} />
-                <Text style={styles.statusTextHeader}>{isConnected ? 'Connected' : 'Disconnected'}</Text>
-              </View>
+              <TouchableOpacity
+                style={styles.statusRowHeader}
+                onPress={() => {
+                  triggerHaptic('light');
+                  setShowSettings(!showSettings);
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.statusDotHeader, { backgroundColor: isConnected ? '#10B981' : (status === 'connecting' ? '#F59E0B' : '#EF4444') }]} />
+                <Text style={styles.statusTextHeader}>
+                  {isConnected ? 'Connected' : (status === 'connecting' ? 'Connecting...' : 'Disconnected')}
+                </Text>
+              </TouchableOpacity>
               <TouchableOpacity onPress={() => { triggerHaptic('light'); setShowMenu(!showMenu); }} style={styles.menuBtn}>
                 <Ionicons name="ellipsis-vertical" size={20} color="#FFFFFF" />
               </TouchableOpacity>
@@ -1156,12 +1225,20 @@ export default function App() {
           {/* Local Link Setup Box (Shows right below header when toggled) */}
           {showSettings && (
             <View style={styles.connectionCard}>
-              <Text style={styles.connectionTitle}>Local Link Setup</Text>
+              <View style={styles.connectionHeaderRow}>
+                <Text style={styles.connectionTitle}>Local Wi-Fi Link Setup</Text>
+                <TouchableOpacity onPress={() => setShowSettings(false)}>
+                  <Ionicons name="close" size={20} color="#8A86AA" />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.connectionSubtitle}>
+                Enter your PC's IP address (e.g. 192.168.1.4) or tap "Scan Subnet" to auto-discover Blinky.
+              </Text>
               <View style={styles.inputWrapper}>
                 <Ionicons name="link-outline" size={20} color="#6C6985" style={styles.inputIcon} />
                 <TextInput
                   style={[styles.input, isConnected && styles.inputDisabled]}
-                  placeholder="Enter PC IP (e.g. 192.168.1.15)"
+                  placeholder="Enter PC IP (e.g. 192.168.1.4)"
                   placeholderTextColor="#6C6985"
                   value={ipAddress}
                   onChangeText={setIpAddress}
@@ -1216,6 +1293,24 @@ export default function App() {
                 </View>
               )}
             </View>
+          )}
+
+          {/* Disconnected Alert Banner (if disconnected and settings not open) */}
+          {!isConnected && !showSettings && (
+            <TouchableOpacity
+              style={styles.disconnectedAlertBanner}
+              onPress={() => {
+                triggerHaptic('light');
+                setShowSettings(true);
+              }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="wifi-outline" size={16} color="#EF4444" style={{ marginRight: 8 }} />
+              <Text style={styles.disconnectedAlertText}>
+                {status === 'connecting' ? `Connecting to ${ipAddress || 'PC'}...` : 'Not connected to PC. Tap to connect.'}
+              </Text>
+              <Ionicons name="chevron-forward" size={14} color="#8A86AA" />
+            </TouchableOpacity>
           )}
 
           {actionFeedback && (
@@ -1519,19 +1614,48 @@ const styles = StyleSheet.create({
     marginVertical: 4,
   },
   connectionCard: {
-    backgroundColor: 'rgba(21, 17, 43, 0.65)',
+    backgroundColor: 'rgba(21, 17, 43, 0.9)',
     borderRadius: 24,
     padding: 20,
     marginHorizontal: 20,
     marginTop: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: 'rgba(255, 90, 54, 0.25)',
+  },
+  connectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
   },
   connectionTitle: {
     fontSize: 15,
     fontWeight: '800',
     color: '#FFFFFF',
-    marginBottom: 16,
+  },
+  connectionSubtitle: {
+    fontSize: 12,
+    color: '#8A86AA',
+    marginBottom: 14,
+    lineHeight: 16,
+  },
+  disconnectedAlertBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(239, 68, 68, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginHorizontal: 20,
+    marginTop: 10,
+  },
+  disconnectedAlertText: {
+    flex: 1,
+    color: '#FCA5A5',
+    fontSize: 12.5,
+    fontWeight: '600',
   },
   inputWrapper: {
     backgroundColor: 'rgba(0, 0, 0, 0.45)',

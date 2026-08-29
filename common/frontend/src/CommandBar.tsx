@@ -1147,8 +1147,16 @@ export function CommandBar() {
     options: TutorRunOptions = {},
   ) {
     if (isRunning) return;
-    queryText = queryText.trim().replace(/^(hey\s+)?blinky[\s,.:;!?]*/i, '').trim();
-    if (!queryText) return;
+    let effectiveQuery = queryText.trim().replace(/^(hey\s+)?blinky[\s,.:;!?]*/i, '').trim();
+    if (attachedFiles.length > 0) {
+      const pathsStr = attachedFiles.map((f) => f.path).join(', ');
+      const prefix = `[Referenced Files: ${pathsStr}]`;
+      if (!effectiveQuery.includes('[Referenced Files:')) {
+        effectiveQuery = effectiveQuery ? `${prefix} ${effectiveQuery}` : `${prefix} merge these videos`;
+      }
+      setAttachedFiles([]);
+    }
+    if (!effectiveQuery) return;
 
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
@@ -1185,7 +1193,7 @@ export function CommandBar() {
       let result: TutorResult;
       if (agentModeEnabled) {
         // Run the agent first — it may handle everything via MCP tools
-        const agentResult = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, false, true);
+        const agentResult = await runTutor(effectiveQuery, previousQuestion, currentProgress(), conversationHistory, false, true);
 
         // Agent handled it autonomously — use its result directly
         if (agentResult.computer_use) {
@@ -1198,7 +1206,7 @@ export function CommandBar() {
           }
 
           // Vision-guided autopilot loop (screen-based clicking)
-          const isSingleAction = isSingleActionQuery(queryText);
+          const isSingleAction = isSingleActionQuery(effectiveQuery);
           let firstObservation: TutorResult | null = null;
           const autopilot = await runAutopilotLoop({
             maxAttempts: isSingleAction ? 1 : 5,
@@ -1208,7 +1216,7 @@ export function CommandBar() {
                 firstObservation = agentResult;
                 return firstObservation;
               }
-              return runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, false, true);
+              return runTutor(effectiveQuery, previousQuestion, currentProgress(), conversationHistory, false, true);
             },
             act: async (point, step) => {
               if (isScrollAction(step.instruction)) {
@@ -1270,7 +1278,7 @@ export function CommandBar() {
           }
         }
       } else {
-        result = await runTutor(queryText, previousQuestion, currentProgress(), conversationHistory, webSearchEnabled);
+        result = await runTutor(effectiveQuery, previousQuestion, currentProgress(), conversationHistory, webSearchEnabled);
 
         await logDebugMessage(`[executeTutor] (Standard) Received result from backend. Steps count: ${result.steps?.length || 0}`);
         if (result.steps && result.steps.length > 0) {
@@ -1326,7 +1334,7 @@ export function CommandBar() {
         currentGuideStepsRef.current = [];
         setSteps([]);
         setShowGuideCompletionSummary(false);
-        lastQueryRef.current = queryText;
+        lastQueryRef.current = effectiveQuery;
       }
 
       const displaySteps = getDisplaySteps(result.steps || []);
@@ -1344,7 +1352,7 @@ export function CommandBar() {
       await currentWindow.setFocus();
       setStatus(result.summary);
       const newHistoryEntries: TutorConversationMessage[] = [
-        { role: 'student', content: queryText },
+        { role: 'student', content: effectiveQuery },
         { role: 'blinky', content: result.summary },
       ];
       conversationHistoryRef.current = [
@@ -1810,7 +1818,8 @@ export function CommandBar() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     const trimmed = question.trim();
-    if (!trimmed || isRunning) return;
+    if (!trimmed && attachedFiles.length === 0) return;
+    if (isRunning) return;
 
     if (!audioCtxRef.current) {
       audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -1818,7 +1827,7 @@ export function CommandBar() {
       void audioCtxRef.current.resume();
     }
 
-    void executeTutor(trimmed, false);
+    void executeTutor(trimmed || 'merge these videos', false);
   }
 
   let renderWordIndex = 0;

@@ -22,7 +22,12 @@ export function usePCWebSocket() {
     disconnect();
     
     // Clean IP Address and default to port 9001 if no port is specified
-    let formattedIp = ipAddress.trim();
+    let formattedIp = ipAddress
+      .trim()
+      .replace(/^https?:\/\//i, '')
+      .replace(/^wss?:\/\//i, '')
+      .replace(/\/+$/, '');
+
     if (!formattedIp) {
       setStatus('error');
       setErrorMsg('IP Address cannot be empty');
@@ -37,11 +42,23 @@ export function usePCWebSocket() {
     setStatus('connecting');
     setErrorMsg(null);
 
+    let connectTimeout: any = null;
+
     try {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
+      connectTimeout = setTimeout(() => {
+        if (wsRef.current === ws && ws.readyState !== WebSocket.OPEN) {
+          try { ws.close(); } catch (e) {}
+          wsRef.current = null;
+          setStatus('error');
+          setErrorMsg(`Connection timed out (${formattedIp}). Ensure Blinky desktop app is running and port 9001 is open.`);
+        }
+      }, 5000);
+
       ws.onopen = () => {
+        if (connectTimeout) clearTimeout(connectTimeout);
         if (wsRef.current === ws) {
           // Authenticate the remote connection before any commands are sent.
           // The desktop gateway denies all commands from non-loopback peers
@@ -66,6 +83,7 @@ export function usePCWebSocket() {
       };
 
       ws.onclose = (e) => {
+        if (connectTimeout) clearTimeout(connectTimeout);
         if (wsRef.current === ws) {
           setStatus('disconnected');
           wsRef.current = null;
@@ -73,13 +91,15 @@ export function usePCWebSocket() {
       };
 
       ws.onerror = (e) => {
+        if (connectTimeout) clearTimeout(connectTimeout);
         if (wsRef.current === ws) {
           setStatus('error');
-          setErrorMsg('Failed to connect. Check IP and firewall.');
+          setErrorMsg(`Failed to connect to ${formattedIp}. Check Wi-Fi & PC firewall.`);
           wsRef.current = null;
         }
       };
     } catch (err: any) {
+      if (connectTimeout) clearTimeout(connectTimeout);
       setStatus('error');
       setErrorMsg(err?.message || 'WebSocket creation failed');
       wsRef.current = null;

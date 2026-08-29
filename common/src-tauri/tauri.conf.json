@@ -55,6 +55,7 @@
     "resources": {
       "../../common/python_runtime/Python313/": "python_runtime/Python313/",
       "../../common/python/": "common/python/",
+      "../../common/aicut/": "common/aicut/",
       "../../python/": "python/",
       "../../windows/python/": "windows/python/",
       "../../common/whatsapp_backend/": "common/whatsapp_backend/",
