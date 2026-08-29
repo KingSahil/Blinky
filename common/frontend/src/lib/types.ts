@@ -64,6 +64,8 @@ export interface TutorResult {
 export interface TutorProgress {
   completed_targets: string[];
   completed_instructions: string[];
+  failed_targets?: string[];
+  failed_refs?: string[];
 }
 
 export interface TutorConversationMessage {

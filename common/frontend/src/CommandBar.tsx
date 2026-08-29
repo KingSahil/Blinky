@@ -6,7 +6,7 @@ import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElem
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import QRCode from 'qrcode';
-import { runAutopilotLoop, extractTextToType, shouldPressEnterAfterTyping, isScrollAction, getScrollDirection, isClickInstruction, isSingleActionQuery } from './lib/autopilot';
+import { runAutopilotLoop, extractTextToType, shouldPressEnterAfterTyping, isScrollAction, getScrollDirection, isClickInstruction, isSingleActionQuery, createEmptyTutorResult, getPhysicalClickablePoint } from './lib/autopilot';
 import {
   getCurrentGuideSteps,
   getDisplaySteps,
@@ -422,6 +422,8 @@ export function CommandBar() {
   const lastQueryRef = useRef<string>('');
   const completedTargetsRef = useRef<string[]>([]);
   const completedInstructionsRef = useRef<string[]>([]);
+  const failedTargetsRef = useRef<string[]>([]);
+  const failedRefsRef = useRef<string[]>([]);
   const currentGuideStepsRef = useRef<any[]>([]);
   const workflowStartedWithReadbackRef = useRef(false);
   const conversationHistoryRef = useRef<TutorConversationMessage[]>([]);
@@ -478,6 +480,19 @@ export function CommandBar() {
 
     if (cleanInstruction && !completedInstructionsRef.current.includes(cleanInstruction)) {
       completedInstructionsRef.current = [...completedInstructionsRef.current, cleanInstruction];
+    }
+  };
+
+  const rememberFailedStep = (targetText?: string, ref?: string) => {
+    const cleanTarget = targetText?.trim();
+    const cleanRef = ref?.trim();
+
+    if (cleanTarget && !failedTargetsRef.current.includes(cleanTarget)) {
+      failedTargetsRef.current = [...failedTargetsRef.current, cleanTarget];
+    }
+
+    if (cleanRef && !failedRefsRef.current.includes(cleanRef)) {
+      failedRefsRef.current = [...failedRefsRef.current, cleanRef];
     }
   };
 
@@ -1138,6 +1153,8 @@ export function CommandBar() {
     return {
       completed_targets: completedTargetsRef.current,
       completed_instructions: completedInstructionsRef.current,
+      failed_targets: failedTargetsRef.current,
+      failed_refs: failedRefsRef.current,
     };
   }
 
@@ -1170,6 +1187,8 @@ export function CommandBar() {
     if (options.resetProgress) {
       completedTargetsRef.current = [];
       completedInstructionsRef.current = [];
+      failedTargetsRef.current = [];
+      failedRefsRef.current = [];
       currentGuideStepsRef.current = [];
       setSteps([]);
       setShowGuideCompletionSummary(false);
@@ -1189,14 +1208,16 @@ export function CommandBar() {
     void pauseWakeWord();
     
     const currentWindow = getCurrentWindow();
+    let isPointing = false;
     try {
       let result: TutorResult;
       if (agentModeEnabled) {
         // Run the agent first — it may handle everything via MCP tools
         const agentResult = await runTutor(effectiveQuery, previousQuestion, currentProgress(), conversationHistory, false, true);
 
-        // Agent handled it autonomously — use its result directly
-        if (agentResult.computer_use) {
+        // If agent handled it purely via backend tool without UI steps, use its result directly.
+        // Otherwise, run the autopilot loop so the AI cursor moves, glides, and clicks on screen.
+        if (agentResult.computer_use && (!agentResult.steps || agentResult.steps.length === 0)) {
           result = agentResult;
         } else {
           // Immediately speak explanation/action as autopilot starts so AI speaks without waiting for clicks to finish
@@ -1205,13 +1226,25 @@ export function CommandBar() {
             hasStreamedTtsRef.current = true;
           }
 
+          // Show overlay window so AI cursor is visible on screen
+          await showOverlay();
+
           // Vision-guided autopilot loop (screen-based clicking)
           const isSingleAction = isSingleActionQuery(effectiveQuery);
           let firstObservation: TutorResult | null = null;
           const autopilot = await runAutopilotLoop({
             maxAttempts: isSingleAction ? 1 : 5,
+            maxRetriesPerStep: 2,
             observeAfterAction: !isSingleAction,
+            isCancelled: () => cancelledRunIdsRef.current.has(runId),
+            onStepFailed: (failedStep, retryCount) => {
+              setStatus(`Action had no effect. Rethinking next step (Attempt ${retryCount})...`);
+              rememberFailedStep(failedStep.target_text, failedStep.target_ref || failedStep.match?.ref);
+            },
             observe: async () => {
+              if (cancelledRunIdsRef.current.has(runId)) {
+                return createEmptyTutorResult();
+              }
               if (!firstObservation) {
                 firstObservation = agentResult;
                 return firstObservation;
@@ -1219,6 +1252,7 @@ export function CommandBar() {
               return runTutor(effectiveQuery, previousQuestion, currentProgress(), conversationHistory, false, true);
             },
             act: async (point, step) => {
+              if (cancelledRunIdsRef.current.has(runId)) return;
               if (isScrollAction(step.instruction)) {
                 const direction = getScrollDirection(step.instruction);
                 setStatus(`Autopilot scrolling ${direction}...`);
@@ -1231,6 +1265,7 @@ export function CommandBar() {
                   rememberCompletedStep(step.target_text, step.instruction);
                   await clickScreenPoint(point.x, point.y);
                   await new Promise((resolve) => setTimeout(resolve, 150));
+                  if (cancelledRunIdsRef.current.has(runId)) return;
                   const pressEnter = shouldPressEnterAfterTyping(step.instruction);
                   await typeText(textToType, pressEnter);
                 } else {
@@ -1304,8 +1339,10 @@ export function CommandBar() {
           const autopilot = await runAutopilotLoop({
             maxAttempts: 1,
             observeAfterAction: false,
+            isCancelled: () => cancelledRunIdsRef.current.has(runId),
             observe: async () => result,
             act: async (point, step) => {
+              if (cancelledRunIdsRef.current.has(runId)) return;
               await logDebugMessage(`[executeTutor] (Standard) Autopilot act: clicking point x=${point.x}, y=${point.y}`);
               setStatus(`Clicking (${point.x}, ${point.y})...`);
               await clickScreenPoint(point.x, point.y);
@@ -1344,8 +1381,19 @@ export function CommandBar() {
         completedTargetsRef.current.length > 0 || completedInstructionsRef.current.length > 0;
       const highlightSteps = getHighlightSteps(currentGuideSteps);
       await emit('blinky://guidance', { ...result, steps: currentGuideSteps });
+      isPointing = false;
       if (highlightSteps.length > 0) {
         await showOverlay();
+        const primaryHighlight = highlightSteps[0];
+        if (primaryHighlight && primaryHighlight.match) {
+          isPointing = true;
+          const point = getPhysicalClickablePoint(primaryHighlight, result);
+          void emit('blinky://agent-cursor-move', {
+            x: point.x,
+            y: point.y,
+            instruction: primaryHighlight.instruction,
+          });
+        }
       } else {
         await hideOverlay();
       }
@@ -1382,7 +1430,9 @@ export function CommandBar() {
       cancelledRunIdsRef.current.delete(runId);
       if (runIdRef.current === runId) {
         setIsRunning(false);
-        void emit('blinky://agent-cursor-done', {});
+        if (!isPointing) {
+          void emit('blinky://agent-cursor-done', {});
+        }
         if (!shouldSpeakAfter && !isRecording && !isSpeaking) {
           void resumeWakeWord();
         }
@@ -1478,13 +1528,16 @@ export function CommandBar() {
     };
   }, []);
 
-  // Agent mode toggle no longer hides native cursor directly (tradeoff A: AI cursor only when acting/voice)
+  // Agent mode toggle synchronizes AI cursor visibility and active overlay state
   useEffect(() => {
     if (typeof document !== 'undefined') {
       document.body.classList.toggle('agent-mode-active', agentModeEnabled);
     }
+    void emit('blinky://agent-mode-active', { active: agentModeEnabled });
     if (agentModeEnabled) {
       void showOverlay();
+      void setAgentCursorVisibility(true);
+      void emit('blinky://agent-cursor-visibility', { visible: true });
     } else {
       // Ensure native cursor restored and AI cursor hidden when exiting agent mode
       void emit('blinky://agent-cursor-visibility', { visible: false });

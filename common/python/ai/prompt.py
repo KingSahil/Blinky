@@ -61,7 +61,7 @@ Compound-request rule (IMPORTANT):
  NOT DESKTOP_AUTOMATION. It is a multi-step automation task for the agent loop.
 
 Rules for needs_screen:
-- needs_screen is true ONLY when the student wants guidance tied to visible UI (like clicking, opening, selecting, locating, highlighting, installing, or navigating something in an app, menu, button, tab, or window).
+- needs_screen is true ONLY when the student wants guidance tied to visible UI (like clicking, opening, selecting, locating, highlighting, installing, or navigating something in an app, menu, button, tab, or window), OR when the student asks what is on their screen ("what's on my screen", "whats on my screen", "describe my screen", "explain my screen", "what am I looking at").
 - needs_screen is false for COMPUTER_USE, OPEN_APP, MEDIA_PLAYBACK, SYSTEM_SHORTCUT, WEB_SEARCH, INFORMATIONAL_CHAT, WHATSAPP, and VIDEO_EDIT.
 
 Rules for is_continuation:
@@ -190,6 +190,26 @@ def build_prompt(
     if history_context_str:
         student_query_context = f"{student_query_context}\n\nRecent conversation:\n{history_context_str}"
 
+    screen_desc_patterns = [
+        r"\bwhat(?:'s|\s+is)\s+on\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhats\s+on\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhat\s+do\s+you\s+see(?:\s+on\s+(?:my\s+|the\s+)?screen)?\b",
+        r"\bdescribe\s+(?:my\s+|the\s+)?screen\b",
+        r"\bexplain\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhat\s+am\s+i\s+looking\s+at\b",
+        r"\bread\s+(?:my\s+|the\s+)?screen\b",
+        r"\bsummarize\s+(?:my\s+|the\s+)?screen\b",
+        r"\btell\s+me\s+what(?:'s|\s+is)\s+on\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhat\s+is\s+open\s+on\s+(?:my\s+|the\s+)?screen\b",
+    ]
+    import re
+    is_screen_desc = any(re.search(pat, cleaned_question) for pat in screen_desc_patterns)
+    extra_screen_instruction = ""
+    if is_screen_desc:
+        extra_screen_instruction = """
+- SPECIAL SCREEN EXPLANATION INSTRUCTION: The student is asking what is on their screen. Look at the attached screenshot image and the visible UI items. Provide a clear, natural, and comprehensive description of what applications, browser tabs, windows, documents, code, or visual content are currently open and visible on the screen. Return format B with "steps": [] (since no button clicks are required) and put your full description in "summary".
+"""
+
     prompt_text = f"""
 You are Blinky, a free offline AI desktop tutor for students.
 
@@ -209,6 +229,7 @@ Completed workflow context:
 {json.dumps(compact_progress, ensure_ascii=True)}
 
 Rules:
+{extra_screen_instruction}
 - CRITICAL: Return ONLY the immediate next step (exactly 1 step total in the "steps" list) that the student needs to take right now on the current screen to proceed. Do NOT generate multiple steps or plan future actions. For example, if a panel or search tab is not yet open, the immediate next step is to open it. Do NOT generate subsequent steps for typing or installing within that unopened panel. Once the user completes this immediate step, Blinky will take a new screenshot and dynamically show the next step. The "steps" list MUST contain at most ONE step object. Generating step 2, step 3, etc. is strictly prohibited.
 - CRITICAL: Prefer target_ref over target_text. If the next action targets a visible item, set target_ref to that item's exact @ref and set target_text to its exact name. If the target is not visible, set target_ref and target_text to empty strings.
 - CRITICAL: Look at the list of visible UI/OCR items. If you see a placeholder text or label containing "Search" or "Filter" or "Find" for a search box (for example, "Search Extensions in Marketplace", "Search files", or a similar text input box), this means the corresponding view or panel is ALREADY open and visible. You MUST NOT output any step instructing the user to click a tab, button, or menu to open that panel (e.g. clicking "Extensions" or "Explorer"). Skip the "open" step completely and make the very first step of the Action Guide be the step to type/search in that input box. You MUST set target_ref to the input's @ref and target_text to the EXACT visible search placeholder text (e.g. "Search Extensions in Marketplace") so the search bar gets highlighted.

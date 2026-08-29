@@ -8,10 +8,13 @@ export interface ScreenPoint {
 
 export interface AutopilotRunInput {
   maxAttempts?: number;
+  maxRetriesPerStep?: number;
   observe: () => Promise<TutorResult>;
   act: (point: ScreenPoint, step: TutorStep) => Promise<void>;
+  onStepFailed?: (step: TutorStep, retryCount: number) => void | Promise<void>;
   wait?: () => Promise<void>;
   observeAfterAction?: boolean;
+  isCancelled?: () => boolean;
 }
 
 export interface AutopilotRunResult {
@@ -23,17 +26,50 @@ export interface AutopilotRunResult {
 const SAFE_ACTION_HINTS = ['click', 'open', 'select', 'choose', 'go to', 'type', 'enter', 'search', 'submit', 'scroll'];
 const BLOCKED_ACTION_HINTS = ['install', 'enable', 'delete', 'remove', 'buy', 'purchase', 'pay', 'sign in', 'login'];
 
+export function createEmptyTutorResult(): TutorResult {
+  return {
+    summary: '',
+    steps: [],
+    active_app: { title: '', process: '', supported: true },
+    ocr: { count: 0, items: [] },
+    elapsed_ms: 0,
+    warnings: [],
+  };
+}
+
 export async function runAutopilotLoop({
   maxAttempts = 5,
+  maxRetriesPerStep = 2,
   observe,
   act,
+  onStepFailed,
   wait = defaultWait,
   observeAfterAction = true,
+  isCancelled,
 }: AutopilotRunInput): Promise<AutopilotRunResult> {
+  if (isCancelled?.()) {
+    try {
+      if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+        await emit('blinky://agent-cursor-done', {});
+      }
+    } catch {}
+    return { finalResult: createEmptyTutorResult(), attempts: 0, stopReason: 'complete' };
+  }
+
   let current = await observe();
   let attempts = 0;
+  let sameStepRetries = 0;
 
   while (attempts < maxAttempts) {
+    if (isCancelled?.()) {
+      try {
+        if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+          await emit('blinky://agent-cursor-done', {});
+        }
+      } catch {}
+      return { finalResult: current, attempts, stopReason: 'complete' };
+    }
+
     const nextStep = current.steps.find((candidate) => candidate.instruction.trim());
     if (!nextStep) {
       return { finalResult: current, attempts, stopReason: 'complete' };
@@ -51,6 +87,14 @@ export async function runAutopilotLoop({
     const logicalPoint = getClickablePoint(nextStep);
     const point = getPhysicalClickablePoint(nextStep, current);
 
+    if (isCancelled?.()) {
+      try {
+        if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+          await emit('blinky://agent-cursor-done', {});
+        }
+      } catch {}
+      return { finalResult: current, attempts, stopReason: 'complete' };
+    }
 
     // Emit cursor move event so Overlay can animate the AI cursor to the exact target
     try {
@@ -61,24 +105,60 @@ export async function runAutopilotLoop({
       }
     } catch {}
 
-    await act(point, nextStep);
-
-    attempts += 1;
-
-    if (!observeAfterAction) {
+    if (isCancelled?.()) {
       try {
         if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
           await emit('blinky://agent-cursor-done', {});
         }
       } catch {}
-      return { finalResult: current, attempts, stopReason: 'single_action' };
+      return { finalResult: current, attempts, stopReason: 'complete' };
+    }
+
+    await act(point, nextStep);
+
+    attempts += 1;
+
+    if (!observeAfterAction || isCancelled?.()) {
+      try {
+        if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+          await emit('blinky://agent-cursor-done', {});
+        }
+      } catch {}
+      return { finalResult: current, attempts, stopReason: isCancelled?.() ? 'complete' : 'single_action' };
     }
 
     await wait();
 
+    if (isCancelled?.()) {
+      try {
+        if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+          await emit('blinky://agent-cursor-done', {});
+        }
+      } catch {}
+      return { finalResult: current, attempts, stopReason: 'complete' };
+    }
+
     const after = await observe();
     const afterStep = after.steps.find((candidate) => candidate.instruction.trim());
     if (afterStep && getStepSignature(afterStep) === beforeSignature) {
+      sameStepRetries += 1;
+      if (sameStepRetries <= maxRetriesPerStep) {
+        if (isCancelled?.()) {
+          try {
+            if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+              await emit('blinky://agent-cursor-done', {});
+            }
+          } catch {}
+          return { finalResult: current, attempts, stopReason: 'complete' };
+        }
+        // Self-healing: notify failure and re-observe to allow Groq / SearXNG to rethink
+        await onStepFailed?.(nextStep, sameStepRetries);
+        // Wait briefly for UI to settle and observe with updated failure context
+        await wait();
+        current = await observe();
+        continue;
+      }
+
       try {
         if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
           await emit('blinky://agent-cursor-done', {});
@@ -87,6 +167,8 @@ export async function runAutopilotLoop({
       return { finalResult: after, attempts, stopReason: 'unchanged_after_action' };
     }
 
+    // Step succeeded or transitioned
+    sameStepRetries = 0;
     current = after;
   }
 
@@ -163,6 +245,20 @@ export function getClickablePoint(step: TutorStep): ScreenPoint {
   const match = step.match;
   if (!match) {
     throw new Error('Cannot click a step without a matched target');
+  }
+
+  const isInput =
+    match.control_type === 'Edit' ||
+    match.control_type === 'TextBox' ||
+    match.control_type === 'ComboBox';
+
+  if (!isInput && match.width > 140) {
+    const textLength = match.text ? String(match.text).length : 8;
+    const estimatedWidth = Math.min(match.width, Math.max(55, Math.round(24 + textLength * 7.2 + 28)));
+    return {
+      x: Math.round(match.x + 20 + estimatedWidth / 2),
+      y: Math.round(match.y + match.height / 2),
+    };
   }
 
   return {

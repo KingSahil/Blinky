@@ -24,14 +24,20 @@ pub fn get_cursor_position_impl() -> Result<(i32, i32), String> {
 }
 
 pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
+    use std::thread;
+    use std::time::Duration;
+    use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-        MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK,
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
+        MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN,
+        GetCursorPos, GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN,
         SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
+
+    let mut original_pos = POINT { x: 0, y: 0 };
+    let has_original = unsafe { GetCursorPos(&mut original_pos) } != 0;
 
     let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
     let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
@@ -44,65 +50,98 @@ pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
     let absolute_x = ((x - left) as i64 * 65535 / (width - 1) as i64) as i32;
     let absolute_y = ((y - top) as i64 * 65535 / (height - 1) as i64) as i32;
     let flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-    let mut inputs = [
-        mouse_input(absolute_x, absolute_y, flags | MOUSEEVENTF_MOVE),
-        mouse_input(absolute_x, absolute_y, flags | MOUSEEVENTF_LEFTDOWN),
-        mouse_input(absolute_x, absolute_y, flags | MOUSEEVENTF_LEFTUP),
-    ];
 
-    let sent = unsafe {
-        SendInput(
-            inputs.len() as u32,
-            inputs.as_mut_ptr(),
-            std::mem::size_of::<INPUT>() as i32,
-        )
-    };
-
-    // Keep hardware cursor at the clicked location so restore is seamless
+    // Explicitly place cursor at coordinates to trigger window hover state
     unsafe {
         SetCursorPos(x, y);
     }
 
-    if sent != inputs.len() as u32 {
-        return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
+    let mut move_input = [
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: absolute_x,
+                    dy: absolute_y,
+                    mouseData: 0,
+                    dwFlags: flags | MOUSEEVENTF_MOVE,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+    ];
+    unsafe {
+        SendInput(1, move_input.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32);
     }
+
+    thread::sleep(Duration::from_millis(20));
+
+    let mut down_input = [
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: absolute_x,
+                    dy: absolute_y,
+                    mouseData: 0,
+                    dwFlags: flags | MOUSEEVENTF_LEFTDOWN,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+    ];
+    unsafe {
+        SendInput(1, down_input.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32);
+    }
+
+    // Physical mouse hold duration for Windows application hit-test and button activation
+    thread::sleep(Duration::from_millis(35));
+
+    let mut up_input = [
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: absolute_x,
+                    dy: absolute_y,
+                    mouseData: 0,
+                    dwFlags: flags | MOUSEEVENTF_LEFTUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+    ];
+    unsafe {
+        SendInput(1, up_input.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32);
+    }
+
+    // Instantly restore native cursor back to where the user's hand is
+    if has_original {
+        unsafe {
+            SetCursorPos(original_pos.x, original_pos.y);
+        }
+    }
+
     Ok(())
 }
 
 
-fn mouse_input(
-    dx: i32,
-    dy: i32,
-    flags: u32,
-) -> windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_0, INPUT_MOUSE, MOUSEINPUT,
-    };
-
-    INPUT {
-        r#type: INPUT_MOUSE,
-        Anonymous: INPUT_0 {
-            mi: MOUSEINPUT {
-                dx,
-                dy,
-                mouseData: 0,
-                dwFlags: flags,
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    }
-}
-
 pub fn scroll_at_point_impl(x: i32, y: i32, direction: &str, amount: i32) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_MOVE,
         MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-        SM_YVIRTUALSCREEN,
+        GetCursorPos, GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN,
+        SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
     };
+
+    let mut original_pos = POINT { x: 0, y: 0 };
+    let has_original = unsafe { GetCursorPos(&mut original_pos) } != 0;
 
     let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
     let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
@@ -123,7 +162,7 @@ pub fn scroll_at_point_impl(x: i32, y: i32, direction: &str, amount: i32) -> Res
         wheel_delta * amount
     };
 
-    let mut move_input = [
+    let mut inputs = [
         INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
@@ -137,22 +176,6 @@ pub fn scroll_at_point_impl(x: i32, y: i32, direction: &str, amount: i32) -> Res
                 },
             },
         },
-    ];
-
-    let sent_move = unsafe {
-        SendInput(
-            move_input.len() as u32,
-            move_input.as_mut_ptr(),
-            std::mem::size_of::<INPUT>() as i32,
-        )
-    };
-    if sent_move != move_input.len() as u32 {
-        return Err(format!("SendInput move event failed (sent {sent_move})"));
-    }
-
-    thread::sleep(Duration::from_millis(50));
-
-    let mut wheel_input = [
         INPUT {
             r#type: INPUT_MOUSE,
             Anonymous: INPUT_0 {
@@ -168,15 +191,22 @@ pub fn scroll_at_point_impl(x: i32, y: i32, direction: &str, amount: i32) -> Res
         },
     ];
 
-    let sent_wheel = unsafe {
+    let sent = unsafe {
         SendInput(
-            wheel_input.len() as u32,
-            wheel_input.as_mut_ptr(),
+            inputs.len() as u32,
+            inputs.as_mut_ptr(),
             std::mem::size_of::<INPUT>() as i32,
         )
     };
-    if sent_wheel != wheel_input.len() as u32 {
-        return Err(format!("SendInput wheel event failed (sent {sent_wheel})"));
+
+    if has_original {
+        unsafe {
+            SetCursorPos(original_pos.x, original_pos.y);
+        }
+    }
+
+    if sent != inputs.len() as u32 {
+        return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
     }
     Ok(())
 }
@@ -425,59 +455,11 @@ pub fn start_global_click_listener(app: AppHandle) {
 
 
 
-pub fn set_system_cursor_visibility(visible: bool) {
+pub fn set_system_cursor_visibility(_visible: bool) {
     unsafe {
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            CreateCursor, SetSystemCursor, SystemParametersInfoW, OCR_NORMAL, OCR_HAND, OCR_IBEAM, SPI_SETCURSORS,
-        };
-
-        if visible {
-            // Restore native default system cursors
-            SystemParametersInfoW(SPI_SETCURSORS, 0, std::ptr::null_mut(), 0);
-        } else {
-            // Create transparent 32x32 blank cursor masks so our Smart AI Cursor takes center stage
-            let and_mask = [0xFFu8; 128];
-            let xor_mask = [0x00u8; 128];
-            
-            let blank_normal = CreateCursor(
-                0 as _,
-                0,
-                0,
-                32,
-                32,
-                and_mask.as_ptr() as *const _,
-                xor_mask.as_ptr() as *const _,
-            );
-            if !blank_normal.is_null() {
-                SetSystemCursor(blank_normal, OCR_NORMAL);
-            }
-
-            let blank_hand = CreateCursor(
-                0 as _,
-                0,
-                0,
-                32,
-                32,
-                and_mask.as_ptr() as *const _,
-                xor_mask.as_ptr() as *const _,
-            );
-            if !blank_hand.is_null() {
-                SetSystemCursor(blank_hand, OCR_HAND);
-            }
-
-            let blank_ibeam = CreateCursor(
-                0 as _,
-                0,
-                0,
-                32,
-                32,
-                and_mask.as_ptr() as *const _,
-                xor_mask.as_ptr() as *const _,
-            );
-            if !blank_ibeam.is_null() {
-                SetSystemCursor(blank_ibeam, OCR_IBEAM);
-            }
-        }
+        use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_SETCURSORS};
+        // Always ensure native default system cursor remains visible alongside our companion AI cursor
+        SystemParametersInfoW(SPI_SETCURSORS, 0, std::ptr::null_mut(), 0);
     }
 }
 

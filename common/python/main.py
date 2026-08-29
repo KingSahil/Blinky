@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -151,11 +151,34 @@ def _fill_empty_search_targets(steps: list[dict], visible_items: list[dict]) -> 
     return steps
 
 
+def is_screen_explanation_question(question: str) -> bool:
+    normalized = " ".join(question.lower().strip().split())
+    if not normalized:
+        return False
+    patterns = [
+        r"\bwhat(?:'s|\s+is)\s+on\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhats\s+on\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhat\s+do\s+you\s+see(?:\s+on\s+(?:my\s+|the\s+)?screen)?\b",
+        r"\bdescribe\s+(?:my\s+|the\s+)?screen\b",
+        r"\bexplain\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhat\s+am\s+i\s+looking\s+at\b",
+        r"\bread\s+(?:my\s+|the\s+)?screen\b",
+        r"\bsummarize\s+(?:my\s+|the\s+)?screen\b",
+        r"\btell\s+me\s+what(?:'s|\s+is)\s+on\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhat\s+is\s+open\s+on\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhat\s+windows\s+are\s+open\b",
+        r"\bwhat\s+app\s+is\s+open\b",
+    ]
+    return any(re.search(pat, normalized) for pat in patterns)
+
+
 def should_skip_preflight_for_local_fast_path(question: str) -> bool:
     normalized = " ".join(question.lower().strip().split())
     if not normalized:
         return False
     if is_followup_continuation_question(normalized):
+        return True
+    if is_screen_explanation_question(normalized):
         return True
     click_words = {"click", "select", "choose", "press", "tap", "change", "switch", "set"}
     words = normalized.split()
@@ -342,8 +365,159 @@ def run(
         if direct_agent_result is not None:
             return build_agent_tool_result(direct_agent_result.to_dict(), started, warnings)
 
-        # AGENT MODE RULE: when agent automation is enabled, NEVER fall through
-        # to screenshots/OCR. Report failure cleanly.
+        # Procedural step planning via SearXNG & Groq text model + OmniParser UI grounding
+        from computer_use.step_planner import generate_procedural_plan
+        from computer_use.text_grounder import ground_step_to_screen
+
+        active_app_quick = None
+        try:
+            active_app_quick = get_active_window()
+        except Exception:
+            pass
+
+        plan = None
+        if not is_screen_explanation_question(question):
+            plan = generate_procedural_plan(question, active_app=active_app_quick, conversation_history=conversation_history)
+        if plan and plan.get("steps") and plan.get("source") != "fallback":
+            completed_targets = {str(t).lower().strip() for t in progress.get("completed_targets", [])} if progress else set()
+            completed_instructions = {str(i).lower().strip() for i in progress.get("completed_instructions", [])} if progress else set()
+            failed_targets = {str(t).lower().strip() for t in progress.get("failed_targets", [])} if progress else set()
+            failed_refs = {str(r).strip() for r in progress.get("failed_refs", [])} if progress else set()
+
+            # Find next uncompleted step in the plan
+            next_step = None
+            for s in plan["steps"]:
+                tgt = s.get("target", "").lower().strip()
+                instr = s.get("instruction", "").lower().strip()
+                is_completed = (
+                    tgt in completed_targets
+                    or any(tgt in c or c in tgt for c in completed_targets if len(c) >= 3 and len(tgt) >= 3)
+                    or instr in completed_instructions
+                    or any(instr in c or c in instr for c in completed_instructions if len(c) >= 5 and len(instr) >= 5)
+                )
+                if is_completed:
+                    continue
+                next_step = s
+                break
+
+            if next_step is None:
+                # All steps in procedural plan have been completed!
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                return {
+                    "summary": f"Autopilot successfully completed: {question}!",
+                    "steps": [],
+                    "active_app": active_app_quick or {"title": "", "process": "", "supported": True},
+                    "ocr": {"count": 0, "items": []},
+                    "elapsed_ms": elapsed_ms,
+                    "provider": get_provider_label(),
+                    "warnings": warnings,
+                    "is_continuation": False,
+                    "computer_use": True,
+                }
+
+            # If the plan specifies an app/URI to open on step 1 and nothing is completed yet
+            if not completed_targets and not completed_instructions and plan.get("app_to_open"):
+                app_to_open = plan["app_to_open"]
+                try:
+                    if os.name == "nt" and ":" in app_to_open:
+                        import subprocess
+                        subprocess.Popen(f"start {app_to_open}", shell=True)
+                        time.sleep(1.0)
+                    else:
+                        from computer_use.tools import open_app_tool
+                        open_app_tool(app_to_open)
+                        time.sleep(1.0)
+                except Exception as exc:
+                    LOGGER.warning("Failed to open plan app '%s': %s", app_to_open, exc)
+
+            # Observe screen state (extracts UI elements via OmniParser / UIA / OCR)
+            screenshot = capture_screen()
+            print("__BLINKY_CAPTURED__", flush=True)
+            observation = observe_app_state(screenshot)
+            visible_items = observation["visible_items"]
+
+            # Deepest visible step resolution:
+            # Check remaining planned steps in reverse order (from deepest step to first)
+            # to pick the furthest actionable step visible on screen (e.g. if already on Personalization page, pick Colors)
+            grounded = None
+            selected_step = next_step
+            uncompleted_steps = [s for s in plan["steps"] if s.get("target", "").lower().strip() not in completed_targets]
+
+            for candidate_step in reversed(uncompleted_steps):
+                cand_grounded = ground_step_to_screen(
+                    candidate_step,
+                    visible_items,
+                    observation.get("active_app"),
+                    failed_refs=failed_refs,
+                    failed_targets=failed_targets,
+                    user_task=question,
+                )
+                if cand_grounded and cand_grounded.get("match", {}).get("score", 0) >= 0.80:
+                    grounded = cand_grounded
+                    selected_step = candidate_step
+                    break
+
+            if not grounded and uncompleted_steps:
+                first_step = uncompleted_steps[0]
+                grounded = ground_step_to_screen(
+                    first_step,
+                    visible_items,
+                    observation.get("active_app"),
+                    failed_refs=failed_refs,
+                    failed_targets=failed_targets,
+                    user_task=question,
+                )
+                selected_step = first_step
+
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            if grounded:
+                return {
+                    "summary": plan.get("summary") or f"Step {selected_step.get('step')}: {selected_step.get('instruction')}",
+                    "markdown_guide": plan.get("markdown_guide", ""),
+                    "steps": [grounded],
+                    "active_app": observation["active_app"],
+                    "app_context": observation.get("app_context", ""),
+                    "ocr": {"count": len(visible_items), "items": visible_items[:200]},
+                    "screenshot": {
+                        "path": str(screenshot.path),
+                        "width": screenshot.width,
+                        "height": screenshot.height,
+                        "screen_width": screenshot.screen_width,
+                        "screen_height": screenshot.screen_height,
+                    },
+                    "elapsed_ms": elapsed_ms,
+                    "provider": get_provider_label(),
+                    "warnings": warnings,
+                    "is_continuation": is_continuation,
+                }
+            else:
+                fallback_step = {
+                    "step": selected_step.get("step", 1),
+                    "instruction": selected_step.get("instruction") or f"Click {selected_step.get('target')}",
+                    "target_text": selected_step.get("target", ""),
+                    "target_ref": "",
+                }
+                return {
+                    "summary": plan.get("summary") or f"Step {selected_step.get('step')}: {selected_step.get('instruction')}",
+                    "markdown_guide": plan.get("markdown_guide", ""),
+                    "steps": [fallback_step],
+                    "active_app": observation["active_app"],
+                    "app_context": observation.get("app_context", ""),
+                    "ocr": {"count": len(visible_items), "items": visible_items[:200]},
+                    "screenshot": {
+                        "path": str(screenshot.path),
+                        "width": screenshot.width,
+                        "height": screenshot.height,
+                        "screen_width": screenshot.screen_width,
+                        "screen_height": screenshot.screen_height,
+                    },
+                    "elapsed_ms": elapsed_ms,
+                    "provider": get_provider_label(),
+                    "warnings": warnings,
+                    "is_continuation": is_continuation,
+                }
+
+        # AGENT MODE RULE: when agent automation is enabled and no plan matches, report failure cleanly.
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         return {
             "summary": "I wasn't able to handle that request with desktop automation. Try rephrasing your request, or disable agent mode for screen-based guidance.",
@@ -431,6 +605,85 @@ def run(
         agent_result = try_run_agent_action(question, observation)
         if agent_result is not None:
             return build_agent_tool_result(agent_result.to_dict(), started, warnings, observation)
+
+    # Check for procedural step plan first to avoid vision token consumption on standard multi-step tasks
+    from computer_use.step_planner import generate_procedural_plan
+    from computer_use.text_grounder import ground_step_to_screen
+
+    procedural_plan = None
+    if not is_screen_explanation_question(effective_question) and not is_control_locator_question(effective_question) and not extract_locator_target(effective_question):
+        procedural_plan = generate_procedural_plan(effective_question, active_app=active_app, conversation_history=conversation_history)
+    if procedural_plan and procedural_plan.get("steps") and procedural_plan.get("source") != "fallback":
+        completed_targets = {str(t).lower().strip() for t in progress.get("completed_targets", [])} if progress else set()
+        completed_instructions = {str(i).lower().strip() for i in progress.get("completed_instructions", [])} if progress else set()
+        failed_targets = {str(t).lower().strip() for t in progress.get("failed_targets", [])} if progress else set()
+        failed_refs = {str(r).strip() for r in progress.get("failed_refs", [])} if progress else set()
+        next_step = None
+        for s in procedural_plan["steps"]:
+            tgt = s.get("target", "").lower().strip()
+            instr = s.get("instruction", "").lower().strip()
+            is_completed = (
+                tgt in completed_targets
+                or any(tgt in c or c in tgt for c in completed_targets if len(c) >= 3 and len(tgt) >= 3)
+                or instr in completed_instructions
+                or any(instr in c or c in instr for c in completed_instructions if len(c) >= 5 and len(instr) >= 5)
+            )
+            if is_completed:
+                continue
+            next_step = s
+            break
+
+        if next_step:
+            uncompleted_steps = [s for s in procedural_plan["steps"] if s.get("target", "").lower().strip() not in completed_targets]
+            grounded = None
+            selected_step = next_step
+
+            for candidate_step in reversed(uncompleted_steps):
+                cand_grounded = ground_step_to_screen(
+                    candidate_step,
+                    visible_items,
+                    active_app,
+                    failed_refs=failed_refs,
+                    failed_targets=failed_targets,
+                    user_task=effective_question,
+                )
+                if cand_grounded and cand_grounded.get("match", {}).get("score", 0) >= 0.80:
+                    grounded = cand_grounded
+                    selected_step = candidate_step
+                    break
+
+            if not grounded and uncompleted_steps:
+                first_step = uncompleted_steps[0]
+                grounded = ground_step_to_screen(
+                    first_step,
+                    visible_items,
+                    active_app,
+                    failed_refs=failed_refs,
+                    failed_targets=failed_targets,
+                    user_task=effective_question,
+                )
+                selected_step = first_step
+
+            if grounded:
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                return {
+                    "summary": procedural_plan.get("summary") or f"Step {selected_step.get('step')}: {selected_step.get('instruction')}",
+                    "steps": [grounded],
+                    "active_app": active_app,
+                    "app_context": observation.get("app_context", ""),
+                    "ocr": {"count": len(visible_items), "items": visible_items[:200]},
+                    "screenshot": {
+                        "path": str(screenshot.path),
+                        "width": screenshot.width,
+                        "height": screenshot.height,
+                        "screen_width": screenshot.screen_width,
+                        "screen_height": screenshot.screen_height,
+                    },
+                    "elapsed_ms": elapsed_ms,
+                    "provider": get_provider_label(),
+                    "warnings": warnings,
+                    "is_continuation": is_continuation,
+                }
 
     prompt_started = time.perf_counter()
     prompt, ref_items = build_prompt(

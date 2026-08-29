@@ -1316,6 +1316,40 @@ class GuidanceFlowTests(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    def test_whats_on_my_screen_triggers_vision_model(self) -> None:
+        from main import is_screen_explanation_question, should_skip_preflight_for_local_fast_path
+
+        self.assertTrue(is_screen_explanation_question("what's on my screen"))
+        self.assertTrue(is_screen_explanation_question("whats on my screen"))
+        self.assertTrue(is_screen_explanation_question("describe my screen"))
+        self.assertTrue(is_screen_explanation_question("what am I looking at"))
+        self.assertTrue(should_skip_preflight_for_local_fast_path("whats on my screen"))
+
+        screenshot = SimpleNamespace(
+            path="screenshots/screen.jpg",
+            width=1920,
+            height=1080,
+            screen_width=1920,
+            screen_height=1080,
+        )
+
+        vision_response = {
+            "summary": "You have Visual Studio Code open with main.py on the left and a terminal on the bottom.",
+            "steps": [],
+        }
+
+        with (
+            patch("main.capture_screen", return_value=screenshot),
+            patch("utils.window.get_target_window_element", return_value=None),
+            patch("main.get_active_window", return_value={"title": "Visual Studio Code", "process": "Code.exe"}),
+            patch("main.get_or_build_visible_ui_map", return_value=[{"text": "main.py", "ref": "e1"}]),
+            patch("main.ask_model", return_value=vision_response) as mock_ask_model,
+        ):
+            result = run("what's on my screen")
+            mock_ask_model.assert_called_once()
+            self.assertIn("Visual Studio Code", result["summary"])
+            self.assertEqual(result["steps"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

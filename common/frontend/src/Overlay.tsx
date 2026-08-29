@@ -37,6 +37,8 @@ export function Overlay() {
   const activeGlideAnimRef = useRef<Animation | null>(null);
 
   const [agentCursorVisible, setAgentCursorVisible] = useState(false);
+  const [isAgentModeActive, setIsAgentModeActive] = useState(false);
+  const isAgentModeActiveRef = useRef(false);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [isClicking, setIsClicking] = useState(false);
 
@@ -44,6 +46,7 @@ export function Overlay() {
   const actingTimeoutRef = useRef<any>(null);
   const isVoiceActiveRef = useRef(false);
   const hideVoiceTimeoutRef = useRef<any>(null);
+  const framesRef = useRef<HighlightFrame[]>([]);
 
   const glowContainerRef = useRef<HTMLDivElement>(null);
 
@@ -89,8 +92,8 @@ export function Overlay() {
 
   // Sync native cursor blanking with AI cursor visibility
   useEffect(() => {
-    void setAgentCursorVisibility(agentCursorVisible);
-  }, [agentCursorVisible]);
+    void setAgentCursorVisibility(agentCursorVisible || isAgentModeActive);
+  }, [agentCursorVisible, isAgentModeActive]);
 
   useEffect(() => {
     isVoiceActiveRef.current = isVoiceActive;
@@ -106,7 +109,7 @@ export function Overlay() {
     } else {
       if (hideVoiceTimeoutRef.current) clearTimeout(hideVoiceTimeoutRef.current);
       hideVoiceTimeoutRef.current = setTimeout(() => {
-        if (!isAgentActingRef.current) {
+        if (!isAgentActingRef.current && !isAgentModeActiveRef.current) {
           setAgentCursorVisible(false);
           if (cursorRef.current) {
             cursorRef.current.style.opacity = '0';
@@ -130,24 +133,52 @@ export function Overlay() {
       setIsVoiceActive(event.payload.active);
     });
 
+    const unlistenAgentMode = listen<{ active: boolean }>('blinky://agent-mode-active', (event) => {
+      setIsAgentModeActive(event.payload.active);
+      isAgentModeActiveRef.current = event.payload.active;
+      if (event.payload.active) {
+        setAgentCursorVisible(true);
+        if (cursorRef.current) {
+          cursorRef.current.style.opacity = '1';
+        }
+      }
+    });
+
     const unlistenVis = listen<{ visible: boolean }>('blinky://agent-cursor-visibility', (event) => {
       setAgentCursorVisible(event.payload.visible);
-      if (!event.payload.visible) {
-        isAgentActingRef.current = false;
+      if (event.payload.visible) {
         if (cursorRef.current) {
+          cursorRef.current.style.opacity = '1';
+        }
+      } else {
+        isAgentActingRef.current = false;
+        if (!isAgentModeActiveRef.current && !isVoiceActiveRef.current && cursorRef.current) {
           cursorRef.current.style.opacity = '0';
         }
       }
     });
 
+    const COMPANION_OFFSET_X = 16;
+    const COMPANION_OFFSET_Y = 16;
+    const nativeCursorPos = { x: 0, y: 0 };
+
     const unlistenNativeMove = listen<{ x: number, y: number }>('blinky://native-cursor-move', (event) => {
       const cssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
       const cssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
-      currentPosRef.current = { x: cssX, y: cssY };
       
-      // Update DOM transform directly when not actively gliding
-      if (!isAgentActingRef.current && cursorRef.current) {
-        cursorRef.current.style.transform = `translate3d(${cssX}px, ${cssY}px, 0)`;
+      const companionX = cssX + COMPANION_OFFSET_X;
+      const companionY = cssY + COMPANION_OFFSET_Y;
+
+      nativeCursorPos.x = companionX;
+      nativeCursorPos.y = companionY;
+
+      // When AI cursor is NOT in the middle of executing an action, it floats beside the user's native cursor
+      if (cursorRef.current && !isAgentActingRef.current) {
+        currentPosRef.current = { x: companionX, y: companionY };
+        cursorRef.current.style.transform = `translate3d(${companionX}px, ${companionY}px, 0)`;
+        if (agentCursorVisible || isAgentModeActiveRef.current || isVoiceActiveRef.current) {
+          cursorRef.current.style.opacity = '1';
+        }
       }
     });
 
@@ -169,8 +200,15 @@ export function Overlay() {
 
       const startCssX = currentPosRef.current.x;
       const startCssY = currentPosRef.current.y;
-      const targetCssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
-      const targetCssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
+      let targetCssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
+      let targetCssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
+
+      // If a visible highlight frame exists on screen, point directly at the highlight frame center
+      if (framesRef.current && framesRef.current.length > 0) {
+        const frame = framesRef.current[0];
+        targetCssX = frame.left + frame.width / 2;
+        targetCssY = frame.top + frame.height / 2;
+      }
 
       const el = cursorRef.current;
       if (el) {
@@ -210,9 +248,11 @@ export function Overlay() {
       // Safety fallback timeout in case of unexpected backend crash (20 seconds)
       actingTimeoutRef.current = setTimeout(() => {
         isAgentActingRef.current = false;
-        setAgentCursorVisible(false);
-        if (cursorRef.current) {
-          cursorRef.current.style.opacity = '0';
+        if (!isAgentModeActiveRef.current && !isVoiceActiveRef.current) {
+          setAgentCursorVisible(false);
+          if (cursorRef.current) {
+            cursorRef.current.style.opacity = '0';
+          }
         }
       }, 20000);
     });
@@ -222,28 +262,77 @@ export function Overlay() {
         clearTimeout(actingTimeoutRef.current);
         actingTimeoutRef.current = null;
       }
-      isAgentActingRef.current = false;
-      if (!isVoiceActiveRef.current) {
-        setAgentCursorVisible(false);
-        if (cursorRef.current) {
-          cursorRef.current.style.opacity = '0';
+      if (activeGlideAnimRef.current) {
+        try {
+          activeGlideAnimRef.current.cancel();
+        } catch {}
+        activeGlideAnimRef.current = null;
+      }
+      setIsClicking(false);
+
+      const el = cursorRef.current;
+      if (el && (isAgentModeActiveRef.current || isVoiceActiveRef.current || agentCursorVisible)) {
+        const startX = currentPosRef.current.x;
+        const startY = currentPosRef.current.y;
+        const returnX = nativeCursorPos.x || startX;
+        const returnY = nativeCursorPos.y || startY;
+        const dist = Math.hypot(returnX - startX, returnY - startY);
+
+        if (dist > 10) {
+          // Smooth return glide back beside user's native cursor
+          const returnAnim = el.animate(
+            [
+              { transform: `translate3d(${startX}px, ${startY}px, 0)` },
+              { transform: `translate3d(${returnX}px, ${returnY}px, 0)` },
+            ],
+            {
+              duration: 500,
+              easing: 'cubic-bezier(0.2, 0.85, 0.25, 1)',
+              fill: 'forwards',
+            }
+          );
+          activeGlideAnimRef.current = returnAnim;
+
+          returnAnim.onfinish = () => {
+            el.style.transform = `translate3d(${returnX}px, ${returnY}px, 0)`;
+            currentPosRef.current = { x: returnX, y: returnY };
+            try {
+              returnAnim.cancel();
+            } catch {}
+            activeGlideAnimRef.current = null;
+            isAgentActingRef.current = false;
+          };
+        } else {
+          el.style.transform = `translate3d(${returnX}px, ${returnY}px, 0)`;
+          currentPosRef.current = { x: returnX, y: returnY };
+          isAgentActingRef.current = false;
+        }
+        el.style.opacity = '1';
+      } else {
+        isAgentActingRef.current = false;
+        if (!isVoiceActiveRef.current && !isAgentModeActiveRef.current) {
+          setAgentCursorVisible(false);
+          if (cursorRef.current) {
+            cursorRef.current.style.opacity = '0';
+          }
         }
       }
     });
 
     return () => {
-      unlistenVad.then((dispose) => dispose());
-      unlistenVoice.then((dispose) => dispose());
-      unlistenVis.then((dispose) => dispose());
-      unlistenNativeMove.then((dispose) => dispose());
-      unlistenAgentMove.then((dispose) => dispose());
-      unlistenAgentDone.then((dispose) => dispose());
       if (actingTimeoutRef.current) {
         clearTimeout(actingTimeoutRef.current);
       }
       if (hideVoiceTimeoutRef.current) {
         clearTimeout(hideVoiceTimeoutRef.current);
       }
+      unlistenVad.then((dispose) => dispose());
+      unlistenVoice.then((dispose) => dispose());
+      unlistenAgentMode.then((dispose) => dispose());
+      unlistenVis.then((dispose) => dispose());
+      unlistenNativeMove.then((dispose) => dispose());
+      unlistenAgentMove.then((dispose) => dispose());
+      unlistenAgentDone.then((dispose) => dispose());
     };
   }, [pixelRatio]);
 
@@ -428,9 +517,20 @@ export function Overlay() {
   }, [result, scaleX, scaleY, viewportWidth, viewportHeight, offsets]);
 
   useEffect(() => {
+    framesRef.current = frames;
+  }, [frames]);
+
+  useEffect(() => {
     const unlisten = listen<GlobalClick>('blinky://global-click', (event) => {
+      // Trigger click ripple ring on physical mouse click
+      setIsClicking(true);
+      setTimeout(() => setIsClicking(false), 300);
+
       const clickedFrame = frames.find((frame) => containsClick(frame, event.payload, scaleX, scaleY));
       if (!clickedFrame) return;
+
+      // User clicked the specific highlighted button: return AI cursor back to native cursor
+      void emit('blinky://agent-cursor-done', {});
 
       setDismissedKeys((current) => {
         const next = new Set(current);

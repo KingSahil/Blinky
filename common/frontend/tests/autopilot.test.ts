@@ -188,12 +188,34 @@ describe('runAutopilotLoop', () => {
     expect(output.stopReason).toBe('max_attempts');
   });
 
-  test('stops when the same target repeats after a click', async () => {
+  test('retries failed step and stops when the same target repeats after retries', async () => {
     let observes = 0;
+    const failures: Array<{ step: any; retryCount: number }> = [];
+
     const output = await runAutopilotLoop({
       maxAttempts: 5,
+      maxRetriesPerStep: 2,
+      onStepFailed: (step, retryCount) => {
+        failures.push({ step, retryCount });
+      },
       observe: async () => {
         observes += 1;
+        return result([refStep('Click Gaming.')]);
+      },
+      act: async () => {},
+      wait: async () => {},
+    });
+
+    expect(output.attempts).toBe(3);
+    expect(failures.length).toBe(2);
+    expect(output.stopReason).toBe('unchanged_after_action');
+  });
+
+  test('stops immediately without retries when maxRetriesPerStep is 0', async () => {
+    const output = await runAutopilotLoop({
+      maxAttempts: 5,
+      maxRetriesPerStep: 0,
+      observe: async () => {
         return result([refStep('Click Gaming.')]);
       },
       act: async () => {},
@@ -266,6 +288,26 @@ describe('isSingleActionQuery', () => {
     expect(isSingleActionQuery('guide me on ordering food')).toBe(false);
     expect(isSingleActionQuery('show me how to make a ppt')).toBe(false);
   });
+
+  test('stops immediately when isCancelled returns true', async () => {
+    let actCalls = 0;
+    let cancelled = false;
+
+    const autopilot = await runAutopilotLoop({
+      maxAttempts: 5,
+      isCancelled: () => cancelled,
+      observe: async () => result([refStep('Click Gaming.')]),
+      act: async () => {
+        actCalls += 1;
+        cancelled = true; // User clicks stop after first action
+      },
+      wait: async () => {},
+    });
+
+    expect(actCalls).toBe(1);
+    expect(autopilot.stopReason).toBe('complete');
+  });
 });
+
 
 
