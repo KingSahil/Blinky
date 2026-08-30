@@ -219,6 +219,45 @@ def open_web_destination_tool(destination: str) -> ToolResult:
     )
 
 
+def open_web_search_tool(query: str, engine: str = "google") -> ToolResult:
+    import urllib.parse
+    import webbrowser
+
+    clean_q = query.strip().strip("'\"")
+    if not clean_q:
+        return ToolResult(
+            False,
+            "open_web_search",
+            "No search query provided.",
+            {"query": query},
+        )
+
+    encoded = urllib.parse.quote_plus(clean_q)
+    if engine == "youtube":
+        url = f"https://www.youtube.com/results?search_query={encoded}"
+        display_name = "YouTube"
+    else:
+        url = f"https://www.google.com/search?q={encoded}"
+        display_name = "Google"
+
+    opened = webbrowser.open(url)
+    if not opened:
+        return ToolResult(
+            False,
+            "open_web_search",
+            f"Could not open {display_name} search for '{clean_q}'.",
+            {"query": clean_q, "url": url},
+        )
+
+    return ToolResult(
+        True,
+        "open_web_search",
+        f"Searched {display_name} for '{clean_q}'.",
+        {"query": clean_q, "url": url},
+    )
+
+
+
 def shortcut_tool(shortcut: str) -> ToolResult:
     if os.name == "nt":
         try:

@@ -1,10 +1,19 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import platform
 import re
 from typing import Any
 
-from .tools import ToolResult, open_app_tool, open_web_destination_tool, shortcut_tool, normalize_app_name, APP_PROTOCOLS, APP_NAME_ALIASES
+from .tools import (
+    ToolResult,
+    open_app_tool,
+    open_web_destination_tool,
+    open_web_search_tool,
+    shortcut_tool,
+    normalize_app_name,
+    APP_PROTOCOLS,
+    APP_NAME_ALIASES,
+)
 
 
 WEB_DESTINATION_NAMES = {
@@ -32,6 +41,11 @@ WEB_DESTINATION_NAMES = {
 }
 
 IS_LINUX = platform.system() == "Linux"
+
+SEARCH_WEB_RE = re.compile(
+    r"^\s*(?:open\s+google\s+(?:and\s+)?(?:search|type|find)\s+(?:for\s+)?(?P<q1>.+)|(?:search|searching|find|look\s+up)\s+(?:for\s+)?(?P<q2>.+?)\s+(?:in|on)\s+google|search\s+google\s+for\s+(?P<q3>.+)|google\s+(?:search\s+)?(?P<q4>.+)|(?:search|searching|find|look\s+up)\s+(?:for\s+)?(?P<q5>(?:best\s+)?(?:restaurants?|cafes?|food|coffee|places|hotels?|gas\s+stations?|stores?|shops?|weather)\s+near\s+me(?:\s+online)?))\s*$",
+    re.IGNORECASE,
+)
 
 OPEN_APP_RE = re.compile(
     r"^\s*(?:open|launch|start)\s+(?:the\s+)?(?P<app>[a-zA-Z0-9 .+_-]{2,60})\s*(?:app|application)?\s*$",
@@ -226,6 +240,18 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
         if result is not None:
             return result
 
+    search_match = SEARCH_WEB_RE.match(question_cleaned)
+    if search_match:
+        query = (
+            search_match.group("q1")
+            or search_match.group("q2")
+            or search_match.group("q3")
+            or search_match.group("q4")
+            or search_match.group("q5")
+        )
+        if query:
+            return open_web_search_tool(query.strip())
+
     match = OPEN_APP_RE.match(question_cleaned)
     if match:
         app = cleanup_app_name(match.group("app"))
@@ -236,9 +262,7 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
             if is_known_app:
                 return open_app_tool(app)
             if is_web_destination(app):
-                if observation is not None:
-                    return open_web_destination_tool(app)
-                return None
+                return open_web_destination_tool(app)
             if not is_in_app_action(app) and looks_like_app_name(app):
                 return open_app_tool(app)
 

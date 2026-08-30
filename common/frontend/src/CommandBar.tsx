@@ -470,12 +470,16 @@ export function CommandBar() {
     });
   };
 
-  const rememberCompletedStep = (targetText?: string, instruction?: string) => {
+  const rememberCompletedStep = (targetText?: string, instruction?: string, plannedTarget?: string) => {
     const cleanTarget = targetText?.trim();
     const cleanInstruction = instruction?.trim();
+    const cleanPlanned = plannedTarget?.trim();
 
     if (cleanTarget && !completedTargetsRef.current.includes(cleanTarget)) {
       completedTargetsRef.current = [...completedTargetsRef.current, cleanTarget];
+    }
+    if (cleanPlanned && !completedTargetsRef.current.includes(cleanPlanned)) {
+      completedTargetsRef.current = [...completedTargetsRef.current, cleanPlanned];
     }
 
     if (cleanInstruction && !completedInstructionsRef.current.includes(cleanInstruction)) {
@@ -1253,24 +1257,25 @@ export function CommandBar() {
             },
             act: async (point, step) => {
               if (cancelledRunIdsRef.current.has(runId)) return;
+              const plannedTarget = (step as any).planned_target;
               if (isScrollAction(step.instruction)) {
                 const direction = getScrollDirection(step.instruction);
                 setStatus(`Autopilot scrolling ${direction}...`);
-                rememberCompletedStep(step.target_text, step.instruction);
+                rememberCompletedStep(step.target_text, step.instruction, plannedTarget);
                 await scrollAtPoint(point.x, point.y, direction, 3);
               } else {
-                const textToType = extractTextToType(step.instruction);
-                if (textToType !== null) {
+                const textToType = (step as any).text_to_type || extractTextToType(step.instruction);
+                if (textToType) {
                   setStatus(`Autopilot typing "${textToType}"...`);
-                  rememberCompletedStep(step.target_text, step.instruction);
+                  rememberCompletedStep(step.target_text, step.instruction, plannedTarget);
                   await clickScreenPoint(point.x, point.y);
                   await new Promise((resolve) => setTimeout(resolve, 150));
                   if (cancelledRunIdsRef.current.has(runId)) return;
-                  const pressEnter = shouldPressEnterAfterTyping(step.instruction);
+                  const pressEnter = (step as any).key?.toLowerCase() === 'enter' || shouldPressEnterAfterTyping(step.instruction);
                   await typeText(textToType, pressEnter);
                 } else {
                   setStatus(`Autopilot clicking (${point.x}, ${point.y})...`);
-                  rememberCompletedStep(step.target_text, step.instruction);
+                  rememberCompletedStep(step.target_text, step.instruction, plannedTarget);
                   await clickScreenPoint(point.x, point.y);
                 }
               }

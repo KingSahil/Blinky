@@ -11,8 +11,21 @@ from ai.mimo_client import ask_mimo_text, ask_mimo_vision
 from ai.custom_client import ask_custom_text, ask_custom_vision
 
 
+def _resolve_provider() -> str:
+    provider = os.getenv("BLINKY_AI_PROVIDER", "").strip().lower()
+    if provider:
+        return provider
+    if os.getenv("GROQ_API_KEY"):
+        return "groq"
+    if os.getenv("MIMO_API_KEY"):
+        return "mimo"
+    if os.getenv("DEEPSEEK_API_KEY"):
+        return "deepseek"
+    return "ollama"
+
+
 def ask_model(prompt: str, screenshot_path: Path) -> dict[str, Any]:
-    provider = (os.getenv("BLINKY_AI_PROVIDER", "ollama").strip() or "ollama").lower()
+    provider = _resolve_provider()
     if provider == "groq":
         return ask_groq_vision(prompt=prompt, screenshot_path=screenshot_path)
     if provider == "mimo":
@@ -30,7 +43,7 @@ def ask_model(prompt: str, screenshot_path: Path) -> dict[str, Any]:
 
 
 def ask_text_model(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
-    provider = (os.getenv("BLINKY_AI_PROVIDER", "ollama").strip() or "ollama").lower()
+    provider = _resolve_provider()
     if provider == "groq":
         return ask_groq_text(prompt, max_tokens)
     if provider == "mimo":
@@ -49,7 +62,7 @@ def ask_text_model(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
 
 
 def get_provider_label() -> str:
-    provider = (os.getenv("BLINKY_AI_PROVIDER", "ollama").strip() or "ollama").lower()
+    provider = _resolve_provider()
     return provider.capitalize()
 
 

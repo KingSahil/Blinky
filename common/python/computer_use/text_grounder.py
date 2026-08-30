@@ -232,6 +232,7 @@ def _build_grounded_step(
         "step": planned_step.get("step", 1),
         "instruction": planned_step.get("instruction") or f"Click {display_name}",
         "target_text": display_name or planned_step.get("target", ""),
+        "planned_target": str(planned_step.get("target", "")).strip(),
         "target_ref": str(item.get("ref", "")),
         "match": match_dict,
         "action": planned_step.get("action", "click"),

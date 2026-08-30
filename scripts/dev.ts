@@ -9,19 +9,183 @@ function getDockerPath(): string {
   if (process.platform !== "win32") {
     return "docker";
   }
-  const defaultPath = "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe";
-  try {
-    // Test if 'docker' is in PATH. spawn throws synchronously if the executable is not found
-    const proc = spawn(["docker", "--version"]);
-    proc.kill();
-    return "docker";
-  } catch (err) {
-    if (existsSync(defaultPath)) {
-      console.log(`Docker command not found in PATH. Using default installation fallback: ${defaultPath}`);
-      return defaultPath;
+  const progFiles = process.env.ProgramFiles || "C:\\Program Files";
+  const progFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const candidates = [
+    "docker",
+    `${progFiles}\\Docker\\Docker\\resources\\bin\\docker.exe`,
+    `${progFilesX86}\\Docker\\Docker\\resources\\bin\\docker.exe`,
+    "C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe",
+  ];
+  for (const c of candidates) {
+    if (c === "docker") {
+      try {
+        const proc = spawn(["docker", "--version"]);
+        proc.kill();
+        return "docker";
+      } catch {}
+    } else if (existsSync(c)) {
+      return c;
     }
   }
   return "docker";
+}
+
+function getDockerDesktopPath(): string | null {
+  if (process.platform === "win32") {
+    const progFiles = process.env.ProgramFiles || "C:\\Program Files";
+    const progFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+    const localAppData = process.env.LOCALAPPDATA || "";
+    const candidates = [
+      `${progFiles}\\Docker\\Docker\\Docker Desktop.exe`,
+      "C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe",
+      `${progFilesX86}\\Docker\\Docker\\Docker Desktop.exe`,
+      `${localAppData}\\Programs\\Docker\\Docker\\Docker Desktop.exe`,
+      `${localAppData}\\Docker\\Docker Desktop.exe`,
+    ];
+    for (const c of candidates) {
+      if (c && existsSync(c)) {
+        return c;
+      }
+    }
+  } else if (process.platform === "darwin") {
+    if (existsSync("/Applications/Docker.app")) {
+      return "/Applications/Docker.app";
+    }
+  }
+  return null;
+}
+
+async function isDockerDaemonRunning(dockerPath: string): Promise<boolean> {
+  try {
+    const proc = spawn([dockerPath, "info"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const exitCodePromise = proc.exited;
+    const timeoutPromise = new Promise<number>((resolve) => setTimeout(() => resolve(1), 3500));
+    const exitCode = await Promise.race([exitCodePromise, timeoutPromise]);
+    if (exitCode === 0) {
+      return true;
+    }
+    try {
+      proc.kill();
+    } catch {}
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+async function tryStartDockerDaemon(dockerPath: string): Promise<boolean> {
+  if (await isDockerDaemonRunning(dockerPath)) {
+    return true;
+  }
+
+  if (process.platform === "win32") {
+    const desktopExe = getDockerDesktopPath();
+    if (desktopExe) {
+      console.log(`[Docker] 🐳 Docker is installed but daemon is not running. Launching Docker Desktop (${desktopExe})...`);
+      try {
+        const startProc = spawn(["cmd.exe", "/c", "start", "", desktopExe], {
+          detached: true,
+          stdio: ["ignore", "ignore", "ignore"],
+        });
+        startProc.unref();
+      } catch (err: any) {
+        console.warn(`[Docker] Failed to launch Docker Desktop: ${err?.message || err}`);
+        return false;
+      }
+    } else {
+      console.log("[Docker] 🐳 Docker Desktop executable not found at standard paths. Trying com.docker.service...");
+      try {
+        const netStart = spawn(["powershell", "-NoProfile", "-Command", "Start-Service com.docker.service -ErrorAction SilentlyContinue"]);
+        await Promise.race([netStart.exited, new Promise((r) => setTimeout(r, 4000))]);
+      } catch {}
+    }
+  } else if (process.platform === "darwin") {
+    console.log("[Docker] 🐳 Docker daemon is not running. Launching Docker.app...");
+    try {
+      const startProc = spawn(["open", "-a", "Docker"], {
+        detached: true,
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+      startProc.unref();
+    } catch (err: any) {
+      console.warn(`[Docker] Failed to launch Docker.app: ${err?.message || err}`);
+      return false;
+    }
+  } else {
+    // Linux
+    console.log("[Docker] 🐳 Attempting to start Docker daemon service...");
+    try {
+      const startProc = spawn(["systemctl", "--user", "start", "docker"], { stdio: "ignore" });
+      await Promise.race([startProc.exited, new Promise((r) => setTimeout(r, 3000))]);
+    } catch {
+      try {
+        const sysStart = spawn(["sudo", "systemctl", "start", "docker"], { stdio: "ignore" });
+        await Promise.race([sysStart.exited, new Promise((r) => setTimeout(r, 3000))]);
+      } catch {}
+    }
+  }
+
+  // Poll until the Docker daemon is ready (up to 45 seconds)
+  const maxWaitSeconds = 45;
+  const pollIntervalMs = 2000;
+  const startTime = Date.now();
+
+  console.log(`[Docker] ⏳ Waiting for Docker engine to become ready (max ${maxWaitSeconds}s)...`);
+  while ((Date.now() - startTime) < maxWaitSeconds * 1000) {
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+    const elapsed = Math.round((Date.now() - startTime) / 1000);
+    if (await isDockerDaemonRunning(dockerPath)) {
+      console.log(`[Docker] ✨ Docker daemon is now online and ready (took ${elapsed}s)!`);
+      return true;
+    }
+    if (elapsed % 6 === 0) {
+      console.log(`[Docker] ⏳ Still waiting for Docker engine to initialize (${elapsed}s / ${maxWaitSeconds}s)...`);
+    }
+  }
+
+  console.warn(`[Docker] ⚠️ Docker daemon did not become ready within ${maxWaitSeconds} seconds.`);
+  return false;
+}
+
+async function ensureSearXNGStarted(): Promise<void> {
+  if (noDocker) {
+    console.log("[Docker] Skipping SearXNG (--no-docker flag specified).");
+    return;
+  }
+
+  const dockerPath = getDockerPath();
+  let isRunning = await isDockerDaemonRunning(dockerPath);
+
+  if (!isRunning) {
+    console.log("[Docker] Docker daemon is not active. Attempting to start it automatically...");
+    isRunning = await tryStartDockerDaemon(dockerPath);
+  }
+
+  if (!isRunning) {
+    console.warn("Warning: Docker was not found or failed to start. Skipping SearXNG (web search functionality will be disabled).");
+    console.warn("💡 Tip: You can start Docker Desktop manually anytime and SearXNG will connect.");
+    return;
+  }
+
+  console.log("Starting SearXNG via Docker Compose...");
+  try {
+    const dockerCompose = spawn([dockerPath, "compose", "-f", "common/docker-compose.yml", "up", "-d"], {
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    const exitCode = await dockerCompose.exited;
+    if (exitCode !== 0) {
+      console.error("Warning: Failed to start SearXNG via Docker Compose. Continuing anyway...");
+    } else {
+      console.log("[Docker] ✅ SearXNG service is ready on http://localhost:8888");
+    }
+  } catch (err: any) {
+    console.warn(`Warning: Docker Compose error (${err?.message || err}). Skipping SearXNG.`);
+  }
 }
 
 function getAdbPath(): string | null {
@@ -160,22 +324,8 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
   }
 }
 
-if (!noDocker) {
-  console.log("Starting SearXNG via Docker Compose...");
-  const dockerPath = getDockerPath();
-  try {
-    const dockerCompose = spawn([dockerPath, "compose", "-f", "common/docker-compose.yml", "up", "-d"], {
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-    const exitCode = await dockerCompose.exited;
-    if (exitCode !== 0) {
-      console.error("Warning: Failed to start SearXNG via Docker Compose. Continuing anyway...");
-    }
-  } catch (err) {
-    console.warn("Warning: Docker was not found or is not running. Skipping SearXNG (web search functionality will be disabled).");
-  }
-}
+await ensureSearXNGStarted();
+
 
 let mobileProcess: Subprocess | null = null;
 if (!noMobile) {
