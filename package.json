@@ -11,6 +11,7 @@
     "mobile:dev": "cd common/mobile && bun run start",
     "tauri:dev": "bun tauri dev",
     "build": "bun run typecheck && vite build --config common/frontend/vite.config.ts",
+    "build:release": "bun run typecheck && bun scripts/build-release.ts",
     "tauri:build": "bun tauri build",
     "preview": "vite preview --config common/frontend/vite.config.ts",
     "typecheck": "tsc -p common/frontend/tsconfig.json --noEmit",

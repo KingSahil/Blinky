@@ -1,4 +1,6 @@
 mod platform;
+mod tls_identity;
+mod transport;
 mod websocket;
 
 use serde::{Deserialize, Serialize};
@@ -86,6 +88,31 @@ async fn run_agent_query(
     request: AgentQueryRequest,
 ) -> Result<serde_json::Value, String> {
     websocket::run_agent_query(&app, &request.query).await
+}
+
+#[tauri::command]
+fn get_secure_transport_info(app: AppHandle) -> Result<serde_json::Value, String> {
+    websocket::secure_transport_info(&app).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn secure_socket_connect(
+    app: AppHandle,
+    socket_id: String,
+    url: String,
+    expected_pin: Option<String>,
+) -> Result<(), String> {
+    websocket::secure_socket_connect(app, socket_id, url, expected_pin).await
+}
+
+#[tauri::command]
+async fn secure_socket_send(socket_id: String, kind: String, data: String) -> Result<(), String> {
+    websocket::secure_socket_send(socket_id, kind, data).await
+}
+
+#[tauri::command]
+async fn secure_socket_close(socket_id: String) -> Result<(), String> {
+    websocket::secure_socket_close(socket_id).await
 }
 
 /// User decision on a staged workflow recipe (saved after a successful agent
@@ -908,6 +935,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             run_tutor,
             run_agent_query,
+            get_secure_transport_info,
+            secure_socket_connect,
+            secure_socket_send,
+            secure_socket_close,
             show_overlay,
             hide_overlay,
             click_screen_point,

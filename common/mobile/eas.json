@@ -5,7 +5,10 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_BLINKY_TRANSPORT_MODE": "development"
+      }
     },
     "preview": {
       "distribution": "internal",
@@ -13,7 +16,20 @@
         "buildType": "apk"
       }
     },
-    "production": {}
+    "release": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_BLINKY_TRANSPORT_MODE": "release"
+      }
+    },
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_BLINKY_TRANSPORT_MODE": "release"
+      }
+    }
   },
   "submit": {
     "production": {}
