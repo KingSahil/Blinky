@@ -329,6 +329,12 @@ def resolve_open_url_request(query: str) -> tuple[str, str] | None:
         "wikipedia": ("Wikipedia", "https://www.wikipedia.org"),
         "whatsapp": ("WhatsApp", "https://web.whatsapp.com"),
         "whatsapp web": ("WhatsApp", "https://web.whatsapp.com"),
+        "instagram": ("Instagram", "https://www.instagram.com"),
+        "facebook": ("Facebook", "https://www.facebook.com"),
+        "twitter": ("Twitter", "https://x.com"),
+        "x": ("X", "https://x.com"),
+        "reddit": ("Reddit", "https://www.reddit.com"),
+        "linkedin": ("LinkedIn", "https://www.linkedin.com"),
     }
     if target in known_sites:
         return known_sites[target]
@@ -728,6 +734,64 @@ async def handle_request(line):
         # If regex matched but failed (and is not media-related), clear it to let it fall back
         direct_result = None
 
+        if is_playwright_health_check_request(query):
+            send_response(request_id, "processing", data={"message": "Testing Playwright locally...", "percent": 55})
+            ok, message = await run_playwright_health_check()
+            if ok:
+                send_response(request_id, "success", data={"response": message})
+            else:
+                send_response(request_id, "error", error={"code": "PLAYWRIGHT_HEALTHCHECK_FAILED", "message": "Playwright health check failed", "details": message})
+            return
+
+        youtube_search = resolve_youtube_search_request(query)
+        if youtube_search:
+            terms, url = youtube_search
+            send_response(request_id, "processing", data={"message": f"Searching YouTube for {terms}...", "percent": 50})
+            try:
+                from computer_use.tools import extract_channel_from_query, resolve_youtube_video_url
+                msg = f"Searched YouTube for {terms}."
+                if extract_channel_from_query(query):
+                    try:
+                        resolved_url = await resolve_youtube_video_url(query)
+                        if resolved_url:
+                            url = resolved_url
+                            msg = "Playing latest video on YouTube."
+                    except Exception as ex:
+                        import logging
+                        logging.getLogger("blinky.agent_router").warning(f"Failed to resolve latest video URL in agent_router: {ex}")
+                opened = await asyncio.to_thread(webbrowser.open, url)
+                if not opened:
+                    raise RuntimeError("The default browser did not accept the YouTube search request")
+                send_response(request_id, "success", data={"response": msg})
+            except Exception as e:
+                send_response(request_id, "error", error={"code": "YOUTUBE_SEARCH_FAILED", "message": f"Failed to search YouTube for {terms}", "details": str(e)})
+            return
+
+        web_search = resolve_web_search_request(query)
+        if web_search:
+            terms, url = web_search
+            send_response(request_id, "processing", data={"message": f"Searching for {terms}...", "percent": 50})
+            try:
+                opened = await asyncio.to_thread(webbrowser.open, url)
+                if not opened:
+                    raise RuntimeError("The default browser did not accept the search request")
+                send_response(request_id, "success", data={"response": f"Searched for {terms}."})
+            except Exception as e:
+                send_response(request_id, "error", error={"code": "WEB_SEARCH_FAILED", "message": f"Failed to search for {terms}", "details": str(e)})
+            return
+
+        open_url = resolve_open_url_request(query)
+        if open_url:
+            label, url = open_url
+            send_response(request_id, "processing", data={"message": f"Opening {label}...", "percent": 60})
+            try:
+                opened = await asyncio.to_thread(webbrowser.open, url)
+                if not opened:
+                    raise RuntimeError("The default browser did not accept the open request")
+                send_response(request_id, "success", data={"response": f"Opened {label}."})
+            except Exception as e:
+                send_response(request_id, "error", error={"code": "OPEN_URL_FAILED", "message": f"Failed to open {label}", "details": str(e)})
+            return
 
         preflight = classify_request(query, None, [], None, agent_mode=True)
 
@@ -820,11 +884,48 @@ async def handle_request(line):
                 tutor_result = await run_main_py_subprocess(payload_in, request_id)
                 screenshot_path = tutor_result.get("screenshot", {}).get("path")
                 steps = tutor_result.get("steps", [])
-                
+
+                # If this query was a click action, execute the click on the matched coordinates
+                from main import extract_click_target
+                click_target = extract_click_target(query)
+                is_click_cmd = bool(click_target) or any(
+                    "click" in str(s.get("instruction", "")).lower() for s in steps
+                ) or query.lower().strip().startswith(("click", "tap", "press", "select"))
+
+                click_step = next((s for s in steps if s.get("match")), None)
+                if is_click_cmd and click_step:
+                    match_obj = click_step.get("match", {})
+                    cx = match_obj.get("x")
+                    cy = match_obj.get("y")
+                    label = click_step.get("target_text") or click_target or "the target"
+                    if cx is not None and cy is not None:
+                        send_response(request_id, "processing", data={"message": f"Clicking {label}...", "percent": 90})
+                        from computer_use.actuator import click_element
+                        click_res = await asyncio.to_thread(click_element, x=int(cx), y=int(cy), name=str(label))
+                        if click_res.get("ok"):
+                            tutor_result["summary"] = f"Clicked {label}."
+                elif is_click_cmd and not click_step and click_target:
+                    # Target was not found on screen. Check if it's a known web destination or app to open as fallback
+                    from computer_use import is_web_destination, looks_like_app_name
+                    from computer_use.tools import normalize_app_name, APP_PROTOCOLS, APP_NAME_ALIASES
+                    norm_target = normalize_app_name(click_target)
+                    if is_web_destination(norm_target):
+                        from computer_use.tools import open_web_destination_tool
+                        send_response(request_id, "processing", data={"message": f"Opening {click_target}...", "percent": 90})
+                        web_res = await asyncio.to_thread(open_web_destination_tool, norm_target)
+                        if web_res.success:
+                            tutor_result["summary"] = web_res.message
+                    elif norm_target in APP_PROTOCOLS or norm_target in APP_NAME_ALIASES or looks_like_app_name(norm_target):
+                        from computer_use.tools import open_app_tool
+                        send_response(request_id, "processing", data={"message": f"Opening {click_target}...", "percent": 90})
+                        app_res = await asyncio.to_thread(open_app_tool, click_target)
+                        if app_res.success:
+                            tutor_result["summary"] = app_res.message
+
                 screenshot_b64 = None
                 if screenshot_path and steps:
                     screenshot_b64 = await asyncio.to_thread(annotate_screenshot, screenshot_path, steps)
-                
+
                 payload = {
                     "response": tutor_result.get("summary", ""),
                     "steps": steps,
@@ -834,71 +935,13 @@ async def handle_request(line):
                 }
                 if screenshot_b64:
                     payload["screenshot_b64"] = screenshot_b64
-                    
+
                 send_response(request_id, "success", data=payload)
                 return
     except Exception as ex:
         import logging
         logging.getLogger("blinky.agent_router").warning(f"Error during local desktop routing check: {ex}")
  
-    if is_playwright_health_check_request(query):
-        send_response(request_id, "processing", data={"message": "Testing Playwright locally...", "percent": 55})
-        ok, message = await run_playwright_health_check()
-        if ok:
-            send_response(request_id, "success", data={"response": message})
-        else:
-            send_response(request_id, "error", error={"code": "PLAYWRIGHT_HEALTHCHECK_FAILED", "message": "Playwright health check failed", "details": message})
-        return
- 
-    open_url = resolve_open_url_request(query)
-    if open_url:
-        label, url = open_url
-        send_response(request_id, "processing", data={"message": f"Opening {label}...", "percent": 60})
-        try:
-            opened = await asyncio.to_thread(webbrowser.open, url)
-            if not opened:
-                raise RuntimeError("The default browser did not accept the open request")
-            send_response(request_id, "success", data={"response": f"Opened {label}."})
-        except Exception as e:
-            send_response(request_id, "error", error={"code": "OPEN_URL_FAILED", "message": f"Failed to open {label}", "details": str(e)})
-        return
- 
-    youtube_search = resolve_youtube_search_request(query)
-    if youtube_search:
-        terms, url = youtube_search
-        send_response(request_id, "processing", data={"message": f"Searching YouTube for {terms}...", "percent": 50})
-        try:
-            from computer_use.tools import extract_channel_from_query, resolve_youtube_video_url
-            msg = f"Searched YouTube for {terms}."
-            if extract_channel_from_query(query):
-                try:
-                    resolved_url = await resolve_youtube_video_url(query)
-                    if resolved_url:
-                        url = resolved_url
-                        msg = "Playing latest video on YouTube."
-                except Exception as ex:
-                    import logging
-                    logging.getLogger("blinky.agent_router").warning(f"Failed to resolve latest video URL in agent_router: {ex}")
-            opened = await asyncio.to_thread(webbrowser.open, url)
-            if not opened:
-                raise RuntimeError("The default browser did not accept the YouTube search request")
-            send_response(request_id, "success", data={"response": msg})
-        except Exception as e:
-            send_response(request_id, "error", error={"code": "YOUTUBE_SEARCH_FAILED", "message": f"Failed to search YouTube for {terms}", "details": str(e)})
-        return
- 
-    web_search = resolve_web_search_request(query)
-    if web_search:
-        terms, url = web_search
-        send_response(request_id, "processing", data={"message": f"Searching for {terms}...", "percent": 50})
-        try:
-            opened = await asyncio.to_thread(webbrowser.open, url)
-            if not opened:
-                raise RuntimeError("The default browser did not accept the search request")
-            send_response(request_id, "success", data={"response": f"Searched for {terms}."})
-        except Exception as e:
-            send_response(request_id, "error", error={"code": "WEB_SEARCH_FAILED", "message": f"Failed to search for {terms}", "details": str(e)})
-        return
  
     ai_open_url = resolve_ai_open_url_request(query)
     if ai_open_url:

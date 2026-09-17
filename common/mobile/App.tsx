@@ -1618,6 +1618,9 @@ export default function App() {
                   autoCorrect={false}
                 />
               </View>
+              <Text style={{ color: '#6C6985', fontSize: 11, marginTop: -6, marginBottom: 8, paddingHorizontal: 4, lineHeight: 15 }}>
+                Wakes monitors & dismisses lock curtain. (Windows security isolates the Secure Desktop PIN prompt).
+              </Text>
               <View style={styles.actionRow}>
 
                 {status !== 'connected' && status !== 'connecting' ? (

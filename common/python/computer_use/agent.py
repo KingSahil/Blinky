@@ -101,7 +101,7 @@ GET_APP_STATE_RE = re.compile(
 )
 
 CLICK_ELEMENT_RE = re.compile(
-    r"^\s*(?:click|press|select|hit|push)\s+(?:the\s+)?(?P<element>.+?)(?:\s+(?:in|on)\s+(?:the\s+)?(?P<app>[a-zA-Z0-9 .+_-]{2,60})(?:\s*(?:app|application|window))?)?\s*$",
+    r"^\s*(?:click|press|select|hit|push|tap)\s+(?:on\s+)?(?:the\s+)?(?P<element>.+?)(?:\s+(?:in|on)\s+(?:the\s+)?(?P<app>[a-zA-Z0-9 .+_-]{2,60})(?:\s*(?:app|application|window))?)?\s*$",
     re.IGNORECASE,
 )
 
@@ -234,11 +234,10 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
         return shortcut_tool("media_prev")
 
 
-    # Linux desktop actions
-    if IS_LINUX:
-        result = _try_linux_action(question_cleaned)
-        if result is not None:
-            return result
+    # Desktop actions (click element, type text, list windows, get app state)
+    result = _try_desktop_action(question_cleaned)
+    if result is not None:
+        return result
 
     search_match = SEARCH_WEB_RE.match(question_cleaned)
     if search_match:
@@ -262,13 +261,15 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
             if is_known_app:
                 return open_app_tool(app)
             if is_web_destination(app):
+                if observation is None:
+                    return None
                 return open_web_destination_tool(app)
             if not is_in_app_action(app) and looks_like_app_name(app):
                 return open_app_tool(app)
 
     return None
 
-def _try_linux_action(question: str) -> ToolResult | None:
+def _try_desktop_action(question: str) -> ToolResult | None:
     # List windows
     if LIST_WINDOWS_RE.match(question):
         from .tools import list_windows_tool
@@ -289,7 +290,20 @@ def _try_linux_action(question: str) -> ToolResult | None:
         app = click_match.group("app")
         if element:
             from .tools import click_element_tool
-            return click_element_tool(name=element.strip())
+            res = click_element_tool(name=element.strip())
+            if res.success:
+                return res
+            # Fallback: if clicking on screen didn't find the element,
+            # and the target is a known web destination or app, open it
+            norm_el = normalize_app_name(element.strip())
+            if is_web_destination(norm_el):
+                from .tools import open_web_destination_tool
+                return open_web_destination_tool(norm_el)
+            is_known_app = norm_el in APP_PROTOCOLS or norm_el in APP_NAME_ALIASES
+            if is_known_app:
+                from .tools import open_app_tool
+                return open_app_tool(element.strip())
+            return res
 
     # Type text
     type_match = TYPE_TEXT_RE.match(question)
@@ -301,6 +315,9 @@ def _try_linux_action(question: str) -> ToolResult | None:
             return type_text_tool(text.strip(), target_app=app.strip() if app else None)
 
     return None
+
+# Backward compatibility alias
+_try_linux_action = _try_desktop_action
 
 
 def cleanup_app_name(value: str) -> str:

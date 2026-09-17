@@ -787,6 +787,8 @@ where
                     None
                 };
 
+                println!("blinky: received unlock command from client (has_pin: {})", parsed_pin.is_some());
+
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                 let evt = serde_json::json!({
                     "type": "power_event",

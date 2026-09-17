@@ -282,16 +282,41 @@ def click_element(
         linux = _linux_module()
         if linux is not None:
             return linux.click_element(index=index, role=role, name=name, x=x, y=y, app_id=app_id)
+        if IS_WINDOWS:
+            if x is not None and y is not None:
+                try:
+                    from pywinauto.mouse import click
+                    click(button="left", coords=(int(x), int(y)))
+                    return _ok_result("click", f"Clicked at ({x}, {y}) via native input", x=int(x), y=int(y))
+                except Exception as exc:
+                    return _fail_result("click", f"Native click failed: {exc}")
+            if name:
+                try:
+                    from uia import get_visible_ui_text
+                    from utils.matching import find_best_match
+                    items = get_visible_ui_text(include_unlabeled=True)
+                    match = find_best_match(name, items, f"Click {name}")
+                    if match:
+                        from computer_use.tools import click_item_center
+                        click_item_center(match)
+                        return _ok_result("click", f"Clicked {name}", matched_text=match.get("text", name))
+                except Exception as exc:
+                    LOGGER.warning("Native UIA click fallback failed: %s", exc)
         return _no_backend("click_element")
 
     try:
         if x is not None and y is not None:
             result = backend.click(x=int(x), y=int(y))
-            return (
-                _ok_result("click", result.message, x=int(x), y=int(y))
-                if result.ok
-                else _fail_result("click", result.message)
-            )
+            if result.ok:
+                return _ok_result("click", result.message, x=int(x), y=int(y))
+            if IS_WINDOWS:
+                try:
+                    from pywinauto.mouse import click
+                    click(button="left", coords=(int(x), int(y)))
+                    return _ok_result("click", f"Clicked at ({x}, {y}) via native fallback", x=int(x), y=int(y))
+                except Exception:
+                    pass
+            return _fail_result("click", result.message)
 
         chosen = _resolve_target_window(app_id, backend)
 

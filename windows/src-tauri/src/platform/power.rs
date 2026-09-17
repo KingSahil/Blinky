@@ -50,8 +50,10 @@ pub fn is_workstation_locked() -> bool {
     }
 }
 
-/// Wakes display, dismisses the Windows lock screen curtain, and injects optional PIN/credentials.
+/// Wakes display, dismisses the Windows lock screen curtain, and injects PIN using CredentialProviderPipe or Win32 input model.
 pub fn execute_unlock(pin: Option<&str>) {
+    println!("blinky: execute_unlock invoked (pin_provided: {})", pin.is_some());
+
     // 1. Force the system and display out of standby/low-power state
     unsafe {
         use windows_sys::Win32::System::Power::{
@@ -60,35 +62,289 @@ pub fn execute_unlock(pin: Option<&str>) {
         SetThreadExecutionState(ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
     }
 
-    // 2. Synthetic mouse jitter to wake monitors and trigger input subsystem
+    // 2. Synthetic mouse jitter to wake monitors
     let _ = wake_monitors_mouse_jitter();
 
-    // 3. Spawn a background worker to dismiss the curtain and type PIN if supplied
+    // 3. Spawn background thread for the automated unlock sequence
     let pin_owned = pin.map(|s| s.to_string());
     std::thread::spawn(move || {
         use std::thread::sleep;
         use std::time::Duration;
 
-        // Brief delay to allow screens to power on
+        // Wake display first
+        let _ = send_mouse_click();
         sleep(Duration::from_millis(150));
+        let _ = send_vk_key(0x20, false);
+        sleep(Duration::from_millis(300));
 
-        // Spacebar to dismiss lock screen curtain and show PIN/password field
-        let _ = send_keypress(0x20);
+        // OPTION C: tscon via a temporary SYSTEM service - reconnects the locked session
+        // without needing any password or PIN. Works for Win+L style locks.
+        match try_tscon_unlock() {
+            Ok(()) => {
+                println!("blinky: Workstation successfully unlocked via tscon (SYSTEM service)!");
+                return;
+            }
+            Err(err) => {
+                println!("blinky: tscon unlock failed: {err}. Falling back to credential provider...");
+            }
+        }
 
-        // If a PIN is provided, wait for the login field to focus, then type it
+        if let Some(ref pin_str) = pin_owned {
+            let trimmed = pin_str.trim();
+            if !trimmed.is_empty() {
+                // Fallback: open-source Windows Credential Provider (direct pipe unlock via LSA)
+                match try_named_pipe_unlock(trimmed) {
+                    Ok(()) => {
+                        println!("blinky: Workstation successfully unlocked via CredentialProviderPipe!");
+                        return;
+                    }
+                    Err(err) => {
+                        println!("blinky: Named pipe unlock attempt: {err}");
+                    }
+                }
+            }
+        }
+
+        // Fallback: If Credential Provider is not registered, wait for the lock curtain animation to finish
+        // and attempt virtual key typing (works on certain configurations or when already at credential screen)
         if let Some(pin_str) = pin_owned {
-            if !pin_str.trim().is_empty() {
-                sleep(Duration::from_millis(350));
-                for ch in pin_str.chars() {
-                    let _ = send_unicode_char(ch);
+            let trimmed = pin_str.trim();
+            if !trimmed.is_empty() {
+                // Windows 10/11 lock screen curtain animation takes ~900ms to lift and focus the PIN box
+                sleep(Duration::from_millis(800));
+
+                // Clear any stray input or space that may have entered the box
+                for _ in 0..4 {
+                    let _ = send_vk_key(0x08, false); // VK_BACK
                     sleep(Duration::from_millis(25));
                 }
-                sleep(Duration::from_millis(50));
-                // Enter to submit
-                let _ = send_keypress(0x0D);
+                sleep(Duration::from_millis(60));
+
+                // Type each character of the PIN using virtual key dispatch
+                for ch in trimmed.chars() {
+                    let (vk, shift) = char_to_vk(ch);
+                    let _ = send_vk_key(vk, shift);
+                    sleep(Duration::from_millis(45));
+                }
+
+                // Wait 100ms and press Enter to submit
+                sleep(Duration::from_millis(100));
+                let _ = send_vk_key(0x0D, false); // VK_RETURN
+                println!("blinky: fallback unlock PIN sequence completed for host");
             }
         }
     });
+}
+
+/// Unlocks the workstation by triggering the pre-registered BlinkyUnlock scheduled task.
+/// The task runs as SYSTEM and calls `tscon <session> /dest:console`, which reconnects
+/// the locked session without any password or PIN.
+///
+/// Requires `register.bat` to have been run as Administrator once to create the task.
+/// `schtasks /run` does NOT require admin — any user can trigger a pre-existing task.
+fn try_tscon_unlock() -> Result<(), String> {
+    use std::process::Command;
+
+    // Trigger the BlinkyUnlock task (created by register.bat, runs as SYSTEM)
+    let out = Command::new("schtasks.exe")
+        .args(["/run", "/tn", "BlinkyUnlock"])
+        .output()
+        .map_err(|e| format!("schtasks.exe failed to launch: {e}"))?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let exit_code = out.status.code().unwrap_or(-1);
+    println!("blinky: schtasks BlinkyUnlock: exit={exit_code} {stdout}{stderr}");
+
+    if exit_code == 0 {
+        // Give tscon time to reconnect the session before we declare success
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        Ok(())
+    } else {
+        Err(format!(
+            "BlinkyUnlock task not found or failed (exit {exit_code}). \
+             Run windows/unlock_provider/register.bat as Administrator.\n{stdout}{stderr}"
+        ))
+    }
+}
+
+fn try_named_pipe_unlock(pin_or_password: &str) -> Result<(), String> {
+    use std::io::{Read, Write};
+    use std::time::Duration;
+
+    let username = std::env::var("USERNAME").unwrap_or_else(|_| "sahil".to_string());
+    let domain = std::env::var("USERDOMAIN").unwrap_or_else(|_| ".".to_string());
+    let pipe_path = r"\\.\pipe\CredentialProviderPipe";
+
+    println!("blinky: attempting unlock via named pipe {pipe_path} for user '{username}' (domain: '{domain}')");
+
+    // Attempt connecting to the named pipe with retries (LogonUI might take ~500ms to initialize upon lock)
+    for attempt in 1..=10 {
+        match std::fs::OpenOptions::new().read(true).write(true).open(pipe_path) {
+            Ok(mut file) => {
+                // Format accepted by UnlockProvider: UNLOCK:domain\username:password or UNLOCK:username:password
+                let cmd = format!("UNLOCK:{username}:{pin_or_password}");
+                if let Err(e) = file.write_all(cmd.as_bytes()) {
+                    return Err(format!("Failed to write command to pipe: {e}"));
+                }
+                let mut resp_buf = [0u8; 64];
+                let n = file.read(&mut resp_buf).unwrap_or(0);
+                let resp_str = String::from_utf8_lossy(&resp_buf[..n]);
+                println!("blinky: CredentialProviderPipe response: {resp_str}");
+                if resp_str.starts_with("OK") {
+                    return Ok(());
+                } else {
+                    return Err(format!("Unlock provider returned: {resp_str}"));
+                }
+            }
+            Err(e) => {
+                if attempt == 10 {
+                    println!("blinky: CredentialProviderPipe not reachable after 10 attempts ({e})");
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+
+    Err("Named pipe \\\\.\\pipe\\CredentialProviderPipe not available (is UnlockProvider registered as Administrator?)".to_string())
+}
+
+fn send_mouse_click() -> Result<(), String> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEINPUT,
+    };
+    let mut down = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_LEFTDOWN,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    unsafe {
+        SendInput(1, &mut down, std::mem::size_of::<INPUT>() as i32);
+    }
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let mut up = INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: 0,
+                dwFlags: MOUSEEVENTF_LEFTUP,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    unsafe {
+        SendInput(1, &mut up, std::mem::size_of::<INPUT>() as i32);
+    }
+    Ok(())
+}
+
+fn char_to_vk(ch: char) -> (u16, bool) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayout, VkKeyScanExW};
+    let layout = unsafe { GetKeyboardLayout(0) };
+    let res = unsafe { VkKeyScanExW(ch as u16, layout) };
+    if res != -1 {
+        let vk = (res & 0xFF) as u16;
+        let shift = (res & 0x100) != 0;
+        (vk, shift)
+    } else {
+        match ch {
+            '0'..='9' => (0x30 + (ch as u16 - '0' as u16), false),
+            'a'..='z' => (0x41 + (ch as u16 - 'a' as u16), false),
+            'A'..='Z' => (0x41 + (ch as u16 - 'A' as u16), true),
+            _ => (ch as u16, false),
+        }
+    }
+}
+
+fn send_vk_key(vk: u16, shift: bool) -> Result<(), String> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_LSHIFT,
+    };
+
+    if shift {
+        let mut shift_down = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_LSHIFT,
+                    wScan: 0,
+                    dwFlags: 0,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        unsafe {
+            SendInput(1, &mut shift_down, std::mem::size_of::<INPUT>() as i32);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(15));
+    }
+
+    let mut key_down = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: 0,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    unsafe {
+        SendInput(1, &mut key_down, std::mem::size_of::<INPUT>() as i32);
+    }
+
+    std::thread::sleep(std::time::Duration::from_millis(35));
+
+    let mut key_up = INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: vk,
+                wScan: 0,
+                dwFlags: KEYEVENTF_KEYUP,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+    unsafe {
+        SendInput(1, &mut key_up, std::mem::size_of::<INPUT>() as i32);
+    }
+
+    if shift {
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        let mut shift_up = INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VK_LSHIFT,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        };
+        unsafe {
+            SendInput(1, &mut shift_up, std::mem::size_of::<INPUT>() as i32);
+        }
+    }
+
+    Ok(())
 }
 
 fn wake_monitors_mouse_jitter() -> Result<(), String> {
@@ -132,53 +388,6 @@ fn wake_monitors_mouse_jitter() -> Result<(), String> {
     };
     if sent != inputs.len() as u32 {
         return Err(format!("SendInput mouse jitter sent {sent} of {} events", inputs.len()));
-    }
-    Ok(())
-}
-
-fn send_unicode_char(ch: char) -> Result<(), String> {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
-    };
-    let mut utf16_buf = [0u16; 2];
-    let encoded = ch.encode_utf16(&mut utf16_buf);
-    for &code_unit in encoded.iter() {
-        let mut inputs = [
-            INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: 0,
-                        wScan: code_unit,
-                        dwFlags: KEYEVENTF_UNICODE,
-                        time: 0,
-                        dwExtraInfo: 0,
-                    },
-                },
-            },
-            INPUT {
-                r#type: INPUT_KEYBOARD,
-                Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
-                    ki: KEYBDINPUT {
-                        wVk: 0,
-                        wScan: code_unit,
-                        dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
-                        time: 0,
-                        dwExtraInfo: 0,
-                    },
-                },
-            },
-        ];
-        let sent = unsafe {
-            SendInput(
-                inputs.len() as u32,
-                inputs.as_mut_ptr(),
-                std::mem::size_of::<INPUT>() as i32,
-            )
-        };
-        if sent != inputs.len() as u32 {
-            return Err(format!("SendInput unicode char sent {sent} of {} events", inputs.len()));
-        }
     }
     Ok(())
 }
