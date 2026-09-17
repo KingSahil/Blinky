@@ -55,11 +55,12 @@ export interface SystemInfo {
   battery: SystemBattery;
   network: SystemNetwork;
   version: string;
+  is_locked?: boolean;
 }
 
 export interface PowerEvent {
   type: 'power_event';
-  action: 'hibernate' | 'power_off' | 'restart' | 'sleep' | 'lock';
+  action: 'hibernate' | 'power_off' | 'restart' | 'sleep' | 'lock' | 'unlock';
   status: 'triggered';
   message: string;
   timestamp: number;
@@ -71,6 +72,7 @@ export type PowerCommand =
   | 'sleep'
   | 'hibernate'
   | 'lock'
+  | 'unlock'
   | 'volume_up'
   | 'volume_down'
   | 'volume_mute'

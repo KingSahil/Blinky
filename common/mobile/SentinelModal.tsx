@@ -24,7 +24,7 @@ interface SentinelModalProps {
   systemInfo: SystemInfo | null;
   onRefresh: () => void;
   onTriggerPowerCommand: (
-    command: 'hibernate' | 'power_off' | 'restart' | 'sleep' | 'lock',
+    command: 'hibernate' | 'power_off' | 'restart' | 'sleep' | 'lock' | 'unlock',
     label: string
   ) => void;
   macAddress: string;
@@ -55,6 +55,10 @@ export const SentinelModal: React.FC<SentinelModalProps> = ({
   latestPowerEvent,
 }) => {
   const [showSettings, setShowSettings] = useState(false);
+  const isLocked = Boolean(
+    systemInfo?.is_locked ||
+    (latestPowerEvent?.action === 'lock' && latestPowerEvent.status === 'triggered')
+  );
 
   /** Formats an uptime duration as compact hours and minutes. */
   const formatUptime = (seconds: number) => {
@@ -254,7 +258,25 @@ export const SentinelModal: React.FC<SentinelModalProps> = ({
                   style={[styles.actionTile, styles.tileWake]}
                   onPress={() => {
                     triggerHaptic('heavy');
-                    onSendWakeOnLan();
+                    if (isLocked && isConnected) {
+                      Alert.alert(
+                        'Workstation Locked',
+                        'Your host PC is locked. Would you like to unlock it or dispatch a Wake-on-LAN packet?',
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Unlock Workstation',
+                            onPress: () => onTriggerPowerCommand('unlock', 'Unlock Workstation'),
+                          },
+                          {
+                            text: 'Send WoL Burst',
+                            onPress: () => onSendWakeOnLan(),
+                          },
+                        ]
+                      );
+                    } else {
+                      onSendWakeOnLan();
+                    }
                   }}
                   activeOpacity={0.75}
                   disabled={isSendingWol}
@@ -268,8 +290,10 @@ export const SentinelModal: React.FC<SentinelModalProps> = ({
                     ) : (
                       <Ionicons name="flash" size={24} color="#10B981" />
                     )}
-                    <Text style={[styles.tileTitle, { color: '#10B981' }]}>Wake PC</Text>
-                    <Text style={styles.tileSub}>WoL Magic Packet</Text>
+                    <Text style={[styles.tileTitle, { color: '#10B981' }]}>
+                      {isLocked ? 'Wake / Unlock' : 'Wake PC'}
+                    </Text>
+                    <Text style={styles.tileSub}>{isLocked ? 'Unlock or WoL Burst' : 'WoL Magic Packet'}</Text>
                   </LinearGradient>
                 </TouchableOpacity>
 
@@ -317,25 +341,43 @@ export const SentinelModal: React.FC<SentinelModalProps> = ({
                   </LinearGradient>
                 </TouchableOpacity>
 
-                {/* 4. Lock Workstation */}
+                {/* 4. Lock / Unlock Workstation */}
                 <TouchableOpacity
-                  style={[styles.actionTile, styles.tileLock, !isConnected && styles.tileDisabled]}
+                  style={[
+                    styles.actionTile,
+                    isLocked ? styles.tileUnlock : styles.tileLock,
+                    !isConnected && styles.tileDisabled,
+                  ]}
                   onPress={() => {
                     if (!isConnected) {
-                      Alert.alert('Offline', 'Connect to host over Wi-Fi to trigger Lock.');
+                      Alert.alert('Offline', `Connect to host over Wi-Fi to trigger ${isLocked ? 'Unlock' : 'Lock'}.`);
                       return;
                     }
-                    onTriggerPowerCommand('lock', 'Lock');
+                    if (isLocked) {
+                      onTriggerPowerCommand('unlock', 'Unlock');
+                    } else {
+                      onTriggerPowerCommand('lock', 'Lock');
+                    }
                   }}
                   activeOpacity={0.75}
                 >
                   <LinearGradient
-                    colors={['rgba(100, 116, 139, 0.25)', 'rgba(30, 41, 59, 0.4)']}
+                    colors={
+                      isLocked
+                        ? ['rgba(16, 185, 129, 0.25)', 'rgba(6, 78, 59, 0.4)']
+                        : ['rgba(100, 116, 139, 0.25)', 'rgba(30, 41, 59, 0.4)']
+                    }
                     style={styles.tileGradient}
                   >
-                    <Ionicons name="lock-closed-outline" size={24} color="#94A3B8" />
-                    <Text style={[styles.tileTitle, { color: '#94A3B8' }]}>Lock</Text>
-                    <Text style={styles.tileSub}>Lock Screen</Text>
+                    <Ionicons
+                      name={isLocked ? 'lock-open-outline' : 'lock-closed-outline'}
+                      size={24}
+                      color={isLocked ? '#10B981' : '#94A3B8'}
+                    />
+                    <Text style={[styles.tileTitle, { color: isLocked ? '#10B981' : '#94A3B8' }]}>
+                      {isLocked ? 'Unlock' : 'Lock'}
+                    </Text>
+                    <Text style={styles.tileSub}>{isLocked ? 'Unlock Session' : 'Lock Screen'}</Text>
                   </LinearGradient>
                 </TouchableOpacity>
 
@@ -728,6 +770,9 @@ const styles = StyleSheet.create({
   },
   tileLock: {
     borderColor: 'rgba(100, 116, 139, 0.4)',
+  },
+  tileUnlock: {
+    borderColor: 'rgba(16, 185, 129, 0.4)',
   },
   tileRestart: {
     borderColor: 'rgba(245, 158, 11, 0.4)',

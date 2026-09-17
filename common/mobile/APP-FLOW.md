@@ -269,11 +269,14 @@ in refs so every handler reads the CURRENT transform (no stale closures).
 
 ```
 ⋮ menu (header)
-  ├─ Local Link Setup          → toggles connection card (§5 manual panel)
+  ├─ Local Link Setup          → toggles connection card (§5 manual panel with optional PIN)
+  ├─ Wake / Unlock PC          → onWakePcPressed() (if locked: prompts Unlock vs WoL; else WoL burst)
   ├─ Mute Volume               → triggerQuickAction('volume_mute')  [no confirm]
   ├─ Capture Screenshot        → handleCaptureScreenshot()
   │     └─ query = 'Capture screenshot of current PC screen' → §6 flow
-  ├─ Lock Workstation          → sendCommand('lock')             [no confirm]
+  ├─ Lock / Unlock Workstation → if locked: handleUnlockWorkstation() ('unlock' / 'unlock:<pin>')
+  │                            └─ if unlocked: triggerQuickAction('lock') [no confirm]
+  ├─ Hibernate Host            │
   ├─ Sleep Mode                │
   ├─ Reboot PC                 ├─ triggerPowerCommand(...)  → Alert confirm
   └─ Shutdown PC               │     (Cancel | Confirm, destructive style)
@@ -282,7 +285,7 @@ in refs so every handler reads the CURRENT transform (no stale closures).
 
 All quick actions: medium/heavy haptic, menu closes, green "Command sent!"
 banner for 3s, or `Alert 'Failed to send command. Check link.'` if the socket
-is not open.
+is not open. When locked, Lock button dynamically switches to Unlock Workstation with emerald icon.
 
 ---
 

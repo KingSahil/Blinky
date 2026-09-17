@@ -61,6 +61,22 @@ pub fn execute_lock() {
     let _ = Command::new("gnome-screensaver-command").arg("-l").spawn();
 }
 
+pub fn is_workstation_locked() -> bool {
+    // Check if swaylock, hyprlock, waylock, or screensaver is currently active
+    Command::new("pgrep")
+        .args(&["-x", "swaylock|hyprlock|waylock|gnome-screensaver"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+pub fn execute_unlock(_pin: Option<&str>) {
+    // Attempt session unlock via systemd loginctl, then screensaver unlock fallbacks
+    let _ = Command::new("loginctl").args(&["unlock-session"]).spawn();
+    let _ = Command::new("xdg-screensaver").arg("reset").spawn();
+    let _ = Command::new("gnome-screensaver-command").arg("-d").spawn();
+}
+
 pub fn execute_screenshot() {
     // grim is headless + prompt-free on wlroots (Hyprland); fall back to
     // DE screenshot tools elsewhere (they may pop a UI — acceptable).

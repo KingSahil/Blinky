@@ -271,8 +271,29 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
         } catch {}
       }
 
-      console.log("[Mobile] 🚀 Starting Expo mobile development server on port 8081...");
-      mobileProc = spawn(["bun", "run", "start"], {
+function getTailscaleIp(): string | null {
+  try {
+    const tailscaleExe = process.platform === "win32"
+      ? "C:\\Program Files\\Tailscale\\tailscale.exe"
+      : "tailscale";
+    const res = Bun.spawnSync([tailscaleExe, "ip", "-4"]);
+    if (res.exitCode === 0) {
+      const ip = res.stdout.toString().trim();
+      if (ip && ip.startsWith("100.")) {
+        return ip;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+      const tailscaleIp = getTailscaleIp();
+      if (tailscaleIp) {
+        console.log(`[Mobile] 🔒 Detected Tailscale IP: ${tailscaleIp}`);
+      }
+
+      console.log("[Mobile] 🚀 Starting Expo mobile development server on port 8081 (localhost over USB)...");
+      mobileProc = spawn(["bun", "run", "start", "--", "--localhost"], {
         cwd: "common/mobile",
         stdout: "inherit",
         stderr: "inherit",
@@ -280,6 +301,7 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
         env: {
           ...process.env,
           EXPO_NO_TELEMETRY: "1",
+          ...(tailscaleIp ? { EXPO_PUBLIC_TAILSCALE_IP: tailscaleIp } : {}),
         },
       });
 

@@ -769,6 +769,35 @@ where
                 let _ = app.emit("blinky://power-event", evt.clone());
                 broadcast_to_all_clients(&evt.to_string()).await;
                 crate::platform::execute_lock();
+            } else if trimmed == "unlock"
+                || trimmed.starts_with("unlock:")
+                || (trimmed.starts_with('{')
+                    && serde_json::from_str::<serde_json::Value>(trimmed)
+                        .ok()
+                        .and_then(|v| v.get("action").and_then(|a| a.as_str()).map(|s| s == "unlock"))
+                        .unwrap_or(false))
+            {
+                let parsed_pin = if trimmed.starts_with("unlock:") {
+                    trimmed.strip_prefix("unlock:").map(|s| s.trim().to_string())
+                } else if trimmed.starts_with('{') {
+                    serde_json::from_str::<serde_json::Value>(trimmed)
+                        .ok()
+                        .and_then(|v| v.get("pin").and_then(|p| p.as_str()).map(|s| s.to_string()))
+                } else {
+                    None
+                };
+
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                let evt = serde_json::json!({
+                    "type": "power_event",
+                    "action": "unlock",
+                    "status": "triggered",
+                    "message": "Workstation unlock sequence dispatched by Sentinel.",
+                    "timestamp": now
+                });
+                let _ = app.emit("blinky://power-event", evt.clone());
+                broadcast_to_all_clients(&evt.to_string()).await;
+                crate::platform::execute_unlock(parsed_pin.as_deref());
             } else if trimmed == "screenshot" {
                 crate::platform::execute_screenshot();
             } else if trimmed == "get_sarvam_key" {

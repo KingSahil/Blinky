@@ -49,6 +49,7 @@ export { triggerHaptic };
 const STORAGE_KEY = '@blinky_pc_ip';
 const TOKEN_STORAGE_KEY = '@blinky_pc_token';
 const CERTIFICATE_PIN_STORAGE_KEY = '@blinky_pc_certificate_pin';
+const WORKSTATION_PIN_STORAGE_KEY = '@blinky_workstation_pin';
 const RELEASE_TRANSPORT = process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE === 'release';
 
 type NativeSecureSocketModule = typeof import('./modules/blinky-secure-socket');
@@ -99,7 +100,12 @@ const getExpoHostIp = (): string | null => {
   return host || null;
 };
 
-const checkIpAddress = (ip: string, port = 9001, timeoutMs = 1200, certificatePin?: string): Promise<string> => {
+const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 1500, certificatePin?: string): Promise<string> => {
+  const clean = rawIp.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/+$/, '');
+  const [ipOnly, customPort] = clean.includes(':') ? clean.split(':') : [clean, undefined];
+  const targetPort = customPort ? parseInt(customPort, 10) : port;
+  const ip = ipOnly;
+
   if (RELEASE_TRANSPORT) {
     const nativeModule = loadNativeSecureSocketModule();
     if (!nativeModule || !certificatePin?.trim()) {
@@ -112,7 +118,7 @@ const checkIpAddress = (ip: string, port = 9001, timeoutMs = 1200, certificatePi
         nativeModule.addListener('onOpen', (event) => {
           if (event.id !== socketId) return;
           finish();
-          resolve(ip);
+          resolve(clean);
         }),
         nativeModule.addListener('onError', (event) => {
           if (event.id !== socketId) return;
@@ -136,7 +142,7 @@ const checkIpAddress = (ip: string, port = 9001, timeoutMs = 1200, certificatePi
         subscriptions.forEach((subscription) => subscription.remove());
         void nativeModule.close(socketId).catch(() => undefined);
       };
-      void nativeModule.connect(socketId, `wss://${ip}:${port}`, certificatePin.trim()).catch((error: any) => {
+      void nativeModule.connect(socketId, `wss://${ip}:${targetPort}`, certificatePin.trim()).catch((error: any) => {
         finish();
         reject(error);
       });
@@ -168,11 +174,11 @@ const checkIpAddress = (ip: string, port = 9001, timeoutMs = 1200, certificatePi
     }, timeoutMs);
 
     try {
-      ws = new WebSocket(`ws://${ip}:${port}`);
+      ws = new WebSocket(`ws://${ip}:${targetPort}`);
       
       ws.onopen = () => {
         cleanup();
-        resolve(ip);
+        resolve(clean);
       };
       
       ws.onerror = () => {
@@ -231,6 +237,38 @@ const scanSubnet = async (
   }
   
   return null;
+};
+
+const TAILSCALE_DEFAULT_IP = '100.122.62.2';
+
+/**
+ * Concurrently probes known fast candidate endpoints (Tailscale, saved IP, Expo host, USB reverse localhost).
+ */
+const probeCandidateIps = async (certificatePin?: string): Promise<string | null> => {
+  const candidates: string[] = [];
+
+  const envTailscale = process.env.EXPO_PUBLIC_TAILSCALE_IP?.trim();
+  if (envTailscale && !candidates.includes(envTailscale)) candidates.push(envTailscale);
+  if (!candidates.includes(TAILSCALE_DEFAULT_IP)) candidates.push(TAILSCALE_DEFAULT_IP);
+
+  try {
+    const saved = await AsyncStorage.getItem(STORAGE_KEY);
+    if (saved && !candidates.includes(saved)) candidates.push(saved);
+  } catch {}
+
+  const expoHost = getExpoHostIp();
+  if (expoHost && !candidates.includes(expoHost)) candidates.push(expoHost);
+
+  if (!candidates.includes('127.0.0.1')) candidates.push('127.0.0.1');
+
+  const probePromises = candidates.map((ip) =>
+    checkIpAddress(ip, 9001, 1500, certificatePin)
+      .then((found) => found)
+      .catch(() => null)
+  );
+
+  const results = await Promise.all(probePromises);
+  return results.find((r): r is string => Boolean(r)) || null;
 };
 
 interface Message {
@@ -483,6 +521,8 @@ export default function App() {
   const [wolBroadcastIp, setWolBroadcastIp] = useState('255.255.255.255');
   const [isSendingWol, setIsSendingWol] = useState(false);
   const [wolFeedback, setWolFeedback] = useState<string | null>(null);
+  const [isWorkstationLocked, setIsWorkstationLocked] = useState(false);
+  const [workstationPin, setWorkstationPin] = useState('');
   const isConnected = status === 'connected';
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [isDiscovering, setIsDiscovering] = useState(false);
@@ -1049,24 +1089,30 @@ export default function App() {
     /** Restores persisted connection and Wake-on-LAN settings on launch. */
     async function loadIp() {
       try {
-        const [savedIp, savedToken, savedPin, savedMac, savedWolIp] = await Promise.all([
+        const [savedIp, savedToken, savedPin, savedMac, savedWolIp, savedWorkstationPin] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEY),
           readSavedCredential('remote_token', TOKEN_STORAGE_KEY),
           readSavedCredential('certificate_pin', CERTIFICATE_PIN_STORAGE_KEY),
           AsyncStorage.getItem(MAC_STORAGE_KEY),
           AsyncStorage.getItem(WOL_BROADCAST_STORAGE_KEY),
+          AsyncStorage.getItem(WORKSTATION_PIN_STORAGE_KEY),
         ]);
         if (savedMac) setMacAddress(savedMac);
         if (savedWolIp) setWolBroadcastIp(savedWolIp);
-        const detectedIp = getExpoHostIp();
-        const initialIp = savedIp || detectedIp || '';
+        if (savedWorkstationPin) setWorkstationPin(savedWorkstationPin);
         if (savedToken) setRemoteToken(savedToken);
         if (savedPin) setCertificatePin(savedPin);
+
+        // First attempt fast candidate probe (Tailscale, savedIp, USB reverse)
+        const probedIp = await probeCandidateIps(savedPin || undefined);
+        const detectedIp = getExpoHostIp();
+        const initialIp = probedIp || savedIp || detectedIp || '';
+
         if (initialIp && initialIp !== 'localhost') {
           setIpAddress(initialIp);
           connect(initialIp, savedToken || undefined, savedPin || undefined);
         } else {
-          // If no saved IP, prompt the user with settings and launch quiet discovery
+          // If no candidate responds, open settings and launch quiet Wi-Fi subnet scan
           setShowSettings(true);
           handleAutoDiscoverQuietly();
         }
@@ -1096,8 +1142,20 @@ export default function App() {
       triggerHaptic('heavy');
       setActionFeedback(`⚡ Sentinel: ${latestPowerEvent.action.toUpperCase()} action dispatched.`);
       setTimeout(() => setActionFeedback(null), 5000);
+      if (latestPowerEvent.action === 'lock') {
+        setIsWorkstationLocked(true);
+      } else if (latestPowerEvent.action === 'unlock') {
+        setIsWorkstationLocked(false);
+      }
     }
   }, [latestPowerEvent]);
+
+  // Synchronize lock state from telemetry
+  useEffect(() => {
+    if (systemInfo?.is_locked !== undefined) {
+      setIsWorkstationLocked(systemInfo.is_locked);
+    }
+  }, [systemInfo?.is_locked]);
 
   // When connection succeeds, auto-close the settings card
   useEffect(() => {
@@ -1125,6 +1183,15 @@ export default function App() {
 
   const handleAutoDiscoverQuietly = async () => {
     try {
+      // 1. First probe known fast candidate endpoints (Tailscale, USB reverse, env)
+      const candidateFound = await probeCandidateIps(certificatePin || undefined);
+      if (candidateFound) {
+        setIpAddress(candidateFound);
+        await AsyncStorage.setItem(STORAGE_KEY, candidateFound);
+        connect(candidateFound, remoteToken || undefined, certificatePin || undefined);
+        return;
+      }
+
       const subnetsToScan: string[] = [];
       try {
         const ip = await Network.getIpAddressAsync();
@@ -1184,32 +1251,38 @@ export default function App() {
   const handleAutoDiscover = async () => {
     triggerHaptic('medium');
     setIsDiscovering(true);
-    setDiscoveryProgress('Detecting Wi-Fi network...');
+    setDiscoveryProgress('Probing Tailscale & direct links...');
     try {
-      const subnetsToScan: string[] = [];
-      try {
-        const ip = await Network.getIpAddressAsync();
-        if (ip && ip !== '0.0.0.0' && ip.includes('.')) {
-          const ipParts = ip.split('.');
-          if (ipParts.length === 4) {
-            subnetsToScan.push(`${ipParts[0]}.${ipParts[1]}.${ipParts[2]}`);
+      // 1. Probe Tailscale and fast candidates
+      let found: string | null = await probeCandidateIps(certificatePin || undefined);
+
+      // 2. If not found, scan local Wi-Fi subnets
+      if (!found) {
+        setDiscoveryProgress('Detecting Wi-Fi network...');
+        const subnetsToScan: string[] = [];
+        try {
+          const ip = await Network.getIpAddressAsync();
+          if (ip && ip !== '0.0.0.0' && ip.includes('.')) {
+            const ipParts = ip.split('.');
+            if (ipParts.length === 4) {
+              subnetsToScan.push(`${ipParts[0]}.${ipParts[1]}.${ipParts[2]}`);
+            }
+          }
+        } catch (e) {}
+
+        for (const fallbackSubnet of ['192.168.1', '192.168.0', '192.168.2', '10.0.0']) {
+          if (!subnetsToScan.includes(fallbackSubnet)) {
+            subnetsToScan.push(fallbackSubnet);
           }
         }
-      } catch (e) {}
 
-      for (const fallbackSubnet of ['192.168.1', '192.168.0', '192.168.2', '10.0.0']) {
-        if (!subnetsToScan.includes(fallbackSubnet)) {
-          subnetsToScan.push(fallbackSubnet);
+        for (const subnet of subnetsToScan) {
+          setDiscoveryProgress(`Scanning Wi-Fi subnet ${subnet}.x...`);
+          found = await scanSubnet(subnet, (msg) => {
+            setDiscoveryProgress(msg);
+          }, certificatePin || undefined);
+          if (found) break;
         }
-      }
-
-      let found: string | null = null;
-      for (const subnet of subnetsToScan) {
-        setDiscoveryProgress(`Scanning Wi-Fi subnet ${subnet}.x...`);
-        found = await scanSubnet(subnet, (msg) => {
-          setDiscoveryProgress(msg);
-        }, certificatePin || undefined);
-        if (found) break;
       }
 
       if (found) {
@@ -1220,7 +1293,7 @@ export default function App() {
       } else {
         Alert.alert(
           'Blinky PC Not Found',
-          'Could not automatically discover your PC. Please check your PC\'s Wi-Fi IP address in Windows (e.g. 192.168.1.4), enter it above, and tap "Establish Link".'
+          'Could not automatically discover your PC. Please check your PC\'s Wi-Fi or Tailscale IP address (e.g. 100.122.62.2), enter it above, and tap "Establish Link".'
         );
       }
     } catch (err: any) {
@@ -1233,9 +1306,13 @@ export default function App() {
 
   /** Confirms and dispatches a potentially disruptive host power command. */
   const triggerPowerCommand = (
-    command: 'power_off' | 'restart' | 'sleep' | 'hibernate' | 'lock',
+    command: 'power_off' | 'restart' | 'sleep' | 'hibernate' | 'lock' | 'unlock',
     label: string
   ) => {
+    if (command === 'unlock') {
+      handleUnlockWorkstation();
+      return;
+    }
     triggerHaptic('heavy');
     setShowMenu(false);
     Alert.alert(
@@ -1250,6 +1327,9 @@ export default function App() {
             triggerHaptic('heavy');
             const success = sendCommand(command);
             if (success) {
+              if (command === 'lock') {
+                setIsWorkstationLocked(true);
+              }
               setActionFeedback(`Command "${label}" dispatched!`);
               setTimeout(() => setActionFeedback(null), 4000);
             } else {
@@ -1259,6 +1339,47 @@ export default function App() {
         },
       ]
     );
+  };
+
+  /** Unlocks the host workstation by waking displays, dismissing lock screen, and typing optional PIN. */
+  const handleUnlockWorkstation = (pin?: string) => {
+    triggerHaptic('heavy');
+    setShowMenu(false);
+    const targetPin = (pin !== undefined ? pin : workstationPin).trim();
+    const cmd = targetPin ? `unlock:${targetPin}` : 'unlock';
+    const success = sendCommand(cmd as any);
+    if (success) {
+      setIsWorkstationLocked(false);
+      setActionFeedback('⚡ Unlocking workstation...');
+      setTimeout(() => setActionFeedback(null), 4000);
+    } else {
+      Alert.alert('Error', 'Failed to send unlock command. Check link to PC.');
+    }
+  };
+
+  /** Handles Wake PC button tap, offering unlock if host workstation is locked. */
+  const onWakePcPressed = () => {
+    triggerHaptic('heavy');
+    setShowMenu(false);
+    if (isWorkstationLocked && isConnected) {
+      Alert.alert(
+        'Workstation Locked',
+        'Your host PC is currently connected and locked. Would you like to unlock it or dispatch a Wake-on-LAN packet?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Unlock Workstation',
+            onPress: () => handleUnlockWorkstation(),
+          },
+          {
+            text: 'Send WoL Packet',
+            onPress: () => handleSendWakeOnLan(),
+          },
+        ]
+      );
+      return;
+    }
+    handleSendWakeOnLan();
   };
 
   /** Sends a Wake-on-LAN request using the currently configured host settings. */
@@ -1299,8 +1420,15 @@ export default function App() {
   const triggerQuickAction = (command: any, label: string) => {
     triggerHaptic('medium');
     setShowMenu(false);
+    if (command === 'unlock') {
+      handleUnlockWorkstation();
+      return;
+    }
     const success = sendCommand(command);
     if (success) {
+      if (command === 'lock') {
+        setIsWorkstationLocked(true);
+      }
       setActionFeedback(`Command "${label}" sent!`);
       setTimeout(() => setActionFeedback(null), 3000);
     } else {
@@ -1355,16 +1483,12 @@ export default function App() {
 
               <TouchableOpacity
                 style={styles.dropdownItem}
-                onPress={() => {
-                  triggerHaptic('heavy');
-                  setShowMenu(false);
-                  handleSendWakeOnLan();
-                }}
+                onPress={onWakePcPressed}
                 disabled={isSendingWol}
               >
                 <Ionicons name="flash" size={18} color="#10B981" style={styles.dropdownIcon} />
                 <Text style={[styles.dropdownText, { color: '#10B981', fontWeight: '600' }]}>
-                  {isSendingWol ? 'Waking PC...' : 'Wake PC (WoL)'}
+                  {isSendingWol ? 'Waking PC...' : isWorkstationLocked ? 'Wake / Unlock PC' : 'Wake PC (WoL)'}
                 </Text>
               </TouchableOpacity>
 
@@ -1378,9 +1502,25 @@ export default function App() {
                 <Text style={styles.dropdownText}>Capture Screenshot</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerQuickAction('lock' as any, 'Lock')}>
-                <Ionicons name="lock-closed-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
-                <Text style={styles.dropdownText}>Lock Workstation</Text>
+              <TouchableOpacity
+                style={styles.dropdownItem}
+                onPress={() => {
+                  if (isWorkstationLocked) {
+                    handleUnlockWorkstation();
+                  } else {
+                    triggerQuickAction('lock' as any, 'Lock');
+                  }
+                }}
+              >
+                <Ionicons
+                  name={isWorkstationLocked ? 'lock-open-outline' : 'lock-closed-outline'}
+                  size={18}
+                  color={isWorkstationLocked ? '#10B981' : '#FFFFFF'}
+                  style={styles.dropdownIcon}
+                />
+                <Text style={[styles.dropdownText, isWorkstationLocked && { color: '#10B981', fontWeight: '600' }]}>
+                  {isWorkstationLocked ? 'Unlock Workstation' : 'Lock Workstation'}
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerPowerCommand('hibernate', 'Hibernate')}>
@@ -1417,13 +1557,13 @@ export default function App() {
               <Text style={styles.connectionSubtitle}>
                 {RELEASE_TRANSPORT
                   ? 'Enter the PC IP, remote token, and the pinned certificate value from the PC release build.'
-                  : 'Enter your PC\'s IP address (e.g. 192.168.1.4) or tap "Scan Subnet" to auto-discover Blinky.'}
+                  : 'Enter your PC\'s IP (e.g. 100.122.62.2) or tap "Auto-Discover" to automatically locate and connect to Blinky.'}
               </Text>
               <View style={styles.inputWrapper}>
                 <Ionicons name="link-outline" size={20} color="#6C6985" style={styles.inputIcon} />
                 <TextInput
                   style={[styles.input, isConnected && styles.inputDisabled]}
-                  placeholder="Enter PC IP (e.g. 192.168.1.4)"
+                  placeholder="Enter PC IP (e.g. 100.122.62.2)"
                   placeholderTextColor="#6C6985"
                   value={ipAddress}
                   onChangeText={setIpAddress}
@@ -1462,6 +1602,22 @@ export default function App() {
                   />
                 </View>
               )}
+              <View style={styles.inputWrapper}>
+                <Ionicons name="lock-open-outline" size={20} color="#6C6985" style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Workstation PIN / Password (optional)"
+                  placeholderTextColor="#6C6985"
+                  value={workstationPin}
+                  onChangeText={(val) => {
+                    setWorkstationPin(val);
+                    AsyncStorage.setItem(WORKSTATION_PIN_STORAGE_KEY, val).catch(() => {});
+                  }}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
               <View style={styles.actionRow}>
 
                 {status !== 'connected' && status !== 'connecting' ? (
@@ -1483,7 +1639,7 @@ export default function App() {
                         end={{ x: 1, y: 1 }}
                         style={styles.gradientBtn}
                       >
-                        <Text style={styles.btnText}>Scan Subnet</Text>
+                        <Text style={styles.btnText}>Auto-Discover</Text>
                       </LinearGradient>
                     </TouchableOpacity>
                   </>

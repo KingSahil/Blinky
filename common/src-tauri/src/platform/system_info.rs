@@ -92,7 +92,8 @@ pub fn get_system_telemetry() -> Value {
             },
             "battery": battery,
             "network": network,
-            "version": "0.1.0"
+            "version": "0.1.0",
+            "is_locked": crate::platform::is_workstation_locked()
         })
     }
 
@@ -115,7 +116,8 @@ pub fn get_system_telemetry() -> Value {
             },
             "battery": battery,
             "network": network,
-            "version": "0.1.0"
+            "version": "0.1.0",
+            "is_locked": crate::platform::is_workstation_locked()
         })
     }
 }
