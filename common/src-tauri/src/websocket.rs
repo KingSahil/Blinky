@@ -1,16 +1,43 @@
- use futures_util::{SinkExt, StreamExt};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use futures_util::{
+    stream::{SplitSink, SplitStream},
+    SinkExt, StreamExt,
+};
+use serde::Serialize;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpListener;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command as TokioCommand};
 use tokio::sync::Mutex;
-use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+use tokio_tungstenite::{client_async, connect_async, WebSocketStream};
+
+type WsSender<S> = std::sync::Arc<Mutex<SplitSink<WebSocketStream<S>, Message>>>;
+type DesktopTlsStream = tokio_rustls::client::TlsStream<TcpStream>;
+type DesktopWsSender = WsSender<DesktopTlsStream>;
+
+static DESKTOP_SECURE_SOCKETS: OnceLock<Mutex<HashMap<String, DesktopWsSender>>> = OnceLock::new();
+
+fn get_desktop_secure_sockets() -> &'static Mutex<HashMap<String, DesktopWsSender>> {
+    DESKTOP_SECURE_SOCKETS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SecureSocketEvent {
+    socket_id: String,
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
 
 struct AgentDaemon {
     child: Child,
@@ -114,7 +141,10 @@ fn project_root() -> PathBuf {
 }
 
 fn python_executable(root: &PathBuf) -> PathBuf {
-    let mut candidates = vec![root.join("python_runtime").join("Python313"), root.join(".venv")];
+    let mut candidates = vec![
+        root.join("python_runtime").join("Python313"),
+        root.join(".venv"),
+    ];
 
     if let Ok(cwd) = std::env::current_dir() {
         let mut dir = Some(cwd.as_path());
@@ -223,17 +253,261 @@ pub async fn start_websocket_server(app: AppHandle) {
             return;
         }
     };
-    println!("WebSocket server listening on: {}", addr);
+    let mode = crate::transport::TransportMode::current();
+    let tls_acceptor = if mode.is_release() {
+        let identity = match crate::tls_identity::TlsIdentity::load_or_generate(&app) {
+            Ok(identity) => identity,
+            Err(error) => {
+                eprintln!("Failed to initialize release WSS identity: {error}");
+                return;
+            }
+        };
+        println!("Release WSS identity pin: {}", identity.public_key_pin());
+        match identity.server_config() {
+            Ok(config) => Some(TlsAcceptor::from(std::sync::Arc::new(config))),
+            Err(error) => {
+                eprintln!("Failed to initialize release WSS server: {error}");
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    println!("WebSocket server listening on {} ({:?})", addr, mode);
 
     while let Ok((stream, peer_addr)) = listener.accept().await {
         println!("New peer connection: {}", peer_addr);
         let app_clone = app.clone();
+        let tls_acceptor = tls_acceptor.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = handle_connection(stream, peer_addr, app_clone).await {
+            if let Err(e) =
+                handle_connection(stream, peer_addr, app_clone, mode, tls_acceptor).await
+            {
                 eprintln!("Error handling connection from {}: {}", peer_addr, e);
             }
         });
     }
+}
+
+pub fn secure_transport_info(
+    app: &AppHandle,
+) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    let mode = crate::transport::TransportMode::current();
+    let pin = if mode.is_release() {
+        Some(
+            crate::tls_identity::TlsIdentity::load_or_generate(app)?
+                .public_key_pin()
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    Ok(serde_json::json!({
+        "mode": if mode.is_release() { "release" } else { "development" },
+        "desktop_url": if mode.is_release() {
+            "wss://127.0.0.1:9001"
+        } else {
+            "ws://127.0.0.1:9001"
+        },
+        "certificate_pin": pin,
+    }))
+}
+
+pub async fn secure_socket_connect(
+    app: AppHandle,
+    socket_id: String,
+    url: String,
+    expected_pin: Option<String>,
+) -> Result<(), String> {
+    let (host, port, path) = parse_local_wss_url(&url)?;
+    if crate::transport::TransportMode::current() != crate::transport::TransportMode::Release {
+        return Err(
+            "The native secure socket bridge is only available in the release transport variant"
+                .into(),
+        );
+    }
+
+    let identity = crate::tls_identity::TlsIdentity::load_or_generate(&app)
+        .map_err(|error| format!("Failed to load WSS identity: {error}"))?;
+    let tls_config = identity
+        .client_config(expected_pin.as_deref())
+        .map_err(|error| format!("Failed to configure WSS certificate pinning: {error}"))?;
+    let tcp_stream = TcpStream::connect((host.as_str(), port))
+        .await
+        .map_err(|error| format!("Failed to connect to local WSS gateway: {error}"))?;
+    let connector = TlsConnector::from(std::sync::Arc::new(tls_config));
+    let server_name = rustls::pki_types::ServerName::try_from(host.clone())
+        .map_err(|error| format!("Invalid WSS server name: {error}"))?;
+    let tls_stream = connector
+        .connect(server_name, tcp_stream)
+        .await
+        .map_err(|error| format!("WSS certificate verification failed: {error}"))?;
+
+    let request_url = format!("wss://{host}:{port}{path}");
+    let request = request_url
+        .into_client_request()
+        .map_err(|error| format!("Invalid WSS request URL: {error}"))?;
+    let (websocket, _) = client_async(request, tls_stream)
+        .await
+        .map_err(|error| format!("WSS WebSocket handshake failed: {error}"))?;
+    let (sender, mut receiver) = websocket.split();
+    let sender = std::sync::Arc::new(Mutex::new(sender));
+
+    if let Some(previous) = get_desktop_secure_sockets()
+        .lock()
+        .await
+        .insert(socket_id.clone(), sender.clone())
+    {
+        let _ = previous.lock().await.send(Message::Close(None)).await;
+    }
+
+    let _ = app.emit(
+        "blinky://secure-socket-open",
+        SecureSocketEvent {
+            socket_id: socket_id.clone(),
+            kind: "open".to_string(),
+            data: None,
+            message: None,
+        },
+    );
+
+    let app_for_receiver = app.clone();
+    let socket_id_for_receiver = socket_id.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(message) = receiver.next().await {
+            match message {
+                Ok(Message::Text(text)) => {
+                    let _ = app_for_receiver.emit(
+                        "blinky://secure-socket-message",
+                        SecureSocketEvent {
+                            socket_id: socket_id_for_receiver.clone(),
+                            kind: "text".to_string(),
+                            data: Some(text.to_string()),
+                            message: None,
+                        },
+                    );
+                }
+                Ok(Message::Binary(bytes)) => {
+                    let _ = app_for_receiver.emit(
+                        "blinky://secure-socket-message",
+                        SecureSocketEvent {
+                            socket_id: socket_id_for_receiver.clone(),
+                            kind: "binary".to_string(),
+                            data: Some(BASE64.encode(bytes)),
+                            message: None,
+                        },
+                    );
+                }
+                Ok(Message::Close(_)) => break,
+                Ok(Message::Ping(_) | Message::Pong(_)) => {}
+                Err(error) => {
+                    let _ = app_for_receiver.emit(
+                        "blinky://secure-socket-error",
+                        SecureSocketEvent {
+                            socket_id: socket_id_for_receiver.clone(),
+                            kind: "error".to_string(),
+                            data: None,
+                            message: Some(error.to_string()),
+                        },
+                    );
+                    break;
+                }
+                Ok(Message::Frame(_)) => {}
+            }
+        }
+
+        let mut sockets = get_desktop_secure_sockets().lock().await;
+        let is_current = sockets
+            .get(&socket_id_for_receiver)
+            .map(|current| std::sync::Arc::ptr_eq(current, &sender))
+            .unwrap_or(false);
+        if is_current {
+            sockets.remove(&socket_id_for_receiver);
+        }
+        drop(sockets);
+
+        if is_current {
+            let _ = app_for_receiver.emit(
+                "blinky://secure-socket-close",
+                SecureSocketEvent {
+                    socket_id: socket_id_for_receiver,
+                    kind: "close".to_string(),
+                    data: None,
+                    message: None,
+                },
+            );
+        }
+    });
+
+    Ok(())
+}
+
+pub async fn secure_socket_send(
+    socket_id: String,
+    kind: String,
+    data: String,
+) -> Result<(), String> {
+    let sender = get_desktop_secure_sockets()
+        .lock()
+        .await
+        .get(&socket_id)
+        .cloned()
+        .ok_or_else(|| format!("No secure socket exists for {socket_id}"))?;
+    let message = match kind.as_str() {
+        "text" => Message::Text(data.into()),
+        "binary" => Message::Binary(
+            BASE64
+                .decode(data)
+                .map_err(|error| format!("Invalid base64 WebSocket payload: {error}"))?
+                .into(),
+        ),
+        other => return Err(format!("Unsupported secure socket frame kind: {other}")),
+    };
+    let result = sender
+        .lock()
+        .await
+        .send(message)
+        .await
+        .map_err(|error| format!("Failed to send WSS frame: {error}"));
+    result
+}
+
+pub async fn secure_socket_close(socket_id: String) -> Result<(), String> {
+    let sender = get_desktop_secure_sockets().lock().await.remove(&socket_id);
+    if let Some(sender) = sender {
+        sender
+            .lock()
+            .await
+            .send(Message::Close(None))
+            .await
+            .map_err(|error| format!("Failed to close WSS socket: {error}"))?;
+    }
+    Ok(())
+}
+
+fn parse_local_wss_url(url: &str) -> Result<(String, u16, String), String> {
+    let rest = url
+        .strip_prefix("wss://")
+        .ok_or_else(|| "Secure desktop sockets require a wss:// URL".to_string())?;
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let (host, port) = authority
+        .rsplit_once(':')
+        .ok_or_else(|| "WSS URL must include an explicit port".to_string())?;
+    if host != "127.0.0.1" && host != "localhost" {
+        return Err(
+            "The desktop secure socket bridge only permits localhost WSS connections".into(),
+        );
+    }
+    let port = port
+        .parse::<u16>()
+        .map_err(|error| format!("Invalid WSS port: {error}"))?;
+    let path = if path.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{path}")
+    };
+    Ok((host.to_string(), port, path))
 }
 
 pub async fn run_agent_query(app: &AppHandle, query: &str) -> Result<serde_json::Value, String> {
@@ -258,17 +532,38 @@ pub async fn run_agent_query(app: &AppHandle, query: &str) -> Result<serde_json:
 
 /// Authenticates a client and handles commands received over its WebSocket.
 async fn handle_connection(
-    stream: tokio::net::TcpStream,
+    stream: TcpStream,
     peer_addr: SocketAddr,
     app: AppHandle,
+    mode: crate::transport::TransportMode,
+    tls_acceptor: Option<TlsAcceptor>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(tls_acceptor) = tls_acceptor {
+        let tls_stream = tls_acceptor.accept(stream).await?;
+        return handle_websocket_stream(tls_stream, peer_addr, app, mode).await;
+    }
+
+    handle_websocket_stream(stream, peer_addr, app, mode).await
+}
+
+async fn handle_websocket_stream<S>(
+    stream: S,
+    peer_addr: SocketAddr,
+    app: AppHandle,
+    mode: crate::transport::TransportMode,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let path = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
     let path_clone = path.clone();
     let ws_stream = tokio_tungstenite::accept_hdr_async(
         stream,
         move |req: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
             if let Ok(mut p) = path_clone.lock() {
-                *p = req.uri().path_and_query()
+                *p = req
+                    .uri()
+                    .path_and_query()
                     .map(|pq| pq.as_str().to_string())
                     .unwrap_or_else(|| req.uri().path().to_string());
             }
@@ -287,29 +582,18 @@ async fn handle_connection(
         uri_without_query(&active_path)
     );
 
-    // Extract the optional `?token=` query param if present.
-    let uri_token = extract_query_token(&active_path);
     let server_token = get_remote_token();
     let is_loopback = peer_addr.ip().is_loopback();
-    let remote_authed = is_loopback
-        || server_token.is_empty()
+    let remote_auth_required =
+        crate::transport::remote_auth_required(mode, is_loopback, !server_token.is_empty());
+    let uri_token = (mode == crate::transport::TransportMode::Development)
+        .then(|| extract_query_token(&active_path))
+        .flatten();
+    let mut authenticated = !remote_auth_required
         || uri_token
             .as_deref()
-            .map(|t| token_equals(t, &server_token))
+            .map(|token| token_equals(token, &server_token))
             .unwrap_or(false);
-
-    if active_path.starts_with("/sarvam-stt") || active_path.starts_with("/sarvam-tts") {
-        // STT/TTS proxies require authentication if a remote token is configured.
-        // Loopback callers and LAN peers (when no token is configured) are trusted.
-        if !remote_authed {
-            eprintln!("REJECTED unauthenticated Sarvam proxy connection from {}", peer_addr);
-            return Ok(());
-        }
-        if active_path.starts_with("/sarvam-stt") {
-            return handle_sarvam_stt_proxy(ws_stream).await;
-        }
-        return handle_sarvam_tts_proxy(ws_stream).await;
-    }
 
     let (ws_sender, mut ws_receiver) = ws_stream.split();
     let ws_sender = std::sync::Arc::new(tokio::sync::Mutex::new(ws_sender));
@@ -330,13 +614,29 @@ async fn handle_connection(
                 .await;
         }
     });
-
-    let mut authenticated = remote_authed;
     if !authenticated {
         eprintln!(
-            "WARN: unauthenticated remote connection from {} — awaiting auth frame (commands will be denied)",
+            "WARN: unauthenticated remote connection from {} — awaiting auth frame",
             peer_addr
         );
+    }
+
+    if active_path.starts_with("/sarvam-stt") || active_path.starts_with("/sarvam-tts") {
+        if !authenticated {
+            authenticated =
+                authenticate_websocket(&mut ws_receiver, &ws_sender, &server_token, mode).await?;
+        }
+        if !authenticated {
+            eprintln!(
+                "REJECTED unauthenticated Sarvam proxy connection from {}",
+                peer_addr
+            );
+            return Ok(());
+        }
+        if active_path.starts_with("/sarvam-stt") {
+            return handle_sarvam_stt_proxy(ws_sender, ws_receiver).await;
+        }
+        return handle_sarvam_tts_proxy(ws_sender, ws_receiver).await;
     }
 
     /// Builds an auth-denied JSON error frame for a command that requires a token.
@@ -358,30 +658,40 @@ async fn handle_connection(
         let msg = msg?;
         if msg.is_text() || msg.is_binary() {
             let text = msg.to_text()?;
-            println!("Received message: {}", text);
             let trimmed = text.trim();
 
-            // Accept an `auth:<token>` frame as an in-band authentication step.
-            if let Some(provided) = trimmed.strip_prefix("auth:") {
-                authenticated = server_token.is_empty()
-                    || token_equals(provided.trim(), &server_token);
+            if let Some(provided) = auth_token_from_frame(trimmed, mode) {
+                authenticated =
+                    !remote_auth_required || token_equals(provided.trim(), &server_token);
                 if authenticated {
                     println!("{} authenticated successfully", peer_addr);
                 } else {
                     eprintln!("{} failed authentication", peer_addr);
-                    authenticated = false;
+                }
+                if mode.is_release() {
+                    let _ = ws_sender
+                        .lock()
+                        .await
+                        .send(Message::Text(
+                            serde_json::json!({
+                                "type": "auth_result",
+                                "ok": authenticated,
+                            })
+                            .to_string()
+                            .into(),
+                        ))
+                        .await;
                 }
                 continue;
             }
 
-
             if !authenticated {
-                eprintln!("BLOCKED unauthenticated command from {}: {}", peer_addr, trimmed);
+                eprintln!("BLOCKED unauthenticated command from {}", peer_addr);
                 let denied = auth_denied("unknown");
                 let _ = ws_sender
                     .lock()
                     .await
-                    .send(tokio_tungstenite::tungstenite::Message::Text(denied.into()))
+                    .send(Message::Text(denied.into()))
                     .await;
                 continue;
             }
@@ -467,7 +777,9 @@ async fn handle_connection(
                     "type": "sarvam_key",
                     "key": key
                 });
-                let _ = ws_sender.lock().await
+                let _ = ws_sender
+                    .lock()
+                    .await
                     .send(tokio_tungstenite::tungstenite::Message::Text(
                         resp.to_string().into(),
                     ))
@@ -512,7 +824,9 @@ async fn handle_connection(
                 let sender_clone = ws_sender.clone();
                 let app_clone = app.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = forward_query_to_daemon(&req_payload, sender_clone.clone(), app_clone).await {
+                    if let Err(e) =
+                        forward_query_to_daemon(&req_payload, sender_clone.clone(), app_clone).await
+                    {
                         eprintln!("Error handling agent query: {:?}", e);
                         let error_resp = serde_json::json!({
                             "requestId": request_id,
@@ -524,7 +838,9 @@ async fn handle_connection(
                                 "details": e.to_string()
                             }
                         });
-                        let _ = sender_clone.lock().await
+                        let _ = sender_clone
+                            .lock()
+                            .await
                             .send(tokio_tungstenite::tungstenite::Message::Text(
                                 error_resp.to_string().into(),
                             ))
@@ -532,18 +848,80 @@ async fn handle_connection(
                     }
                 });
             } else {
-                eprintln!("Unknown command: {}", text);
+                eprintln!("Unknown WebSocket command from {}", peer_addr);
             }
         }
     }
     Ok(())
 }
 
-async fn forward_query_to_daemon(
+fn auth_token_from_frame(frame: &str, mode: crate::transport::TransportMode) -> Option<String> {
+    if let Some(token) = frame.strip_prefix("auth:") {
+        return (mode == crate::transport::TransportMode::Development)
+            .then(|| token.trim().to_string());
+    }
+
+    if mode.is_release() {
+        let payload = serde_json::from_str::<serde_json::Value>(frame).ok()?;
+        if payload.get("type").and_then(|kind| kind.as_str()) == Some("auth") {
+            return payload
+                .get("token")
+                .and_then(|token| token.as_str())
+                .map(str::to_string);
+        }
+    }
+
+    None
+}
+
+async fn authenticate_websocket<S>(
+    receiver: &mut SplitStream<WebSocketStream<S>>,
+    sender: &WsSender<S>,
+    server_token: &str,
+    mode: crate::transport::TransportMode,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let Some(message) = receiver.next().await else {
+        return Ok(false);
+    };
+    let message = message?;
+    let provided = message
+        .to_text()
+        .ok()
+        .and_then(|frame| auth_token_from_frame(frame.trim(), mode));
+    let authenticated = provided
+        .as_deref()
+        .map(|token| token_equals(token, server_token))
+        .unwrap_or(false);
+
+    if mode.is_release() {
+        sender
+            .lock()
+            .await
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "auth_result",
+                    "ok": authenticated,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await?;
+    }
+
+    Ok(authenticated)
+}
+
+async fn forward_query_to_daemon<S>(
     req_json: &str,
-    ws_sender: std::sync::Arc<tokio::sync::Mutex<futures_util::stream::SplitSink<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>, tokio_tungstenite::tungstenite::Message>>>,
+    ws_sender: WsSender<S>,
     app: AppHandle,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let daemon_mutex = get_daemon_mutex();
     let mut guard = daemon_mutex.lock().await;
 
@@ -594,7 +972,9 @@ async fn forward_query_to_daemon(
                     }
 
                     // Forward line to websocket
-                    if let Err(e) = ws_sender.lock().await
+                    if let Err(e) = ws_sender
+                        .lock()
+                        .await
                         .send(tokio_tungstenite::tungstenite::Message::Text(
                             line.clone().into(),
                         ))
@@ -655,7 +1035,6 @@ async fn forward_query_to_daemon(
 
     Err("Failed to execute query".into())
 }
-
 
 async fn forward_query_to_daemon_collect(
     req_json: &str,
@@ -754,7 +1133,10 @@ fn emit_agent_progress(app: &AppHandle, line: &str) {
     {
         let _ = app.emit(
             "blinky://recipe-prompt",
-            parsed.get("data").cloned().unwrap_or(serde_json::Value::Null),
+            parsed
+                .get("data")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
         );
         return;
     }
@@ -898,6 +1280,11 @@ mod tests {
     }
 
     #[test]
+    fn token_equals_rejects_empty_server_token() {
+        assert!(!super::token_equals("", ""));
+    }
+
+    #[test]
     fn token_equals_rejects_different_tokens() {
         assert!(!super::token_equals("abc123", "abc124"));
         assert!(!super::token_equals("abc123", "abc12"));
@@ -928,7 +1315,10 @@ mod tests {
     fn uri_without_query_strips_query_string() {
         assert_eq!(super::uri_without_query("/"), "/");
         assert_eq!(super::uri_without_query("/?token=x"), "/");
-        assert_eq!(super::uri_without_query("/sarvam-stt?token=x"), "/sarvam-stt");
+        assert_eq!(
+            super::uri_without_query("/sarvam-stt?token=x"),
+            "/sarvam-stt"
+        );
     }
 
     #[test]
@@ -937,6 +1327,43 @@ mod tests {
         let b = super::generate_remote_token();
         assert_eq!(a.len(), 32);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn development_accepts_legacy_auth_frame() {
+        assert_eq!(
+            super::auth_token_from_frame(
+                "auth:secret",
+                crate::transport::TransportMode::Development
+            ),
+            Some("secret".to_string())
+        );
+    }
+
+    #[test]
+    fn release_accepts_only_json_auth_frame() {
+        assert_eq!(
+            super::auth_token_from_frame(
+                r#"{"type":"auth","token":"secret"}"#,
+                crate::transport::TransportMode::Release
+            ),
+            Some("secret".to_string())
+        );
+        assert_eq!(
+            super::auth_token_from_frame("auth:secret", crate::transport::TransportMode::Release),
+            None
+        );
+    }
+
+    #[test]
+    fn secure_bridge_only_accepts_local_wss_urls_with_paths() {
+        assert_eq!(
+            super::parse_local_wss_url("wss://127.0.0.1:9001/sarvam-stt"),
+            Ok(("127.0.0.1".to_string(), 9001, "/sarvam-stt".to_string()))
+        );
+        assert!(super::parse_local_wss_url("ws://127.0.0.1:9001/sarvam-stt").is_err());
+        assert!(super::parse_local_wss_url("wss://192.168.1.4:9001/sarvam-stt").is_err());
+        assert!(super::parse_local_wss_url("wss://localhost/sarvam-stt").is_err());
     }
 }
 
@@ -950,7 +1377,7 @@ fn get_sarvam_api_key() -> String {
 }
 
 /// Reads the remote token if explicitly configured by the user in environment or .env.
-/// If not configured, returns an empty string so companion mobile apps connect seamlessly.
+/// Development may continue without one for compatibility; release remote peers then fail auth.
 fn get_remote_token() -> String {
     if let Ok(val) = std::env::var("BLINKY_REMOTE_TOKEN") {
         let trimmed = val.trim().to_string();
@@ -966,10 +1393,9 @@ fn get_remote_token() -> String {
         .unwrap_or_default()
 }
 
-
-/// Simple constant-time comparison to avoid leaking token length/timing.
+/// Reject an unconfigured secret, then compare equal-length token bytes without early exit.
 fn token_equals(provided: &str, expected: &str) -> bool {
-    if provided.len() != expected.len() {
+    if expected.is_empty() || provided.len() != expected.len() {
         return false;
     }
     let provided = provided.as_bytes();
@@ -1007,7 +1433,6 @@ fn extract_query_token(path_and_query: &str) -> Option<String> {
 /// process invocations produce effectively unpredictable values.
 #[allow(dead_code)]
 fn generate_remote_token() -> String {
-
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1033,9 +1458,13 @@ fn generate_remote_token() -> String {
     format!("{:016x}{:016x}", a, b)
 }
 
-async fn handle_sarvam_stt_proxy(
-    client_ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn handle_sarvam_stt_proxy<S>(
+    client_write: WsSender<S>,
+    mut client_read: SplitStream<WebSocketStream<S>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let api_key = get_sarvam_api_key();
     if api_key.is_empty() {
         return Err("SARVAM_API_KEY is not configured in environment".into());
@@ -1050,7 +1479,6 @@ async fn handle_sarvam_stt_proxy(
     let (sarvam_ws, _) = connect_async(request).await?;
     println!("Successfully connected proxy to Sarvam STT WebSocket");
 
-    let (mut client_write, mut client_read) = client_ws.split();
     let (mut sarvam_write, mut sarvam_read) = sarvam_ws.split();
 
     let client_to_sarvam = async {
@@ -1060,14 +1488,6 @@ async fn handle_sarvam_stt_proxy(
                 println!("STT: Client sent close");
                 let _ = sarvam_write.send(msg).await;
                 break;
-            }
-            if msg.is_text() {
-                println!(
-                    "STT: Client -> Sarvam text: {:?}",
-                    msg.to_text().unwrap_or("")
-                );
-            } else if msg.is_binary() {
-                println!("STT: Client -> Sarvam binary ({} bytes)", msg.len());
             }
             if let Err(e) = sarvam_write.send(msg).await {
                 eprintln!("STT: Error sending to Sarvam: {:?}", e);
@@ -1083,18 +1503,10 @@ async fn handle_sarvam_stt_proxy(
             let msg = msg?;
             if msg.is_close() {
                 println!("STT: Sarvam sent close");
-                let _ = client_write.send(msg).await;
+                let _ = client_write.lock().await.send(msg).await;
                 break;
             }
-            if msg.is_text() {
-                println!(
-                    "STT: Sarvam -> Client text: {:?}",
-                    msg.to_text().unwrap_or("")
-                );
-            } else if msg.is_binary() {
-                println!("STT: Sarvam -> Client binary ({} bytes)", msg.len());
-            }
-            if let Err(e) = client_write.send(msg).await {
+            if let Err(e) = client_write.lock().await.send(msg).await {
                 eprintln!("STT: Error sending to client: {:?}", e);
                 break;
             }
@@ -1118,9 +1530,13 @@ async fn handle_sarvam_stt_proxy(
     Ok(())
 }
 
-async fn handle_sarvam_tts_proxy(
-    client_ws: tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn handle_sarvam_tts_proxy<S>(
+    client_write: WsSender<S>,
+    mut client_read: SplitStream<WebSocketStream<S>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let api_key = get_sarvam_api_key();
     if api_key.is_empty() {
         return Err("SARVAM_API_KEY is not configured in environment".into());
@@ -1135,7 +1551,6 @@ async fn handle_sarvam_tts_proxy(
     let (sarvam_ws, _) = connect_async(request).await?;
     println!("Successfully connected proxy to Sarvam TTS WebSocket");
 
-    let (mut client_write, mut client_read) = client_ws.split();
     let (mut sarvam_write, mut sarvam_read) = sarvam_ws.split();
 
     let client_to_sarvam = async {
@@ -1145,14 +1560,6 @@ async fn handle_sarvam_tts_proxy(
                 println!("TTS: Client sent close");
                 let _ = sarvam_write.send(msg).await;
                 break;
-            }
-            if msg.is_text() {
-                println!(
-                    "TTS: Client -> Sarvam text: {:?}",
-                    msg.to_text().unwrap_or("")
-                );
-            } else if msg.is_binary() {
-                println!("TTS: Client -> Sarvam binary ({} bytes)", msg.len());
             }
             if let Err(e) = sarvam_write.send(msg).await {
                 eprintln!("TTS: Error sending to Sarvam: {:?}", e);
@@ -1168,18 +1575,10 @@ async fn handle_sarvam_tts_proxy(
             let msg = msg?;
             if msg.is_close() {
                 println!("TTS: Sarvam sent close");
-                let _ = client_write.send(msg).await;
+                let _ = client_write.lock().await.send(msg).await;
                 break;
             }
-            if msg.is_text() {
-                println!(
-                    "TTS: Sarvam -> Client text: {:?}",
-                    msg.to_text().unwrap_or("")
-                );
-            } else if msg.is_binary() {
-                println!("TTS: Sarvam -> Client binary ({} bytes)", msg.len());
-            }
-            if let Err(e) = client_write.send(msg).await {
+            if let Err(e) = client_write.lock().await.send(msg).await {
                 eprintln!("TTS: Error sending to client: {:?}", e);
                 break;
             }

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { TutorConversationMessage, TutorProgress, TutorResult } from './types';
 
 export async function runTutor(
@@ -27,6 +28,72 @@ export async function runAgentQuery(query: string): Promise<TutorResult> {
       query,
     },
   });
+}
+
+export interface SecureTransportInfo {
+  mode: 'development' | 'release';
+  desktop_url: string;
+  certificate_pin: string | null;
+}
+
+export interface SecureSocketEvent {
+  socket_id: string;
+  kind: 'open' | 'text' | 'binary' | 'close' | 'error';
+  data?: string;
+  message?: string;
+}
+
+export function getSecureTransportInfo(): Promise<SecureTransportInfo> {
+  return invoke<SecureTransportInfo>('get_secure_transport_info');
+}
+
+export function connectSecureSocket(
+  socketId: string,
+  url: string,
+  expectedPin?: string | null,
+): Promise<void> {
+  return invoke('secure_socket_connect', {
+    socketId,
+    url,
+    expectedPin: expectedPin ?? null,
+  });
+}
+
+export function sendSecureSocketText(socketId: string, data: string): Promise<void> {
+  return invoke('secure_socket_send', { socketId, kind: 'text', data });
+}
+
+export function sendSecureSocketBinary(socketId: string, data: ArrayBuffer): Promise<void> {
+  const bytes = new Uint8Array(data);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return invoke('secure_socket_send', {
+    socketId,
+    kind: 'binary',
+    data: btoa(binary),
+  });
+}
+
+export function closeSecureSocket(socketId: string): Promise<void> {
+  return invoke('secure_socket_close', { socketId });
+}
+
+export async function listenForSecureSocketEvents(
+  handler: (event: SecureSocketEvent) => void,
+): Promise<UnlistenFn> {
+  const subscriptions: UnlistenFn[] = [];
+  const cleanup = () => subscriptions.splice(0).forEach((unlisten) => unlisten());
+  try {
+    for (const name of ['open', 'message', 'close', 'error']) {
+      subscriptions.push(await listen<SecureSocketEvent>(
+        `blinky://secure-socket-${name}`, (event) => handler(event.payload),
+      ));
+    }
+    return cleanup;
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 
 export async function showOverlay(): Promise<void> {
@@ -144,4 +211,3 @@ export async function getCursorPosition(): Promise<{ x: number; y: number }> {
   }
   return { x: 0, y: 0 };
 }
-

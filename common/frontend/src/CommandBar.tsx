@@ -15,13 +15,14 @@ import {
   shouldCompleteStepOnHighlightClick,
   shouldShowSummaryBubble,
 } from './lib/guidance';
-import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility } from './lib/tauri';
+import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility, getSecureTransportInfo } from './lib/tauri';
 
 import { linkCitationMarkers, preprocessMarkdown } from './lib/citations';
 import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvamErrorMessage } from './lib/tts';
 import { SarvamSpeechToTextStream, SarvamTextToSpeechStream } from './lib/sarvamStream';
 import { AdaptiveTransportManager } from './lib/adaptiveTransport';
 import type { TutorConversationMessage, TutorProgress, TutorResult } from './lib/types';
+import type { SecureTransportInfo } from './lib/tauri';
 
 
 interface AttachedMedia {
@@ -216,6 +217,7 @@ export function CommandBar() {
   const [customUrl, setCustomUrl] = useState('');
   const [customModel, setCustomModel] = useState('');
   const [customApiKey, setCustomApiKey] = useState('');
+  const [transportInfo, setTransportInfo] = useState<SecureTransportInfo | null>(null);
   const sarvamApiKeyRef = useRef('');
 
   useEffect(() => {
@@ -242,6 +244,12 @@ export function CommandBar() {
       }
     }
     void loadInitialSettings();
+  }, []);
+
+  useEffect(() => {
+    void getSecureTransportInfo()
+      .then(setTransportInfo)
+      .catch(() => setTransportInfo(null));
   }, []);
 
   // Workflow-save prompt (emitted by the agent loop after a successful task)
@@ -2214,6 +2222,26 @@ export function CommandBar() {
                 placeholder="Paste API Key..."
               />
             </div>
+
+            {transportInfo?.mode === 'release' && transportInfo.certificate_pin && (
+              <div className="dropdown-section">
+                <h4>Mobile Release Link</h4>
+                <div style={{ fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', lineHeight: 1.45 }}>
+                  <div>Enter this certificate pin and your BLINKY_REMOTE_TOKEN in the mobile release build.</div>
+                  <code style={{ display: 'block', marginTop: '8px', wordBreak: 'break-all', color: '#fff' }}>
+                    {transportInfo.certificate_pin}
+                  </code>
+                  <button
+                    type="button"
+                    className="dropdown-option"
+                    style={{ marginTop: '8px', width: '100%' }}
+                    onClick={() => void navigator.clipboard?.writeText(transportInfo.certificate_pin || '')}
+                  >
+                    Copy certificate pin
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="dropdown-section">
               <h4>WhatsApp</h4>

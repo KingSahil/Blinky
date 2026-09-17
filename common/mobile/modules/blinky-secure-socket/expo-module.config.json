@@ -1,0 +1,9 @@
+{
+  "platforms": ["android", "apple"],
+  "android": {
+    "modules": ["com.technerds.blinky.securesocket.BlinkySecureSocketModule"]
+  },
+  "apple": {
+    "modules": ["BlinkySecureSocketModule"]
+  }
+}

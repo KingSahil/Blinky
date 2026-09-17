@@ -22,7 +22,11 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {},
+    "extra": {
+      "eas": {
+        "projectId": "a7e79afb-6b01-40bb-b1ae-952199f80957"
+      }
+    },
     "plugins": [
       "expo-audio",
       "expo-status-bar",

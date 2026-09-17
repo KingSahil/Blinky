@@ -48,6 +48,35 @@ export { triggerHaptic };
 
 const STORAGE_KEY = '@blinky_pc_ip';
 const TOKEN_STORAGE_KEY = '@blinky_pc_token';
+const CERTIFICATE_PIN_STORAGE_KEY = '@blinky_pc_certificate_pin';
+const RELEASE_TRANSPORT = process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE === 'release';
+
+type NativeSecureSocketModule = typeof import('./modules/blinky-secure-socket');
+
+const loadNativeSecureSocketModule = (): NativeSecureSocketModule | null => {
+  try {
+    return require('./modules/blinky-secure-socket') as NativeSecureSocketModule;
+  } catch {
+    return null;
+  }
+};
+
+const readSavedCredential = async (secureKey: string, legacyKey: string): Promise<string | null> => {
+  if (RELEASE_TRANSPORT) {
+    return loadNativeSecureSocketModule()?.getSecureValue(secureKey) || null;
+  }
+  return AsyncStorage.getItem(legacyKey);
+};
+
+const saveCredential = async (secureKey: string, legacyKey: string, value: string): Promise<void> => {
+  if (RELEASE_TRANSPORT) {
+    const nativeModule = loadNativeSecureSocketModule();
+    if (!nativeModule) throw new Error('Secure credential storage is unavailable in this build.');
+    await nativeModule.setSecureValue(secureKey, value);
+    return;
+  }
+  await AsyncStorage.setItem(legacyKey, value);
+};
 
 let VolumeManager: any = null;
 try {
@@ -70,7 +99,50 @@ const getExpoHostIp = (): string | null => {
   return host || null;
 };
 
-const checkIpAddress = (ip: string, port = 9001, timeoutMs = 1200): Promise<string> => {
+const checkIpAddress = (ip: string, port = 9001, timeoutMs = 1200, certificatePin?: string): Promise<string> => {
+  if (RELEASE_TRANSPORT) {
+    const nativeModule = loadNativeSecureSocketModule();
+    if (!nativeModule || !certificatePin?.trim()) {
+      return Promise.reject(new Error('Release discovery requires the secure socket module and certificate pin.'));
+    }
+    const socketId = `discovery-${ip}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return new Promise((resolve, reject) => {
+      let finished = false;
+      const subscriptions = [
+        nativeModule.addListener('onOpen', (event) => {
+          if (event.id !== socketId) return;
+          finish();
+          resolve(ip);
+        }),
+        nativeModule.addListener('onError', (event) => {
+          if (event.id !== socketId) return;
+          finish();
+          reject(new Error(event.error || 'Connection error'));
+        }),
+        nativeModule.addListener('onClose', (event) => {
+          if (event.id !== socketId || finished) return;
+          finish();
+          reject(new Error('Closed'));
+        }),
+      ];
+      const timer = setTimeout(() => {
+        finish();
+        reject(new Error('Timeout'));
+      }, timeoutMs);
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        subscriptions.forEach((subscription) => subscription.remove());
+        void nativeModule.close(socketId).catch(() => undefined);
+      };
+      void nativeModule.connect(socketId, `wss://${ip}:${port}`, certificatePin.trim()).catch((error: any) => {
+        finish();
+        reject(error);
+      });
+    });
+  }
+
   return new Promise((resolve, reject) => {
     let ws: WebSocket | null = null;
     let isDone = false;
@@ -121,7 +193,8 @@ const checkIpAddress = (ip: string, port = 9001, timeoutMs = 1200): Promise<stri
 
 const scanSubnet = async (
   subnet: string,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
+  certificatePin?: string,
 ): Promise<string | null> => {
   const port = 9001;
   const timeoutMs = 1200;
@@ -145,7 +218,7 @@ const scanSubnet = async (
     }
     
     const promises = batch.map(ip => 
-      checkIpAddress(ip, port, timeoutMs)
+      checkIpAddress(ip, port, timeoutMs, certificatePin)
         .then(foundIp => foundIp)
         .catch(() => null)
     );
@@ -393,6 +466,7 @@ const PinchableImageViewer: React.FC<PinchableImageViewerProps> = ({ uri, onClos
 export default function App() {
   const [ipAddress, setIpAddress] = useState('');
   const [remoteToken, setRemoteToken] = useState('');
+  const [certificatePin, setCertificatePin] = useState('');
   const {
     status,
     errorMsg,
@@ -975,9 +1049,10 @@ export default function App() {
     /** Restores persisted connection and Wake-on-LAN settings on launch. */
     async function loadIp() {
       try {
-        const [savedIp, savedToken, savedMac, savedWolIp] = await Promise.all([
+        const [savedIp, savedToken, savedPin, savedMac, savedWolIp] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEY),
-          AsyncStorage.getItem(TOKEN_STORAGE_KEY),
+          readSavedCredential('remote_token', TOKEN_STORAGE_KEY),
+          readSavedCredential('certificate_pin', CERTIFICATE_PIN_STORAGE_KEY),
           AsyncStorage.getItem(MAC_STORAGE_KEY),
           AsyncStorage.getItem(WOL_BROADCAST_STORAGE_KEY),
         ]);
@@ -986,9 +1061,10 @@ export default function App() {
         const detectedIp = getExpoHostIp();
         const initialIp = savedIp || detectedIp || '';
         if (savedToken) setRemoteToken(savedToken);
+        if (savedPin) setCertificatePin(savedPin);
         if (initialIp && initialIp !== 'localhost') {
           setIpAddress(initialIp);
-          connect(initialIp, savedToken || undefined);
+          connect(initialIp, savedToken || undefined, savedPin || undefined);
         } else {
           // If no saved IP, prompt the user with settings and launch quiet discovery
           setShowSettings(true);
@@ -1068,11 +1144,11 @@ export default function App() {
       }
 
       for (const subnet of subnetsToScan) {
-        const foundIp = await scanSubnet(subnet);
+        const foundIp = await scanSubnet(subnet, undefined, certificatePin || undefined);
         if (foundIp) {
           setIpAddress(foundIp);
           await AsyncStorage.setItem(STORAGE_KEY, foundIp);
-          connect(foundIp, remoteToken || undefined);
+          connect(foundIp, remoteToken || undefined, certificatePin || undefined);
           break;
         }
       }
@@ -1098,10 +1174,11 @@ export default function App() {
     try {
       await Promise.all([
         AsyncStorage.setItem(STORAGE_KEY, cleanedIp),
-        AsyncStorage.setItem(TOKEN_STORAGE_KEY, remoteToken.trim()),
+        saveCredential('remote_token', TOKEN_STORAGE_KEY, remoteToken.trim()),
+        saveCredential('certificate_pin', CERTIFICATE_PIN_STORAGE_KEY, certificatePin.trim()),
       ]);
     } catch (e) {}
-    connect(cleanedIp, remoteToken || undefined);
+    connect(cleanedIp, remoteToken || undefined, certificatePin || undefined);
   };
 
   const handleAutoDiscover = async () => {
@@ -1131,14 +1208,14 @@ export default function App() {
         setDiscoveryProgress(`Scanning Wi-Fi subnet ${subnet}.x...`);
         found = await scanSubnet(subnet, (msg) => {
           setDiscoveryProgress(msg);
-        });
+        }, certificatePin || undefined);
         if (found) break;
       }
 
       if (found) {
         setIpAddress(found);
         await AsyncStorage.setItem(STORAGE_KEY, found);
-        connect(found, remoteToken || undefined);
+        connect(found, remoteToken || undefined, certificatePin || undefined);
         Alert.alert('Blinky Connected!', `Found Blinky PC at ${found}`);
       } else {
         Alert.alert(
@@ -1338,7 +1415,9 @@ export default function App() {
                 </TouchableOpacity>
               </View>
               <Text style={styles.connectionSubtitle}>
-                Enter your PC's IP address (e.g. 192.168.1.4) or tap "Scan Subnet" to auto-discover Blinky.
+                {RELEASE_TRANSPORT
+                  ? 'Enter the PC IP, remote token, and the pinned certificate value from the PC release build.'
+                  : 'Enter your PC\'s IP address (e.g. 192.168.1.4) or tap "Scan Subnet" to auto-discover Blinky.'}
               </Text>
               <View style={styles.inputWrapper}>
                 <Ionicons name="link-outline" size={20} color="#6C6985" style={styles.inputIcon} />
@@ -1354,6 +1433,35 @@ export default function App() {
                   autoCorrect={false}
                 />
               </View>
+              <View style={styles.inputWrapper}>
+                <Ionicons name="key-outline" size={20} color="#6C6985" style={styles.inputIcon} />
+                <TextInput
+                  style={[styles.input, isConnected && styles.inputDisabled]}
+                  placeholder="Remote token (BLINKY_REMOTE_TOKEN)"
+                  placeholderTextColor="#6C6985"
+                  value={remoteToken}
+                  onChangeText={setRemoteToken}
+                  editable={!isConnected && status !== 'connecting'}
+                  secureTextEntry
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+              </View>
+              {RELEASE_TRANSPORT && (
+                <View style={styles.inputWrapper}>
+                  <Ionicons name="shield-checkmark-outline" size={20} color="#6C6985" style={styles.inputIcon} />
+                  <TextInput
+                    style={[styles.input, isConnected && styles.inputDisabled]}
+                    placeholder="Certificate pin (sha256/...)"
+                    placeholderTextColor="#6C6985"
+                    value={certificatePin}
+                    onChangeText={setCertificatePin}
+                    editable={!isConnected && status !== 'connecting'}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                </View>
+              )}
               <View style={styles.actionRow}>
 
                 {status !== 'connected' && status !== 'connecting' ? (

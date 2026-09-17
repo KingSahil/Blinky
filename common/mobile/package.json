@@ -20,6 +20,7 @@
     "react-native-wol": "^1.0.2"
   },
   "devDependencies": {
+    "@types/bun": "1.4.0",
     "@types/react": "~19.2.4",
     "typescript": "~6.0.3"
   },
@@ -28,7 +29,8 @@
     "start:clear": "expo start -c",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "build:release": "bunx eas-cli build --profile release"
   },
   "private": true,
   "patchedDependencies": {
