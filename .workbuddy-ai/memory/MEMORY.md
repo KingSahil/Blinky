@@ -115,12 +115,19 @@
   script over `git ls-files -s` — see `tmp/check_index.py`. On 2026-09-16 there were **19**.
 
 - **`git add` does NOT repair a missing index blob.** It trusts the stat cache, decides the file
-  is unchanged, and leaves the broken entry in place — exit code 0, nothing fixed. Invalidate the
-  cache first, then re-add:
+  is unchanged, and leaves the broken entry in place — exit code 0, nothing fixed.
+  Repair it **without touching the worktree**:
   ```
-  touch <files> && git add <files>
+  sha=$(git hash-object -w --path=<path> <path>)
+  mode=$(git ls-files -s <path> | awk '{print $1}')
+  git update-index --cacheinfo "$mode,$sha,<path>"
   ```
-  (`touch` changes mtime only; content is untouched.) Verified: 19/19 repaired this way.
+  Verified in a scratch repo: recomputed sha matched byte-for-byte, mtime unchanged, `write-tree`
+  returned 0. The 19 real entries were repaired with `touch <files> && git add <files>` instead —
+  which works, but **`touch` bumps mtimes and fires file watchers**: it triggered a Tauri rebuild
+  on `common/src-tauri/src/websocket.rs`, restarted `blinky.exe` mid-session, and the restarted
+  process exited 1 with an empty stderr. **Never `touch` files under a watched tree while a dev
+  server is running.**
 
 - **Measured damage, 2026-09-16.** Old HEAD `d4ca36d` was missing **4 trees** —
   `windows/` (`51d00719`), `linux/src-tauri/` (`2c002c26`), `common/src-tauri/src/` (`1f208edc`),
