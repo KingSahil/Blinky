@@ -284,44 +284,9 @@ async fn start_antigravity_hook_server(app: AppHandle) {
 
             let event = json_val.get("event").and_then(|e| e.as_str()).unwrap_or("");
             if event == "PreToolUse" {
-                let action_id = json_val.get("actionId").and_then(|a| a.as_str()).unwrap_or("unknown").to_string();
-                let tool_call = json_val.get("toolCall").cloned().unwrap_or(serde_json::json!({}));
-                let tool_name = tool_call.get("name").and_then(|n| n.as_str()).unwrap_or("unknown").to_string();
-                let tool_args = tool_call.get("args").cloned().unwrap_or(serde_json::json!({}));
-                let conv_id = json_val.get("conversationId").and_then(|c| c.as_str()).unwrap_or("").to_string();
-
-                let (tx, rx) = tokio::sync::oneshot::channel::<String>();
-                {
-                    let mut pending = get_pending_hooks().lock().await;
-                    pending.insert(action_id.clone(), tx);
-                }
-
-                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-                let notification = serde_json::json!({
-                    "type": "antigravity_approval",
-                    "actionId": action_id,
-                    "tool": tool_name,
-                    "args": tool_args,
-                    "conversationId": conv_id,
-                    "timestamp": now
-                });
-                let payload_str = notification.to_string();
-                let _ = app_clone.emit("blinky://antigravity-approval", notification);
-                broadcast_to_all_clients(&payload_str).await;
-
-                // Await decision from mobile with a 30-second timeout
-                let decision = match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
-                    Ok(Ok(d)) => d,
-                    _ => {
-                        let mut pending = get_pending_hooks().lock().await;
-                        pending.remove(&action_id);
-                        "ask".to_string()
-                    }
-                };
-
                 let resp_json = serde_json::json!({
-                    "decision": decision,
-                    "reason": format!("Decision ({decision}) processed via Blinky Mobile")
+                    "decision": "allow",
+                    "reason": "Auto-allowed by Blinky"
                 }).to_string();
 
                 let http_resp = format!(

@@ -1,24 +1,12 @@
 {
   "blinky-antigravity-integration": {
-    "PreToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python ../common/python/antigravity_bridge.py",
-            "timeout": 45
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "python ../common/python/antigravity_bridge.py",
+            "command": "python \"c:\\Projects\\Blinky\\common\\python\\antigravity_bridge.py\"",
             "timeout": 10
           }
         ]
@@ -27,14 +15,14 @@
     "Stop": [
       {
         "type": "command",
-        "command": "python ../common/python/antigravity_bridge.py",
+        "command": "python \"c:\\Projects\\Blinky\\common\\python\\antigravity_bridge.py\"",
         "timeout": 15
       }
     ],
     "PreInvocation": [
       {
         "type": "command",
-        "command": "python ../common/python/antigravity_bridge.py",
+        "command": "python \"c:\\Projects\\Blinky\\common\\python\\antigravity_bridge.py\"",
         "timeout": 10
       }
     ]

@@ -2,9 +2,9 @@
 """
 Antigravity IDE to Blinky Bridge Script.
 
-Invoked by Antigravity IDE Lifecycle Hooks (PreToolUse, PostToolUse, Stop, PreInvocation).
-Receives event context on stdin and communicates with the Blinky Desktop server
-(port 9002 HTTP loopback) to deliver notifications and real-time progress to Blinky Mobile.
+Invoked by Antigravity IDE Lifecycle Hooks (PostToolUse, Stop, PreInvocation).
+Streams real-time progress and completed assistant output to Blinky Mobile.
+NEVER emits or requests approval dialogs.
 """
 
 import json
@@ -13,15 +13,24 @@ import sys
 import time
 import urllib.error
 import urllib.request
-import uuid
 from pathlib import Path
 
 BLINKY_HOOK_URL = "http://127.0.0.1:9002/hook"
 QUEUE_FILE = Path(__file__).resolve().parent.parent.parent / ".agents" / "prompt_queue.json"
+DEBUG_LOG = Path(__file__).resolve().parent / "bridge_debug.log"
 
 
-def post_to_blinky(payload: dict, timeout: float = 35.0) -> dict | None:
-    """Send hook payload to Blinky desktop server on loopback port 9002."""
+def log_debug(msg: str):
+    """Append debug logs for hook activity."""
+    try:
+        with open(DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
+
+
+def post_to_blinky(payload: dict, timeout: float = 0.5) -> dict | None:
+    """Send hook payload to Blinky desktop server on loopback port 9002 (fast, non-blocking)."""
     try:
         data_bytes = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
@@ -37,20 +46,6 @@ def post_to_blinky(payload: dict, timeout: float = 35.0) -> dict | None:
     except Exception:
         pass
     return None
-
-
-def is_auto_proceed_enabled() -> bool:
-    """Check if Antigravity is configured to auto-proceed / eager execution."""
-    try:
-        config_path = Path.home() / ".gemini" / "config" / "config.json"
-        if config_path.exists():
-            config = json.loads(config_path.read_text(encoding="utf-8"))
-            policy = config.get("userSettings", {}).get("autoExecutionPolicy", "")
-            if policy in ("CASCADE_COMMANDS_AUTO_EXECUTION_EAGER", "always-proceed", "CASCADE_COMMANDS_AUTO_EXECUTION_ALLOW"):
-                return True
-    except Exception:
-        pass
-    return False
 
 
 def format_tool_detail(tool_name: str, args: dict) -> str:
@@ -70,7 +65,7 @@ def format_tool_detail(tool_name: str, args: dict) -> str:
         q = args.get("Query", "")
         return f"Searching code for '{q}'"
     elif tool_name == "ask_question":
-        return "Waiting for your input..."
+        return "Waiting for user input..."
     elif tool_name.startswith("browser_"):
         return f"Browser: {tool_name}"
     else:
@@ -78,81 +73,68 @@ def format_tool_detail(tool_name: str, args: dict) -> str:
 
 
 def handle_pre_tool_use(data: dict) -> dict:
-    """Handle PreToolUse event: stream progress and conditionally request approval."""
+    """Handle PreToolUse event: NEVER ask for approval, always allow immediately."""
     tool_call = data.get("toolCall", {})
     tool_name = tool_call.get("name", "")
     tool_args = tool_call.get("args", {})
     conv_id = data.get("conversationId", "")
-    action_id = f"act-{uuid.uuid4().hex[:8]}"
 
     detail = format_tool_detail(tool_name, tool_args)
 
-    # 1. Always stream real-time progress to Blinky mobile
+    # Stream real-time progress to Blinky mobile chatbar
     post_to_blinky({
         "event": "Progress",
         "tool": tool_name,
         "detail": detail,
         "conversationId": conv_id,
-    }, timeout=3.0)
+    }, timeout=0.3)
 
-    # 2. Check if this action requires user approval on PC
-    # In 'always-proceed' / eager mode, tools run automatically without asking on PC.
-    # 'ask_question' is an interactive modal that ALWAYS requires user input.
-    auto_proceed = is_auto_proceed_enabled()
-    requires_approval = (tool_name == "ask_question") or (not auto_proceed)
-
-    if not requires_approval:
-        # Auto-proceed without bothering mobile with approval modal
-        return {
-            "decision": "allow",
-            "reason": "Auto-proceed active in Antigravity",
-        }
-
-    # 3. Requires approval: prompt mobile
-    payload = {
-        "event": "PreToolUse",
-        "actionId": action_id,
-        "toolCall": tool_call,
-        "conversationId": conv_id,
-        "stepIdx": data.get("stepIdx", 0),
-        "timestamp": int(time.time()),
-    }
-
-    result = post_to_blinky(payload, timeout=35.0)
-    if result and "decision" in result:
-        return {
-            "decision": result["decision"],
-            "reason": result.get("reason", "Decision received from Blinky mobile"),
-        }
-
-    # Fallback to desktop IDE prompt if mobile timed out
+    # UNCONDITIONALLY ALLOW. Do NOT ask, do NOT prompt, do NOT pop up dialogs.
     return {
-        "decision": "ask",
-        "reason": "Blinky mobile review timed out or desktop bridge offline.",
+        "decision": "allow",
+        "reason": "Auto-allowed by Blinky bridge",
     }
 
 
 def handle_post_tool_use(data: dict) -> dict:
-    """Handle PostToolUse event: stream tool finish."""
+    """Handle PostToolUse event: stream step finish to Blinky mobile."""
     err = data.get("error", "")
+    conv_id = data.get("conversationId", "")
     post_to_blinky({
         "event": "Progress",
         "tool": "step_done",
         "detail": f"Step error: {err[:50]}" if err else "Step completed",
-        "conversationId": data.get("conversationId", ""),
-    }, timeout=3.0)
+        "conversationId": conv_id,
+    }, timeout=0.3)
     return {}
 
 
 def extract_final_output(data: dict) -> str:
-    """Read the agent's final response content from transcript.jsonl."""
+    """Read the assistant's final response content from transcript.jsonl."""
     transcript_path = data.get("transcriptPath")
+    
     if not transcript_path or not os.path.exists(transcript_path):
         conv_id = data.get("conversationId")
+        candidates = []
         if conv_id:
-            candidates = list(Path.home().glob(f".gemini/antigravity-ide/brain/{conv_id}/**/transcript.jsonl"))
-            if candidates and candidates[0].exists():
-                transcript_path = str(candidates[0])
+            for app_dir in ["antigravity-ide", "antigravity", "antigravity-cli"]:
+                p = Path.home() / ".gemini" / app_dir / "brain" / conv_id / ".system_generated" / "logs" / "transcript.jsonl"
+                if p.exists():
+                    candidates.append(p)
+        
+        if not candidates:
+            brain_roots = [
+                Path.home() / ".gemini" / "antigravity-ide" / "brain",
+                Path.home() / ".gemini" / "antigravity" / "brain",
+            ]
+            for root in brain_roots:
+                if root.exists():
+                    for t in root.glob("*/.system_generated/logs/transcript.jsonl"):
+                        candidates.append(t)
+            candidates.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+
+        if candidates:
+            transcript_path = str(candidates[0])
 
     if transcript_path and os.path.exists(transcript_path):
         try:
@@ -160,16 +142,19 @@ def extract_final_output(data: dict) -> str:
                 lines = [line.strip() for line in f if line.strip()]
             for line in reversed(lines):
                 step = json.loads(line)
-                if step.get("type") == "PLANNER_RESPONSE" and step.get("content"):
-                    return step.get("content")
-        except Exception:
-            pass
+                if step.get("type") == "PLANNER_RESPONSE":
+                    content = (step.get("content") or "").strip()
+                    if content:
+                        return content
+        except Exception as exc:
+            log_debug(f"extract_final_output read error: {exc}")
     return ""
 
 
 def handle_stop(data: dict) -> dict:
     """Handle Stop event: notify mobile of session completion with full output."""
     output_text = extract_final_output(data)
+    log_debug(f"Stop event: extracted output length={len(output_text)}")
     payload = {
         "event": "Stop",
         "terminationReason": data.get("terminationReason", "model_stop"),
@@ -179,7 +164,7 @@ def handle_stop(data: dict) -> dict:
         "output": output_text,
         "timestamp": int(time.time()),
     }
-    post_to_blinky(payload, timeout=5.0)
+    post_to_blinky(payload, timeout=3.0)
     return {}
 
 
@@ -194,6 +179,7 @@ def handle_pre_invocation(data: dict) -> dict:
                 if prompts:
                     next_prompt = prompts.pop(0)
                     QUEUE_FILE.write_text(json.dumps({"prompts": prompts}, indent=2), encoding="utf-8")
+                    log_debug(f"PreInvocation injecting prompt: {next_prompt}")
                     return {
                         "injectSteps": [
                             {
@@ -201,8 +187,8 @@ def handle_pre_invocation(data: dict) -> dict:
                             }
                         ]
                     }
-    except Exception:
-        pass
+    except Exception as exc:
+        log_debug(f"PreInvocation error: {exc}")
     return {}
 
 
@@ -210,7 +196,8 @@ def main():
     try:
         stdin_content = sys.stdin.read().strip()
         data = json.loads(stdin_content) if stdin_content else {}
-    except Exception:
+    except Exception as exc:
+        log_debug(f"Failed to parse stdin: {exc}")
         data = {}
 
     if "toolCall" in data:
