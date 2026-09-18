@@ -513,6 +513,7 @@ export default function App() {
     latestPowerEvent,
     antigravityApproval,
     antigravityComplete,
+    antigravityProgress,
     connect,
     disconnect,
     sendCommand,
@@ -548,6 +549,7 @@ export default function App() {
   ]);
   
   const activeBlinkyMsgIdRef = useRef<string | null>(null);
+  const activeAntigravityMsgIdRef = useRef<string | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
 
   const [showSettings, setShowSettings] = useState(false);
@@ -561,10 +563,61 @@ export default function App() {
     }
   }, [antigravityApproval]);
 
+  // Stream Antigravity progress into chat bubble
   useEffect(() => {
-    if (antigravityComplete) {
-      triggerHaptic('medium');
-    }
+    if (!antigravityProgress) return;
+    const detail = antigravityProgress.detail || `Executing ${antigravityProgress.tool}`;
+    setMessages(prev => {
+      const activeId = activeAntigravityMsgIdRef.current;
+      if (!activeId) return prev;
+      return prev.map(m => {
+        if (m.id === activeId) {
+          return {
+            ...m,
+            progress: {
+              percent: Math.min((m.progress?.percent || 15) + 12, 92),
+              statusText: detail,
+              duration: (m.progress?.duration || 0) + 1,
+            }
+          };
+        }
+        return m;
+      });
+    });
+  }, [antigravityProgress]);
+
+  // Display completed output in chat bubble
+  useEffect(() => {
+    if (!antigravityComplete) return;
+    triggerHaptic('medium');
+    const activeId = activeAntigravityMsgIdRef.current;
+    const outputText = antigravityComplete.output?.trim() || `Antigravity session complete (${antigravityComplete.reason}).`;
+
+    setMessages(prev => {
+      if (activeId && prev.some(m => m.id === activeId)) {
+        return prev.map(m => {
+          if (m.id === activeId) {
+            return {
+              ...m,
+              text: outputText,
+              progress: undefined,
+            };
+          }
+          return m;
+        });
+      } else {
+        return [
+          ...prev,
+          {
+            id: generateUuid(),
+            sender: 'blinky',
+            text: `⚡ Antigravity Session Output:\n\n${outputText}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          }
+        ];
+      }
+    });
+    activeAntigravityMsgIdRef.current = null;
   }, [antigravityComplete]);
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
 
@@ -867,19 +920,27 @@ export default function App() {
       if (prompt) {
         sendAntigravityPrompt(prompt);
         const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const agyMsgId = generateUuid();
+        activeAntigravityMsgIdRef.current = agyMsgId;
+
         setMessages(prev => [
           ...prev,
           {
             id: generateUuid(),
             sender: 'user',
-            text: `⚡ Dispatched to Antigravity: "${prompt}"`,
+            text: `⚡ Sent to Antigravity: "${prompt}"`,
             timestamp: currentTime,
           },
           {
-            id: generateUuid(),
+            id: agyMsgId,
             sender: 'blinky',
-            text: `Sent prompt directly to your active Antigravity IDE workspace.`,
+            text: "Antigravity session running on desktop...",
             timestamp: currentTime,
+            progress: {
+              percent: 10,
+              statusText: 'Starting Antigravity agent...',
+              duration: 0,
+            }
           }
         ]);
         setQueryText('');

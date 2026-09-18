@@ -330,14 +330,31 @@ async fn start_antigravity_hook_server(app: AppHandle) {
                     resp_json
                 );
                 let _ = stream.write_all(http_resp.as_bytes()).await;
+            } else if event == "Progress" {
+                let tool_name = json_val.get("tool").and_then(|t| t.as_str()).unwrap_or("").to_string();
+                let detail = json_val.get("detail").and_then(|d| d.as_str()).unwrap_or("").to_string();
+                let progress_msg = serde_json::json!({
+                    "type": "antigravity_progress",
+                    "tool": tool_name,
+                    "detail": detail,
+                    "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+                });
+                let payload_str = progress_msg.to_string();
+                let _ = app_clone.emit("blinky://antigravity-progress", progress_msg);
+                broadcast_to_all_clients(&payload_str).await;
+
+                let http_resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+                let _ = stream.write_all(http_resp.as_bytes()).await;
             } else if event == "Stop" {
                 let conv_id = json_val.get("conversationId").and_then(|c| c.as_str()).unwrap_or("").to_string();
                 let reason = json_val.get("terminationReason").and_then(|r| r.as_str()).unwrap_or("model_stop").to_string();
+                let output = json_val.get("output").and_then(|o| o.as_str()).unwrap_or("").to_string();
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                 let notification = serde_json::json!({
                     "type": "antigravity_complete",
                     "conversationId": conv_id,
                     "reason": reason,
+                    "output": output,
                     "timestamp": now
                 });
                 let payload_str = notification.to_string();

@@ -79,6 +79,14 @@ export interface AntigravityComplete {
   type: 'antigravity_complete';
   conversationId?: string;
   reason: string;
+  output?: string;
+  timestamp?: number;
+}
+
+export interface AntigravityProgress {
+  type: 'antigravity_progress';
+  tool: string;
+  detail: string;
   timestamp?: number;
 }
 
@@ -105,6 +113,7 @@ export function usePCWebSocket() {
   const [latestPowerEvent, setLatestPowerEvent] = useState<PowerEvent | null>(null);
   const [antigravityApproval, setAntigravityApproval] = useState<AntigravityApproval | null>(null);
   const [antigravityComplete, setAntigravityComplete] = useState<AntigravityComplete | null>(null);
+  const [antigravityProgress, setAntigravityProgress] = useState<AntigravityProgress | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const nativeRef = useRef<NativeSecureSocket | null>(null);
 
@@ -203,6 +212,8 @@ export function usePCWebSocket() {
               setAntigravityApproval(parsed as AntigravityApproval);
             } else if (parsed.type === 'antigravity_complete') {
               setAntigravityComplete(parsed as AntigravityComplete);
+            } else if (parsed.type === 'antigravity_progress') {
+              setAntigravityProgress(parsed as AntigravityProgress);
             } else {
               setLatestResponse(parsed);
             }
@@ -295,6 +306,8 @@ export function usePCWebSocket() {
               setAntigravityApproval(parsed as AntigravityApproval);
             } else if (parsed.type === 'antigravity_complete') {
               setAntigravityComplete(parsed as AntigravityComplete);
+            } else if (parsed.type === 'antigravity_progress') {
+              setAntigravityProgress(parsed as AntigravityProgress);
             } else {
               setLatestResponse(parsed);
             }
@@ -409,6 +422,7 @@ export function usePCWebSocket() {
     latestPowerEvent,
     antigravityApproval,
     antigravityComplete,
+    antigravityProgress,
     connect,
     disconnect,
     sendCommand,
