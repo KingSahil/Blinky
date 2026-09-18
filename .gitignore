@@ -19,6 +19,7 @@ __pycache__/
 tmp/
 .agent/
 .agents/
+!.agents/hooks.json
 src-tauri/target/
 common/src-tauri/target/
 screenshots/

@@ -66,6 +66,22 @@ export interface PowerEvent {
   timestamp: number;
 }
 
+export interface AntigravityApproval {
+  type: 'antigravity_approval';
+  actionId: string;
+  tool: string;
+  args: Record<string, any>;
+  conversationId?: string;
+  timestamp?: number;
+}
+
+export interface AntigravityComplete {
+  type: 'antigravity_complete';
+  conversationId?: string;
+  reason: string;
+  timestamp?: number;
+}
+
 export type PowerCommand =
   | 'power_off'
   | 'restart'
@@ -87,6 +103,8 @@ export function usePCWebSocket() {
   const [latestResponse, setLatestResponse] = useState<any>(null);
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [latestPowerEvent, setLatestPowerEvent] = useState<PowerEvent | null>(null);
+  const [antigravityApproval, setAntigravityApproval] = useState<AntigravityApproval | null>(null);
+  const [antigravityComplete, setAntigravityComplete] = useState<AntigravityComplete | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const nativeRef = useRef<NativeSecureSocket | null>(null);
 
@@ -181,6 +199,10 @@ export function usePCWebSocket() {
               setSystemInfo(parsed as SystemInfo);
             } else if (parsed.type === 'power_event') {
               setLatestPowerEvent(parsed as PowerEvent);
+            } else if (parsed.type === 'antigravity_approval') {
+              setAntigravityApproval(parsed as AntigravityApproval);
+            } else if (parsed.type === 'antigravity_complete') {
+              setAntigravityComplete(parsed as AntigravityComplete);
             } else {
               setLatestResponse(parsed);
             }
@@ -269,6 +291,10 @@ export function usePCWebSocket() {
               setSystemInfo(parsed as SystemInfo);
             } else if (parsed.type === 'power_event') {
               setLatestPowerEvent(parsed as PowerEvent);
+            } else if (parsed.type === 'antigravity_approval') {
+              setAntigravityApproval(parsed as AntigravityApproval);
+            } else if (parsed.type === 'antigravity_complete') {
+              setAntigravityComplete(parsed as AntigravityComplete);
             } else {
               setLatestResponse(parsed);
             }
@@ -355,16 +381,41 @@ export function usePCWebSocket() {
     };
   }, []);
 
+  const sendAntigravityDecision = useCallback((actionId: string, decision: 'allow' | 'deny') => {
+    sendCommand(JSON.stringify({
+      type: 'antigravity_action',
+      actionId,
+      decision,
+    }));
+    setAntigravityApproval(null);
+  }, [sendCommand]);
+
+  const sendAntigravityPrompt = useCallback((prompt: string) => {
+    sendCommand(JSON.stringify({
+      type: 'antigravity_prompt',
+      prompt,
+    }));
+  }, [sendCommand]);
+
+  const dismissAntigravityComplete = useCallback(() => {
+    setAntigravityComplete(null);
+  }, []);
+
   return {
     status,
     errorMsg,
     latestResponse,
     systemInfo,
     latestPowerEvent,
+    antigravityApproval,
+    antigravityComplete,
     connect,
     disconnect,
     sendCommand,
     sendQuery,
     fetchSystemInfo,
+    sendAntigravityDecision,
+    sendAntigravityPrompt,
+    dismissAntigravityComplete,
   };
 }

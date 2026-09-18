@@ -511,11 +511,16 @@ export default function App() {
     latestResponse,
     systemInfo,
     latestPowerEvent,
+    antigravityApproval,
+    antigravityComplete,
     connect,
     disconnect,
     sendCommand,
     sendQuery,
     fetchSystemInfo,
+    sendAntigravityDecision,
+    sendAntigravityPrompt,
+    dismissAntigravityComplete,
   } = usePCWebSocket();
   const [macAddress, setMacAddress] = useState('');
   const [wolBroadcastIp, setWolBroadcastIp] = useState('255.255.255.255');
@@ -548,6 +553,19 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [timerSeconds, setTimerSeconds] = useState(0);
+
+  // Haptic feedback for Antigravity events
+  useEffect(() => {
+    if (antigravityApproval) {
+      triggerHaptic('heavy');
+    }
+  }, [antigravityApproval]);
+
+  useEffect(() => {
+    if (antigravityComplete) {
+      triggerHaptic('medium');
+    }
+  }, [antigravityComplete]);
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
 
   const handleCaptureScreenshot = () => {
@@ -841,6 +859,33 @@ export default function App() {
       triggerHaptic('selection');
       Alert.alert('Empty query', 'Please enter a search/browsing query first.');
       return;
+    }
+
+    // Direct prompt to Antigravity IDE
+    if (queryText.startsWith('/agy ') || queryText.toLowerCase().startsWith('antigravity:')) {
+      const prompt = queryText.replace(/^(\/agy\s*|antigravity:\s*)/i, '').trim();
+      if (prompt) {
+        sendAntigravityPrompt(prompt);
+        const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setMessages(prev => [
+          ...prev,
+          {
+            id: generateUuid(),
+            sender: 'user',
+            text: `⚡ Dispatched to Antigravity: "${prompt}"`,
+            timestamp: currentTime,
+          },
+          {
+            id: generateUuid(),
+            sender: 'blinky',
+            text: `Sent prompt directly to your active Antigravity IDE workspace.`,
+            timestamp: currentTime,
+          }
+        ]);
+        setQueryText('');
+        triggerHaptic('medium');
+        return;
+      }
     }
     triggerHaptic('light');
     
@@ -1722,6 +1767,78 @@ export default function App() {
             </View>
           )}
 
+          {/* Antigravity Session Complete Banner */}
+          {antigravityComplete && (
+            <View style={styles.antigravityCompleteBanner}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                <Ionicons name="checkmark-done-circle" size={18} color="#10B981" style={{ marginRight: 8 }} />
+                <Text style={styles.antigravityCompleteText} numberOfLines={1}>
+                  Antigravity session complete ({antigravityComplete.reason})
+                </Text>
+              </View>
+              <TouchableOpacity onPress={dismissAntigravityComplete} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Ionicons name="close" size={16} color="#8A86AA" />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Antigravity Action Required Card */}
+          {antigravityApproval && (
+            <View style={styles.antigravityCard}>
+              <View style={styles.antigravityCardHeader}>
+                <View style={styles.antigravityBadge}>
+                  <Ionicons name="hardware-chip" size={13} color="#A78BFA" style={{ marginRight: 5 }} />
+                  <Text style={styles.antigravityBadgeText}>ANTIGRAVITY IDE</Text>
+                </View>
+                <Text style={styles.antigravityTimeText}>Approval Required</Text>
+              </View>
+              
+              <Text style={styles.antigravityToolTitle}>
+                Action: <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>{antigravityApproval.tool}</Text>
+              </Text>
+
+              {antigravityApproval.args && (
+                <View style={styles.antigravityArgsContainer}>
+                  <Text style={styles.antigravityArgsText} numberOfLines={4}>
+                    {antigravityApproval.args.CommandLine
+                      ? `$ ${antigravityApproval.args.CommandLine}`
+                      : antigravityApproval.args.TargetFile
+                      ? `Target: ${antigravityApproval.args.TargetFile}`
+                      : antigravityApproval.args.questions
+                      ? `Q: ${JSON.stringify(antigravityApproval.args.questions)}`
+                      : JSON.stringify(antigravityApproval.args, null, 2)}
+                  </Text>
+                </View>
+              )}
+
+              <View style={styles.antigravityActionsRow}>
+                <TouchableOpacity
+                  style={[styles.antigravityBtn, styles.antigravityRejectBtn]}
+                  onPress={() => {
+                    triggerHaptic('heavy');
+                    sendAntigravityDecision(antigravityApproval.actionId, 'deny');
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="close-circle-outline" size={18} color="#EF4444" style={{ marginRight: 6 }} />
+                  <Text style={styles.antigravityRejectBtnText}>Reject</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.antigravityBtn, styles.antigravityApproveBtn]}
+                  onPress={() => {
+                    triggerHaptic('medium');
+                    sendAntigravityDecision(antigravityApproval.actionId, 'allow');
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="checkmark-circle-outline" size={18} color="#10B981" style={{ marginRight: 6 }} />
+                  <Text style={styles.antigravityApproveBtnText}>Approve</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
           {/* Main Messaging Feed */}
           <ScrollView
             ref={scrollViewRef}
@@ -1861,7 +1978,7 @@ export default function App() {
 
             <TextInput
               style={styles.chatTextInput}
-              placeholder="Message Blinky"
+              placeholder="Message Blinky or /agy <prompt>"
               placeholderTextColor="#6C6985"
               value={queryText}
               onChangeText={setQueryText}
@@ -2497,5 +2614,112 @@ const styles = StyleSheet.create({
   fullscreenImage: {
     width: '94%',
     height: '84%',
+  },
+  antigravityCompleteBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+    borderRadius: 12,
+    marginHorizontal: 20,
+    marginBottom: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  antigravityCompleteText: {
+    color: '#A7F3D0',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  antigravityCard: {
+    marginHorizontal: 20,
+    marginBottom: 12,
+    backgroundColor: '#1C1A24',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.3)',
+    padding: 14,
+    shadowColor: '#8B5CF6',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  antigravityCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  antigravityBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(139, 92, 246, 0.16)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  antigravityBadgeText: {
+    color: '#C4B5FD',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  antigravityTimeText: {
+    color: '#F59E0B',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  antigravityToolTitle: {
+    color: '#9CA3AF',
+    fontSize: 13,
+    marginBottom: 8,
+  },
+  antigravityArgsContainer: {
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  antigravityArgsText: {
+    color: '#E5E7EB',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    fontSize: 12,
+  },
+  antigravityActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  antigravityBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  antigravityRejectBtn: {
+    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.4)',
+  },
+  antigravityRejectBtnText: {
+    color: '#EF4444',
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  antigravityApproveBtn: {
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.5)',
+  },
+  antigravityApproveBtnText: {
+    color: '#10B981',
+    fontWeight: '700',
+    fontSize: 14,
   },
 });

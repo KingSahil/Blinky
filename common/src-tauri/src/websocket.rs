@@ -11,7 +11,7 @@ use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Listener, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command as TokioCommand};
 use tokio::sync::Mutex;
@@ -244,6 +244,116 @@ fn get_daemon_mutex() -> &'static Mutex<Option<AgentDaemon>> {
     DAEMON.get_or_init(|| Mutex::new(None))
 }
 
+static PENDING_HOOKS: OnceLock<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>> = OnceLock::new();
+
+fn get_pending_hooks() -> &'static Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>> {
+    PENDING_HOOKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Runs a local HTTP loopback server (port 9002) to bridge Antigravity IDE lifecycle hooks to Blinky Mobile.
+async fn start_antigravity_hook_server(app: AppHandle) {
+    let addr = "127.0.0.1:9002";
+    let listener = match TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to bind Antigravity hook bridge server to {}: {}", addr, e);
+            return;
+        }
+    };
+    println!("Antigravity hook bridge listening on http://{}", addr);
+
+    while let Ok((mut stream, _)) = listener.accept().await {
+        let app_clone = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut buf = [0u8; 8192];
+            let n = match stream.read(&mut buf).await {
+                Ok(n) if n > 0 => n,
+                _ => return,
+            };
+
+            let req_str = String::from_utf8_lossy(&buf[..n]);
+            let body = match req_str.split_once("\r\n\r\n") {
+                Some((_, b)) => b,
+                None => return,
+            };
+
+            let json_val: serde_json::Value = match serde_json::from_str(body.trim()) {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+
+            let event = json_val.get("event").and_then(|e| e.as_str()).unwrap_or("");
+            if event == "PreToolUse" {
+                let action_id = json_val.get("actionId").and_then(|a| a.as_str()).unwrap_or("unknown").to_string();
+                let tool_call = json_val.get("toolCall").cloned().unwrap_or(serde_json::json!({}));
+                let tool_name = tool_call.get("name").and_then(|n| n.as_str()).unwrap_or("unknown").to_string();
+                let tool_args = tool_call.get("args").cloned().unwrap_or(serde_json::json!({}));
+                let conv_id = json_val.get("conversationId").and_then(|c| c.as_str()).unwrap_or("").to_string();
+
+                let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+                {
+                    let mut pending = get_pending_hooks().lock().await;
+                    pending.insert(action_id.clone(), tx);
+                }
+
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                let notification = serde_json::json!({
+                    "type": "antigravity_approval",
+                    "actionId": action_id,
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "conversationId": conv_id,
+                    "timestamp": now
+                });
+                let payload_str = notification.to_string();
+                let _ = app_clone.emit("blinky://antigravity-approval", notification);
+                broadcast_to_all_clients(&payload_str).await;
+
+                // Await decision from mobile with a 30-second timeout
+                let decision = match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+                    Ok(Ok(d)) => d,
+                    _ => {
+                        let mut pending = get_pending_hooks().lock().await;
+                        pending.remove(&action_id);
+                        "ask".to_string()
+                    }
+                };
+
+                let resp_json = serde_json::json!({
+                    "decision": decision,
+                    "reason": format!("Decision ({decision}) processed via Blinky Mobile")
+                }).to_string();
+
+                let http_resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    resp_json.len(),
+                    resp_json
+                );
+                let _ = stream.write_all(http_resp.as_bytes()).await;
+            } else if event == "Stop" {
+                let conv_id = json_val.get("conversationId").and_then(|c| c.as_str()).unwrap_or("").to_string();
+                let reason = json_val.get("terminationReason").and_then(|r| r.as_str()).unwrap_or("model_stop").to_string();
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                let notification = serde_json::json!({
+                    "type": "antigravity_complete",
+                    "conversationId": conv_id,
+                    "reason": reason,
+                    "timestamp": now
+                });
+                let payload_str = notification.to_string();
+                let _ = app_clone.emit("blinky://antigravity-complete", notification);
+                broadcast_to_all_clients(&payload_str).await;
+
+                let http_resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+                let _ = stream.write_all(http_resp.as_bytes()).await;
+            } else {
+                let http_resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+                let _ = stream.write_all(http_resp.as_bytes()).await;
+            }
+        });
+    }
+}
+
 pub async fn start_websocket_server(app: AppHandle) {
     let addr = "0.0.0.0:9001";
     let listener = match TcpListener::bind(addr).await {
@@ -274,6 +384,11 @@ pub async fn start_websocket_server(app: AppHandle) {
         None
     };
     println!("WebSocket server listening on {} ({:?})", addr, mode);
+
+    let app_hook = app.clone();
+    tauri::async_runtime::spawn(async move {
+        start_antigravity_hook_server(app_hook).await;
+    });
 
     let _ = app.listen("blinky://mobile-status", |event| {
         let payload = event.payload().to_string();
@@ -823,6 +938,42 @@ where
                     ))
                     .await;
             } else if trimmed.starts_with("query:") || trimmed.starts_with("{") {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    let msg_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    if msg_type == "antigravity_action" {
+                        if let (Some(action_id), Some(decision)) = (
+                            parsed.get("actionId").and_then(|a| a.as_str()),
+                            parsed.get("decision").and_then(|d| d.as_str()),
+                        ) {
+                            println!("blinky: received Antigravity action: {} -> {}", action_id, decision);
+                            let mut pending = get_pending_hooks().lock().await;
+                            if let Some(tx) = pending.remove(action_id) {
+                                let _ = tx.send(decision.to_string());
+                            }
+                        }
+                        continue;
+                    } else if msg_type == "antigravity_prompt" {
+                        if let Some(prompt) = parsed.get("prompt").and_then(|p| p.as_str()) {
+                            println!("blinky: dispatching mobile prompt to Antigravity IDE: {}", prompt);
+                            let prompt_text = prompt.to_string();
+                            let root = project_root();
+                            tauri::async_runtime::spawn(async move {
+                                let python = python_executable(&root);
+                                let script = root.join("common").join("python").join("antigravity_actuator.py");
+                                let _ = TokioCommand::new(python)
+                                    .arg("-u")
+                                    .arg(&script)
+                                    .arg("--prompt")
+                                    .arg(&prompt_text)
+                                    .current_dir(&root)
+                                    .output()
+                                    .await;
+                            });
+                        }
+                        continue;
+                    }
+                }
+
                 let request_id = if trimmed.starts_with("query:") {
                     let parts: Vec<&str> = trimmed.splitn(3, ':').collect();
                     if parts.len() == 3 {
