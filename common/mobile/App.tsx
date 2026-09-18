@@ -501,6 +501,46 @@ const PinchableImageViewer: React.FC<PinchableImageViewerProps> = ({ uri, onClos
   );
 };
 
+interface SlashCommand {
+  id: string;
+  prefix: string;
+  title: string;
+  badge: string;
+  description: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  {
+    id: 'antigravity',
+    prefix: '/agy ',
+    title: '/antigravity',
+    badge: '/agy',
+    description: 'Dispatch prompt directly to Antigravity IDE on PC',
+    icon: 'flash',
+    color: '#3B82F6',
+  },
+  {
+    id: 'agent',
+    prefix: '/agent ',
+    title: '/agent',
+    badge: 'AUTONOMOUS',
+    description: 'Execute PC desktop agent with computer use',
+    icon: 'hardware-chip',
+    color: '#8B5CF6',
+  },
+  {
+    id: 'ask',
+    prefix: '/ask ',
+    title: '/ask',
+    badge: 'COMPANION',
+    description: 'Ask Blinky companion a question or query',
+    icon: 'sparkles',
+    color: '#FF5A36',
+  },
+];
+
 /** Renders the Blinky mobile companion and coordinates its desktop connection. */
 export default function App() {
   const [ipAddress, setIpAddress] = useState('');
@@ -917,8 +957,12 @@ export default function App() {
     }
 
     // Direct prompt to Antigravity IDE
-    if (queryText.startsWith('/agy ') || queryText.toLowerCase().startsWith('antigravity:')) {
-      const prompt = queryText.replace(/^(\/agy\s*|antigravity:\s*)/i, '').trim();
+    if (
+      queryText.startsWith('/agy ') ||
+      queryText.startsWith('/antigravity ') ||
+      queryText.toLowerCase().startsWith('antigravity:')
+    ) {
+      const prompt = queryText.replace(/^(\/(agy|antigravity)\s*|antigravity:\s*)/i, '').trim();
       if (prompt) {
         sendAntigravityPrompt(prompt);
         setAgentStatus('processing');
@@ -952,9 +996,16 @@ export default function App() {
         return;
       }
     }
+
     triggerHaptic('light');
-    
-    const query = queryText.trim();
+
+    // Parse agent or ask prefixes if provided
+    let query = queryText.trim();
+    if (query.startsWith('/agent ')) {
+      query = query.replace(/^\/agent\s+/i, '').trim();
+    } else if (query.startsWith('/ask ')) {
+      query = query.replace(/^\/ask\s+/i, '').trim();
+    }
     setRunningQuery(query);
     setQueryText('');
     setAgentStatus('processing');
@@ -2015,6 +2066,59 @@ export default function App() {
             })}
           </ScrollView>
 
+          {/* Slash Commands Dropdown Menu */}
+          {(() => {
+            const showSlashMenu = queryText.startsWith('/') && !queryText.includes(' ');
+            const slashFilter = queryText.toLowerCase().replace('/', '');
+            const filteredCommands = SLASH_COMMANDS.filter(cmd =>
+              !slashFilter ||
+              cmd.id.includes(slashFilter) ||
+              cmd.title.toLowerCase().includes(slashFilter) ||
+              cmd.badge.toLowerCase().includes(slashFilter)
+            );
+
+            if (!showSlashMenu || filteredCommands.length === 0) return null;
+
+            return (
+              <View style={styles.slashMenuContainer}>
+                <View style={styles.slashMenuHeader}>
+                  <Ionicons name="terminal-outline" size={13} color="#FF5A36" style={{ marginRight: 6 }} />
+                  <Text style={styles.slashMenuHeaderText}>COMMANDS</Text>
+                </View>
+                {filteredCommands.map((cmd, idx) => (
+                  <TouchableOpacity
+                    key={cmd.id}
+                    style={[
+                      styles.slashMenuItem,
+                      idx < filteredCommands.length - 1 && styles.slashMenuItemBorder
+                    ]}
+                    onPress={() => {
+                      triggerHaptic('light');
+                      setQueryText(cmd.prefix);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[styles.slashMenuIconBadge, { backgroundColor: `${cmd.color}22`, borderColor: `${cmd.color}55` }]}>
+                      <Ionicons name={cmd.icon} size={15} color={cmd.color} />
+                    </View>
+                    <View style={styles.slashMenuContent}>
+                      <View style={styles.slashMenuTitleRow}>
+                        <Text style={styles.slashMenuTitle}>{cmd.title}</Text>
+                        <View style={[styles.slashMenuBadge, { backgroundColor: `${cmd.color}22` }]}>
+                          <Text style={[styles.slashMenuBadgeText, { color: cmd.color }]}>{cmd.badge}</Text>
+                        </View>
+                      </View>
+                      <Text style={styles.slashMenuDesc} numberOfLines={1}>
+                        {cmd.description}
+                      </Text>
+                    </View>
+                    <Ionicons name="return-down-back-outline" size={14} color="#6C6985" />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            );
+          })()}
+
           {/* Bottom Chat Bar */}
           <View style={[styles.chatInputBar, !isConnected && styles.chatInputBarDisabled]}>
             {/* Voice Command Mic Circle Button */}
@@ -2786,5 +2890,81 @@ const styles = StyleSheet.create({
     color: '#10B981',
     fontWeight: '700',
     fontSize: 14,
+  },
+  slashMenuContainer: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    backgroundColor: 'rgba(18, 15, 28, 0.97)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 90, 54, 0.3)',
+    overflow: 'hidden',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  slashMenuHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  slashMenuHeaderText: {
+    color: '#8A86AA',
+    fontSize: 10.5,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  slashMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  slashMenuItemBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  slashMenuIconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  slashMenuContent: {
+    flex: 1,
+  },
+  slashMenuTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  slashMenuTitle: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  slashMenuBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  slashMenuBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  slashMenuDesc: {
+    color: '#9CA3AF',
+    fontSize: 11.5,
   },
 });
