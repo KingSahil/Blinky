@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command as TokioCommand};
@@ -274,6 +274,13 @@ pub async fn start_websocket_server(app: AppHandle) {
         None
     };
     println!("WebSocket server listening on {} ({:?})", addr, mode);
+
+    let _ = app.listen("blinky://mobile-status", |event| {
+        let payload = event.payload().to_string();
+        tokio::spawn(async move {
+            broadcast_to_all_clients(&payload).await;
+        });
+    });
 
     while let Ok((stream, peer_addr)) = listener.accept().await {
         println!("New peer connection: {}", peer_addr);
@@ -833,51 +840,39 @@ where
                     "unknown".to_string()
                 };
 
-                let req_payload = if trimmed.starts_with("query:") {
+                let query_text = if trimmed.starts_with("query:") {
                     let parts: Vec<&str> = trimmed.splitn(3, ':').collect();
                     if parts.len() == 3 {
-                        serde_json::json!({
-                            "requestId": parts[1],
-                            "query": parts[2]
-                        })
-                        .to_string()
+                        parts[2].to_string()
                     } else {
-                        serde_json::json!({
-                            "requestId": "unknown",
-                            "query": trimmed
-                        })
-                        .to_string()
+                        trimmed.to_string()
                     }
+                } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    parsed
+                        .get("query")
+                        .and_then(|q| q.as_str())
+                        .unwrap_or("")
+                        .to_string()
                 } else {
                     trimmed.to_string()
                 };
 
-                let sender_clone = ws_sender.clone();
-                let app_clone = app.clone();
-                tokio::spawn(async move {
-                    if let Err(e) =
-                        forward_query_to_daemon(&req_payload, sender_clone.clone(), app_clone).await
-                    {
-                        eprintln!("Error handling agent query: {:?}", e);
-                        let error_resp = serde_json::json!({
-                            "requestId": request_id,
-                            "status": "error",
-                            "data": {},
-                            "error": {
-                                "code": "DAEMON_ERROR",
-                                "message": "Failed to communicate with python sidecar daemon",
-                                "details": e.to_string()
-                            }
-                        });
-                        let _ = sender_clone
-                            .lock()
-                            .await
-                            .send(tokio_tungstenite::tungstenite::Message::Text(
-                                error_resp.to_string().into(),
-                            ))
-                            .await;
-                    }
-                });
+                println!(
+                    "blinky: received remote query from mobile: '{}' (req_id: {})",
+                    query_text, request_id
+                );
+
+                // PC & Mobile Command Unification:
+                // Mobile is strictly a remote input transmitter for PC Blinky.
+                // Dispatch directly to CommandBar desktop frontend so it executes
+                // using the exact same PC Blinky tutor, UIA, OmniParser, and autopilot loop as PC.
+                let _ = app.emit(
+                    "blinky://mobile-query",
+                    serde_json::json!({
+                        "requestId": request_id,
+                        "query": query_text
+                    }),
+                );
             } else {
                 eprintln!("Unknown WebSocket command from {}", peer_addr);
             }
@@ -1006,6 +1001,7 @@ async fn handle_desktop_action(app: &AppHandle, parsed: &serde_json::Value) {
     }
 }
 
+#[allow(dead_code)]
 async fn forward_query_to_daemon<S>(
     req_json: &str,
     ws_sender: WsSender<S>,

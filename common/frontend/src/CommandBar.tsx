@@ -143,6 +143,10 @@ export function CommandBar() {
   };
 
   const [isRunning, setIsRunning] = useState(false);
+  const isRunningRef = useRef(false);
+  useEffect(() => {
+    isRunningRef.current = isRunning;
+  }, [isRunning]);
   const [webSearchEnabled, setWebSearchEnabled] = useState(false);
   const [agentModeEnabled, setAgentModeEnabled] = useState(false);
   const defaultStatus = 'Ask anything on your screen';
@@ -204,6 +208,10 @@ export function CommandBar() {
     resizeRef.current = null;
   };
   const [status, setStatus] = useState(defaultStatus);
+  const statusRef = useRef(defaultStatus);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
   const [spokenStatus, setSpokenStatus] = useState<string>('');
   const [isTtsActive, setIsTtsActive] = useState<boolean>(false);
   const [steps, setSteps] = useState<any[]>([]);
@@ -1176,7 +1184,8 @@ export function CommandBar() {
     shouldSpeakAfter: boolean,
     options: TutorRunOptions = {},
   ) {
-    if (isRunning) return;
+    if (isRunningRef.current) return;
+    isRunningRef.current = true;
     let effectiveQuery = queryText.trim().replace(/^(hey\s+)?blinky[\s,.:;!?]*/i, '').trim();
     if (attachedFiles.length > 0) {
       const pathsStr = attachedFiles.map((f) => f.path).join(', ');
@@ -1462,6 +1471,7 @@ export function CommandBar() {
     } finally {
       cancelledRunIdsRef.current.delete(runId);
       if (runIdRef.current === runId) {
+        isRunningRef.current = false;
         setIsRunning(false);
         if (!isPointing) {
           void emit('blinky://agent-cursor-done', {});
@@ -1475,8 +1485,9 @@ export function CommandBar() {
 
   function stopCurrentRun() {
     const runId = runIdRef.current;
-    if (!isRunning || runId === 0) return;
+    if (!isRunningRef.current || runId === 0) return;
     cancelledRunIdsRef.current.add(runId);
+    isRunningRef.current = false;
     setIsRunning(false);
     setStatus('Stopped.');
     setSteps([]);
@@ -1802,6 +1813,48 @@ export function CommandBar() {
       const msg = event.payload?.message || `⚡ Sentinel: Remote ${action} initiated.`;
       setStatus(msg);
       setShowGuideCompletionSummary(true);
+    });
+    return () => {
+      unlisten.then((dispose) => dispose());
+    };
+  }, []);
+
+  // Listen for remote mobile queries: executes with native PC Blinky tutor & autopilot pipeline
+  useEffect(() => {
+    const unlisten = listen<{ requestId: string; query: string }>('blinky://mobile-query', async (event) => {
+      const { requestId, query } = event.payload;
+      if (!query || !query.trim()) return;
+      const cleanQuery = query.trim();
+      setQuestion(cleanQuery);
+      try {
+        await emit('blinky://mobile-status', {
+          requestId: requestId || 'unknown',
+          status: 'processing',
+          data: { message: `Executing '${cleanQuery}' with AI companion...`, percent: 40 },
+        });
+
+        await executeTutor(cleanQuery, false, { resetProgress: true });
+
+        const summary = statusRef.current || `Completed: ${cleanQuery}`;
+        await emit('blinky://mobile-status', {
+          requestId: requestId || 'unknown',
+          status: 'success',
+          data: {
+            response: summary,
+            steps: currentGuideStepsRef.current,
+          },
+        });
+      } catch (err: any) {
+        await emit('blinky://mobile-status', {
+          requestId: requestId || 'unknown',
+          status: 'error',
+          error: {
+            code: 'EXECUTION_ERROR',
+            message: err instanceof Error ? err.message : String(err),
+            details: '',
+          },
+        });
+      }
     });
     return () => {
       unlisten.then((dispose) => dispose());

@@ -203,8 +203,14 @@ export function Overlay() {
       let targetCssX = (event.payload.x / pixelRatio) - offsetsRef.current.x;
       let targetCssY = (event.payload.y / pixelRatio) - offsetsRef.current.y;
 
-      // If a visible highlight frame exists on screen, point directly at the highlight frame center
-      if (framesRef.current && framesRef.current.length > 0) {
+      const hasExplicitCoords =
+        typeof event.payload.x === 'number' &&
+        !isNaN(event.payload.x) &&
+        typeof event.payload.y === 'number' &&
+        !isNaN(event.payload.y);
+
+      // Only fall back to highlight frame center if no explicit coordinates were given
+      if (!hasExplicitCoords && framesRef.current && framesRef.current.length > 0) {
         const frame = framesRef.current[0];
         targetCssX = frame.left + frame.width / 2;
         targetCssY = frame.top + frame.height / 2;

@@ -830,8 +830,27 @@ async def handle_request(line):
             matched_step = next((s for s in steps if s.get("match")), None)
             if matched_step:
                 match_obj = matched_step.get("match", {})
-                cx = match_obj.get("x")
-                cy = match_obj.get("y")
+                mx = float(match_obj.get("x", 0))
+                my = float(match_obj.get("y", 0))
+                mw = float(match_obj.get("width", 0))
+                mh = float(match_obj.get("height", 0))
+                point_x = mx + mw / 2.0
+                point_y = my + mh / 2.0
+
+                # Convert screenshot space to physical screen pixel space (exact match with PC getPhysicalClickablePoint)
+                screenshot_info = tutor_result.get("screenshot") or {}
+                s_w = float(screenshot_info.get("width") or 0)
+                s_h = float(screenshot_info.get("height") or 0)
+                sc_w = float(screenshot_info.get("screen_width") or 0)
+                sc_h = float(screenshot_info.get("screen_height") or 0)
+
+                if s_w > 0 and sc_w > 0 and s_h > 0 and sc_h > 0:
+                    cx = round(point_x * (sc_w / s_w))
+                    cy = round(point_y * (sc_h / s_h))
+                else:
+                    cx = round(point_x)
+                    cy = round(point_y)
+
                 label = matched_step.get("target_text") or click_target or locator_target or target_name
                 if cx is not None and cy is not None:
                     if is_click_cmd:

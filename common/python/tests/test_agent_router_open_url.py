@@ -334,8 +334,8 @@ class AgentRouterOpenUrlRequestTests(unittest.IsolatedAsyncioTestCase):
             await handle_request('{"requestId":"click123","query":"click instagram"}')
         mock_send.assert_any_call("click123", "action", data={
             "type": "click",
-            "x": 550,
-            "y": 420,
+            "x": 570,
+            "y": 440,
             "label": "Instagram",
         })
         mock_send.assert_any_call("click123", "success", data={"response": "Clicked Instagram."})
@@ -367,8 +367,8 @@ class AgentRouterOpenUrlRequestTests(unittest.IsolatedAsyncioTestCase):
             await handle_request('{"requestId":"find456","query":"find instagram"}')
         mock_send.assert_any_call("find456", "action", data={
             "type": "point",
-            "x": 300,
-            "y": 600,
+            "x": 325,
+            "y": 625,
             "label": "Instagram",
         })
         mock_send.assert_any_call("find456", "success", data={
