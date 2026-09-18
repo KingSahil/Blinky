@@ -945,6 +945,67 @@ where
     Ok(authenticated)
 }
 
+async fn handle_desktop_action(app: &AppHandle, parsed: &serde_json::Value) {
+    let status = parsed.get("status").and_then(|s| s.as_str());
+    if status == Some("action") {
+        if let Some(data) = parsed.get("data") {
+            let action_type = data.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if action_type == "click" || action_type == "point" {
+                if let (Some(x), Some(y)) = (
+                    data.get("x").and_then(|v| v.as_i64()),
+                    data.get("y").and_then(|v| v.as_i64()),
+                ) {
+                    let label = data
+                        .get("label")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    // 1. Show overlay window so AI companion cursor is visible on PC
+                    if let Some(overlay) = app.get_webview_window("overlay") {
+                        let _ = overlay.show();
+                        let _ = overlay.set_always_on_top(true);
+                        crate::platform::configure_overlay_passthrough(&overlay);
+
+                        // 2. Animate AI cursor glide towards target coordinates
+                        let instruction = if action_type == "click" {
+                            format!("Click {}", label)
+                        } else {
+                            format!("Here is {}", label)
+                        };
+                        let _ = overlay.emit(
+                            "blinky://agent-cursor-move",
+                            serde_json::json!({
+                                "x": x,
+                                "y": y,
+                                "instruction": instruction
+                            }),
+                        );
+                    }
+
+                    if action_type == "click" {
+                        // 3. Wait for hardware CSS glide animation (~220-240ms)
+                        tokio::time::sleep(std::time::Duration::from_millis(240)).await;
+
+                        // 4. Dispatch the native click via platform actuator
+                        let label_clone = label.clone();
+                        let _ = tauri::async_runtime::spawn_blocking(move || {
+                            crate::platform::click_element_impl(x as i32, y as i32, &label_clone)
+                        })
+                        .await;
+
+                        // 5. Reset/fade AI companion cursor
+                        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                        if let Some(overlay) = app.get_webview_window("overlay") {
+                            let _ = overlay.emit("blinky://agent-cursor-done", serde_json::json!({}));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 async fn forward_query_to_daemon<S>(
     req_json: &str,
     ws_sender: WsSender<S>,
@@ -1023,6 +1084,7 @@ where
                     // Check for terminal state & emit overlay guidance
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&line) {
                         emit_agent_progress(&app, &line);
+                        handle_desktop_action(&app, &parsed).await;
                         if let Some(status) = parsed.get("status").and_then(|s| s.as_str()) {
                             if status == "success" {
                                 if let Some(data) = parsed.get("data") {
@@ -1123,6 +1185,7 @@ async fn forward_query_to_daemon_collect(
                     lines.push(line.clone());
 
                     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&line) {
+                        handle_desktop_action(app, &parsed).await;
                         if let Some(status) = parsed.get("status").and_then(|s| s.as_str()) {
                             if status == "success" || status == "error" {
                                 break;

@@ -253,16 +253,16 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
     const rev2 = spawn([adb, "reverse", "tcp:8081", "tcp:8081"]);
     await Promise.race([rev2.exited, new Promise(r => setTimeout(r, 1500))]);
 
-    // Check if Metro bundler is already running
+    // Check if Metro bundler is already running on IPv4
     let mobileProc: Subprocess | null = null;
     let isRunning = false;
     try {
-      const res = await fetch("http://localhost:8081", { signal: AbortSignal.timeout(1000) });
+      const res = await fetch("http://127.0.0.1:8081", { signal: AbortSignal.timeout(1000) });
       isRunning = res.status === 200 || res.status === 404;
     } catch {}
 
     if (isRunning) {
-      console.log("[Mobile] ⚡ Metro bundler is already running on port 8081.");
+      console.log("[Mobile] ⚡ Metro bundler is already running on port 8081 (IPv4).");
     } else {
       if (process.platform === "win32") {
         try {
@@ -292,8 +292,8 @@ function getTailscaleIp(): string | null {
         console.log(`[Mobile] 🔒 Detected Tailscale IP: ${tailscaleIp}`);
       }
 
-      console.log("[Mobile] 🚀 Starting Expo mobile development server on port 8081 (localhost over USB)...");
-      mobileProc = spawn(["bun", "run", "start", "--", "--localhost"], {
+      console.log("[Mobile] 🚀 Starting Expo mobile development server on port 8081 (all interfaces)...");
+      mobileProc = spawn(["bun", "run", "start", "--", "--host", "lan"], {
         cwd: "common/mobile",
         stdout: "inherit",
         stderr: "inherit",
@@ -313,7 +313,7 @@ function getTailscaleIp(): string | null {
       let ready = false;
       for (let i = 0; i < maxAttempts; i++) {
         try {
-          const res = await fetch("http://localhost:8081/status", { signal: AbortSignal.timeout(1000) });
+          const res = await fetch("http://127.0.0.1:8081/status", { signal: AbortSignal.timeout(1000) });
           if (res.status === 200) {
             ready = true;
             break;
@@ -329,12 +329,12 @@ function getTailscaleIp(): string | null {
       }
 
       try {
-        const launchExpo = spawn([adb, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
-        await launchExpo.exited;
+        const launchCustom = spawn([adb, "shell", "am", "start", "-n", "com.technerds.blinkyremote/.MainActivity"]);
+        await launchCustom.exited;
       } catch {
         try {
-          const launchCustom = spawn([adb, "shell", "am", "start", "-n", "com.technerds.blinkyremote/.MainActivity"]);
-          await launchCustom.exited;
+          const launchExpo = spawn([adb, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
+          await launchExpo.exited;
         } catch {}
       }
     })();

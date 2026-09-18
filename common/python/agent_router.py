@@ -793,6 +793,94 @@ async def handle_request(line):
                 send_response(request_id, "error", error={"code": "OPEN_URL_FAILED", "message": f"Failed to open {label}", "details": str(e)})
             return
 
+        # ── Direct Screen Action Fast-Path (matches PC execution logic) ──
+        # Uses the exact same UIA, element ref, and OmniParser screen-action pipeline as PC.
+        # Bypasses slow LLM classification to execute fast and glide the visual companion cursor.
+        from main import extract_click_target, extract_locator_target
+        click_target = extract_click_target(query)
+        locator_target = extract_locator_target(query)
+        is_click_cmd = bool(click_target) or query.lower().strip().startswith(("click ", "tap ", "press ", "select ", "hit ", "push "))
+        is_locator_cmd = bool(locator_target) or is_click_cmd or query.lower().strip().startswith(("find ", "where ", "locate ", "show me ", "look for ", "spot "))
+        if is_locator_cmd:
+            target_name = click_target or locator_target or "target"
+            send_response(request_id, "processing", data={"message": f"Locating {target_name} on screen with AI cursor...", "percent": 50})
+            
+            tutor_result = None
+            try:
+                from main import run as main_run
+                tutor_result = await asyncio.to_thread(
+                    main_run,
+                    query,
+                    agent_mode=False,
+                )
+            except Exception as exc:
+                import logging
+                logging.getLogger("blinky.agent_router").warning(f"In-process main_run failed: {exc}, using subprocess fallback")
+                payload_in = {
+                    "question": query,
+                    "previous_question": None,
+                    "progress": {},
+                    "conversation_history": [],
+                    "web_search_enabled": False,
+                    "agent_mode": False,
+                }
+                tutor_result = await run_main_py_subprocess(payload_in, request_id)
+
+            steps = tutor_result.get("steps", []) if tutor_result else []
+            matched_step = next((s for s in steps if s.get("match")), None)
+            if matched_step:
+                match_obj = matched_step.get("match", {})
+                cx = match_obj.get("x")
+                cy = match_obj.get("y")
+                label = matched_step.get("target_text") or click_target or locator_target or target_name
+                if cx is not None and cy is not None:
+                    if is_click_cmd:
+                        send_response(request_id, "processing", data={"message": f"Moving AI cursor to {label}...", "percent": 90})
+                        # Emit action event so Tauri desktop glides the AI cursor overlay and dispatches the click
+                        send_response(request_id, "action", data={
+                            "type": "click",
+                            "x": int(cx),
+                            "y": int(cy),
+                            "label": str(label),
+                        })
+                        send_response(request_id, "success", data={"response": f"Clicked {label}."})
+                        return
+                    else:
+                        send_response(request_id, "action", data={
+                            "type": "point",
+                            "x": int(cx),
+                            "y": int(cy),
+                            "label": str(label),
+                        })
+                        send_response(request_id, "success", data={
+                            "response": tutor_result.get("summary") or f"Located {label} on screen.",
+                            "steps": steps,
+                            "active_app": tutor_result.get("active_app", {}),
+                            "ocr": tutor_result.get("ocr", {}),
+                        })
+                        return
+            elif click_target or locator_target:
+                target_to_open = click_target or locator_target
+                from computer_use import is_web_destination, looks_like_app_name
+                from computer_use.tools import normalize_app_name, APP_PROTOCOLS, APP_NAME_ALIASES
+                norm_target = normalize_app_name(target_to_open)
+                if is_web_destination(norm_target):
+                    from computer_use.tools import open_web_destination_tool
+                    send_response(request_id, "processing", data={"message": f"'{target_to_open}' is not on screen. Opening {target_to_open} in browser...", "percent": 90})
+                    web_res = await asyncio.to_thread(open_web_destination_tool, norm_target)
+                    if web_res.success:
+                        send_response(request_id, "success", data={"response": f"I couldn't locate {target_to_open} on your screen, so I opened it in your browser."})
+                        return
+                elif norm_target in APP_PROTOCOLS or norm_target in APP_NAME_ALIASES or looks_like_app_name(norm_target):
+                    from computer_use.tools import open_app_tool
+                    send_response(request_id, "processing", data={"message": f"'{target_to_open}' is not on screen. Opening {target_to_open}...", "percent": 90})
+                    app_res = await asyncio.to_thread(open_app_tool, target_to_open)
+                    if app_res.success:
+                        send_response(request_id, "success", data={"response": f"I couldn't locate {target_to_open} on your screen, so I launched the app for you."})
+                        return
+                send_response(request_id, "success", data={"response": f"I could not find '{target_to_open}' on your screen."})
+                return
+
         preflight = classify_request(query, None, [], None, agent_mode=True)
 
         if preflight:
@@ -866,11 +954,20 @@ async def handle_request(line):
                 if i in {"DESKTOP_AUTOMATION", "COMPUTER_USE"}:
                     return True
                 lowered = q.lower().strip()
-                screen_keywords = {"highlight", "point", "where is", "where's", "show me", "locate", "click on", "select", "which button", "find"}
+                screen_keywords = {"highlight", "point", "where is", "where's", "show me", "locate", "click", "click on", "select", "which button", "find", "tap", "press"}
                 return any(k in lowered for k in screen_keywords)
 
             if is_screen_query(query, intent):
-                send_response(request_id, "processing", data={"message": "Inspecting PC screen...", "percent": 50})
+                from main import extract_click_target
+                click_target = extract_click_target(query)
+                is_click_cmd = bool(click_target) or query.lower().strip().startswith(("click", "tap", "press", "select"))
+
+                if is_click_cmd:
+                    target_name = click_target or "target"
+                    send_response(request_id, "processing", data={"message": f"Locating {target_name} on screen with AI cursor...", "percent": 50})
+                else:
+                    send_response(request_id, "processing", data={"message": "Inspecting PC screen...", "percent": 50})
+
                 from utils.screen_annotator import annotate_screenshot
                 
                 payload_in = {
@@ -879,18 +976,25 @@ async def handle_request(line):
                     "progress": {},
                     "conversation_history": [],
                     "web_search_enabled": False,
-                    "agent_mode": False,
+                    "agent_mode": True if is_click_cmd else False,
                 }
-                tutor_result = await run_main_py_subprocess(payload_in, request_id)
+                tutor_result = None
+                try:
+                    from main import run as main_run
+                    tutor_result = await asyncio.to_thread(
+                        main_run,
+                        query,
+                        agent_mode=True if is_click_cmd else False,
+                    )
+                except Exception as exc:
+                    import logging
+                    logging.getLogger("blinky.agent_router").warning(f"In-process main_run failed: {exc}, using subprocess fallback")
+                    tutor_result = await run_main_py_subprocess(payload_in, request_id)
                 screenshot_path = tutor_result.get("screenshot", {}).get("path")
                 steps = tutor_result.get("steps", [])
 
-                # If this query was a click action, execute the click on the matched coordinates
-                from main import extract_click_target
-                click_target = extract_click_target(query)
-                is_click_cmd = bool(click_target) or any(
-                    "click" in str(s.get("instruction", "")).lower() for s in steps
-                ) or query.lower().strip().startswith(("click", "tap", "press", "select"))
+                if not is_click_cmd and any("click" in str(s.get("instruction", "")).lower() for s in steps):
+                    is_click_cmd = True
 
                 click_step = next((s for s in steps if s.get("match")), None)
                 if is_click_cmd and click_step:
@@ -899,11 +1003,18 @@ async def handle_request(line):
                     cy = match_obj.get("y")
                     label = click_step.get("target_text") or click_target or "the target"
                     if cx is not None and cy is not None:
-                        send_response(request_id, "processing", data={"message": f"Clicking {label}...", "percent": 90})
+                        send_response(request_id, "processing", data={"message": f"Moving AI cursor to {label}...", "percent": 90})
+                        # Emit action event so Tauri desktop can glide the AI cursor overlay and execute the click
+                        send_response(request_id, "action", data={
+                            "type": "click",
+                            "x": int(cx),
+                            "y": int(cy),
+                            "label": str(label),
+                        })
                         from computer_use.actuator import click_element
                         click_res = await asyncio.to_thread(click_element, x=int(cx), y=int(cy), name=str(label))
-                        if click_res.get("ok"):
-                            tutor_result["summary"] = f"Clicked {label}."
+                        send_response(request_id, "success", data={"response": f"Clicked {label}."})
+                        return
                 elif is_click_cmd and not click_step and click_target:
                     # Target was not found on screen. Check if it's a known web destination or app to open as fallback
                     from computer_use import is_web_destination, looks_like_app_name
@@ -911,17 +1022,22 @@ async def handle_request(line):
                     norm_target = normalize_app_name(click_target)
                     if is_web_destination(norm_target):
                         from computer_use.tools import open_web_destination_tool
-                        send_response(request_id, "processing", data={"message": f"Opening {click_target}...", "percent": 90})
+                        send_response(request_id, "processing", data={"message": f"'{click_target}' is not on screen. Opening {click_target} in browser...", "percent": 90})
                         web_res = await asyncio.to_thread(open_web_destination_tool, norm_target)
                         if web_res.success:
-                            tutor_result["summary"] = web_res.message
+                            send_response(request_id, "success", data={"response": f"I couldn't locate {click_target} on your screen, so I opened it in your browser."})
+                            return
                     elif norm_target in APP_PROTOCOLS or norm_target in APP_NAME_ALIASES or looks_like_app_name(norm_target):
                         from computer_use.tools import open_app_tool
-                        send_response(request_id, "processing", data={"message": f"Opening {click_target}...", "percent": 90})
+                        send_response(request_id, "processing", data={"message": f"'{click_target}' is not on screen. Opening {click_target}...", "percent": 90})
                         app_res = await asyncio.to_thread(open_app_tool, click_target)
                         if app_res.success:
-                            tutor_result["summary"] = app_res.message
+                            send_response(request_id, "success", data={"response": f"I couldn't locate {click_target} on your screen, so I launched the app for you."})
+                            return
+                    send_response(request_id, "success", data={"response": f"I could not find '{click_target}' on your screen to click."})
+                    return
 
+                # Non-click screen queries (e.g. "where is...", "highlight..."): return annotated screenshot
                 screenshot_b64 = None
                 if screenshot_path and steps:
                     screenshot_b64 = await asyncio.to_thread(annotate_screenshot, screenshot_path, steps)

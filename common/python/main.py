@@ -203,7 +203,10 @@ def should_skip_preflight_for_local_fast_path(question: str) -> bool:
         return True
     if is_screen_explanation_question(normalized):
         return True
-    click_words = {"click", "select", "choose", "press", "tap", "change", "switch", "set"}
+    click_words = {
+        "click", "select", "choose", "press", "tap", "change", "switch", "set",
+        "find", "locate", "spot", "hit", "push", "where", "show", "point", "look"
+    }
     words = normalized.split()
     first_word = words[0] if words else ""
     if first_word in click_words:
@@ -1300,18 +1303,22 @@ def is_control_locator_question(question: str) -> bool:
 
 def should_accept_locator_match(question: str, match_result: dict) -> bool:
     if not is_control_locator_question(question):
-        return bool(match_result["is_exact_text"] or match_result["text_similarity"] >= 0.86 or match_result["score"] >= 0.82)
+        return bool(match_result["is_exact_text"] or match_result["text_similarity"] >= 0.82 or match_result["score"] >= 0.78)
 
     control_type = str(match_result.get("control_type", "")).lower()
     source = str(match_result.get("source", "")).lower()
-    is_interactive = source == "uia" and control_type in {"button", "image", "tabitem", "menuitem", "edit", "textbox", "combobox"}
+    is_interactive = (
+        (source == "uia" and control_type in {"button", "image", "tabitem", "menuitem", "edit", "textbox", "combobox", "listitem", "custom"})
+        or (source == "omniparser")
+        or (source in {"ocr", "winrt"} and match_result.get("is_exact_text"))
+    )
     if not is_interactive:
         return False
     if int(match_result.get("ambiguous_candidate_count") or match_result.get("candidate_count") or 0) > 1:
         return False
     if bool(match_result.get("is_exact_text")):
-        return float(match_result.get("score") or 0) >= 0.9
-    return float(match_result.get("score") or 0) >= 0.95 and float(match_result.get("text_similarity") or 0) >= 0.86
+        return float(match_result.get("score") or 0) >= 0.8
+    return float(match_result.get("score") or 0) >= 0.82 and float(match_result.get("text_similarity") or 0) >= 0.78
 
 
 def icon_like_control_candidates(items: list[dict]) -> list[dict]:
@@ -1413,6 +1420,10 @@ def extract_locator_target(question: str) -> str | None:
         r"^point\s+to\s+(?:the\s+)?(.+?)(?:\?|$)",
         r"^locate\s+(?:the\s+)?(.+?)(?:\?|$)",
         r"^highlight\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^find\s+(?:me\s+)?(?:the\s+)?(.+?)(?:\?|$)",
+        r"^search\s+(?:for\s+)?(?:the\s+)?(.+?)(?:\?|$)",
+        r"^look\s+for\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^spot\s+(?:the\s+)?(.+?)(?:\?|$)",
     ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.IGNORECASE)
@@ -1427,7 +1438,7 @@ def extract_click_target(question: str) -> str | None:
         return None
 
     patterns = [
-        r"^(?:click|select|choose|press|tap)\s+(?:on\s+)?(?:the\s+)?(.+?)(?:\?|$)",
+        r"^(?:click|select|choose|press|tap|hit|push)\s+(?:on\s+)?(?:the\s+)?(.+?)(?:\?|$)",
         r"^(?:change|switch|set|turn)\s+(?:(?:dark|light|custom|theme|mode)\s+)?to\s+(?:the\s+)?(.+?)(?:\?|$)",
         r"^(?:change|switch|set)\s+(?:from\s+\w+\s+)?to\s+(?:the\s+)?(.+?)(?:\?|$)",
     ]

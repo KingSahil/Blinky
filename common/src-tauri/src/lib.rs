@@ -1,4 +1,4 @@
-mod platform;
+pub(crate) mod platform;
 mod tls_identity;
 mod transport;
 mod websocket;

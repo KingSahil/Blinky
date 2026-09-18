@@ -1606,7 +1606,7 @@ export default function App() {
                 <Ionicons name="lock-open-outline" size={20} color="#6C6985" style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
-                  placeholder="Workstation PIN / Password (optional)"
+                  placeholder="Windows Account Password"
                   placeholderTextColor="#6C6985"
                   value={workstationPin}
                   onChangeText={(val) => {
@@ -1619,7 +1619,7 @@ export default function App() {
                 />
               </View>
               <Text style={{ color: '#6C6985', fontSize: 11, marginTop: -6, marginBottom: 8, paddingHorizontal: 4, lineHeight: 15 }}>
-                Wakes monitors & dismisses lock curtain. (Windows security isolates the Secure Desktop PIN prompt).
+                Enter your Windows password (not Windows Hello PIN) to unlock remotely via the Unlock Provider.
               </Text>
               <View style={styles.actionRow}>
 

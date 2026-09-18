@@ -38,15 +38,13 @@ reg add "HKLM\SOFTWARE\Classes\CLSID\%GUID%\InprocServer32" /v ThreadingModel /d
 echo [INFO] Registering credential provider...
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\Credential Providers\%GUID%" /ve /d "UnlockProvider" /f >nul
 
-echo [INFO] Installing BlinkyUnlock scheduled task...
-if not exist "%ProgramData%\Blinky" mkdir "%ProgramData%\Blinky"
-copy /Y "%~dp0unlock_helper.ps1" "%ProgramData%\Blinky\unlock_helper.ps1"
-if errorlevel 1 (
-    echo [WARN] Could not copy unlock_helper.ps1 to %ProgramData%\Blinky
-)
+:: Enable password authentication support (disable Windows 11 passwordless restriction)
+echo [INFO] Enabling password sign-in support in registry...
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device" /v DevicePasswordLessBuildVersion /t REG_DWORD /d 0 /f >nul
 
-powershell -NoProfile -Command ^
-  "& { $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ''%ProgramData%\Blinky\unlock_helper.ps1'''); $p = New-ScheduledTaskPrincipal -UserId SYSTEM -LogonType ServiceAccount -RunLevel Highest; $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries; Register-ScheduledTask -Force -TaskName BlinkyUnlock -Action $a -Principal $p -Settings $s | Out-Null; Write-Host '[INFO] BlinkyUnlock scheduled task registered (runs as SYSTEM).' }"
+:: Clean up any obsolete scheduled task from prior revisions
+schtasks /delete /tn "BlinkyUnlock" /f >nul 2>&1
+if exist "%ProgramData%\Blinky\unlock_helper.ps1" del /f "%ProgramData%\Blinky\unlock_helper.ps1" >nul 2>&1
 
 echo.
 echo ============================================
@@ -54,6 +52,20 @@ echo  Blinky Unlock Provider Registered!
 echo ============================================
 echo  Credential Provider: active on lock screen
 echo  Named pipe:  \\.\pipe\CredentialProviderPipe
-echo  Unlock task: schtasks /run /tn BlinkyUnlock
 echo ============================================
+echo.
+echo You can now set your local Windows unlock password for user 'sahil'.
+echo (Tip: Setting it to 1750 matches your Windows Hello PIN so you can use 1750 everywhere!)
+echo.
+set /p NEWPASS="Enter unlock password for sahil (e.g. 1750 or your Microsoft password) [or press Enter to skip]: "
+if not "%NEWPASS%"=="" (
+    net user sahil "%NEWPASS%"
+    if errorlevel 1 (
+        echo [ERROR] Failed to set password.
+    ) else (
+        echo.
+        echo [SUCCESS] Local password for sahil set successfully!
+    )
+)
+echo.
 pause

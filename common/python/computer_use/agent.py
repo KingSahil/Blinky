@@ -286,24 +286,9 @@ def _try_desktop_action(question: str) -> ToolResult | None:
     # Click an element
     click_match = CLICK_ELEMENT_RE.match(question)
     if click_match:
-        element = click_match.group("element")
-        app = click_match.group("app")
-        if element:
-            from .tools import click_element_tool
-            res = click_element_tool(name=element.strip())
-            if res.success:
-                return res
-            # Fallback: if clicking on screen didn't find the element,
-            # and the target is a known web destination or app, open it
-            norm_el = normalize_app_name(element.strip())
-            if is_web_destination(norm_el):
-                from .tools import open_web_destination_tool
-                return open_web_destination_tool(norm_el)
-            is_known_app = norm_el in APP_PROTOCOLS or norm_el in APP_NAME_ALIASES
-            if is_known_app:
-                from .tools import open_app_tool
-                return open_app_tool(element.strip())
-            return res
+        # Screen clicks require UI visual grounding and AI cursor movement (OmniParser/UIA/refs)
+        # Return None to allow the full vision/autopilot pipeline to resolve coordinates and glide cursor.
+        return None
 
     # Type text
     type_match = TYPE_TEXT_RE.match(question)

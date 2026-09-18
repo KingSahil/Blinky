@@ -77,95 +77,42 @@ pub fn execute_unlock(pin: Option<&str>) {
         let _ = send_vk_key(0x20, false);
         sleep(Duration::from_millis(300));
 
-        // OPTION C: tscon via a temporary SYSTEM service - reconnects the locked session
-        // without needing any password or PIN. Works for Win+L style locks.
-        match try_tscon_unlock() {
-            Ok(()) => {
-                println!("blinky: Workstation successfully unlocked via tscon (SYSTEM service)!");
-                return;
-            }
-            Err(err) => {
-                println!("blinky: tscon unlock failed: {err}. Falling back to credential provider...");
-            }
-        }
-
         if let Some(ref pin_str) = pin_owned {
             let trimmed = pin_str.trim();
             if !trimmed.is_empty() {
-                // Fallback: open-source Windows Credential Provider (direct pipe unlock via LSA)
+                // Primary unlock: Windows Credential Provider (named pipe into LogonUI)
                 match try_named_pipe_unlock(trimmed) {
                     Ok(()) => {
                         println!("blinky: Workstation successfully unlocked via CredentialProviderPipe!");
                         return;
                     }
                     Err(err) => {
-                        println!("blinky: Named pipe unlock attempt: {err}");
+                        println!("blinky: Named pipe unlock attempt: {err}. Falling back to virtual input...");
                     }
                 }
-            }
-        }
 
-        // Fallback: If Credential Provider is not registered, wait for the lock curtain animation to finish
-        // and attempt virtual key typing (works on certain configurations or when already at credential screen)
-        if let Some(pin_str) = pin_owned {
-            let trimmed = pin_str.trim();
-            if !trimmed.is_empty() {
-                // Windows 10/11 lock screen curtain animation takes ~900ms to lift and focus the PIN box
-                sleep(Duration::from_millis(800));
+                // Fallback: If Credential Provider is not registered, wait for the lock curtain animation to finish
+                // and attempt virtual key typing
+                sleep(Duration::from_millis(600));
 
-                // Clear any stray input or space that may have entered the box
                 for _ in 0..4 {
                     let _ = send_vk_key(0x08, false); // VK_BACK
                     sleep(Duration::from_millis(25));
                 }
                 sleep(Duration::from_millis(60));
 
-                // Type each character of the PIN using virtual key dispatch
                 for ch in trimmed.chars() {
                     let (vk, shift) = char_to_vk(ch);
                     let _ = send_vk_key(vk, shift);
                     sleep(Duration::from_millis(45));
                 }
 
-                // Wait 100ms and press Enter to submit
                 sleep(Duration::from_millis(100));
                 let _ = send_vk_key(0x0D, false); // VK_RETURN
-                println!("blinky: fallback unlock PIN sequence completed for host");
+                println!("blinky: fallback unlock sequence completed for host");
             }
         }
     });
-}
-
-/// Unlocks the workstation by triggering the pre-registered BlinkyUnlock scheduled task.
-/// The task runs as SYSTEM and calls `tscon <session> /dest:console`, which reconnects
-/// the locked session without any password or PIN.
-///
-/// Requires `register.bat` to have been run as Administrator once to create the task.
-/// `schtasks /run` does NOT require admin — any user can trigger a pre-existing task.
-fn try_tscon_unlock() -> Result<(), String> {
-    use std::process::Command;
-
-    // Trigger the BlinkyUnlock task (created by register.bat, runs as SYSTEM)
-    let out = Command::new("schtasks.exe")
-        .args(["/run", "/tn", "BlinkyUnlock"])
-        .output()
-        .map_err(|e| format!("schtasks.exe failed to launch: {e}"))?;
-
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let exit_code = out.status.code().unwrap_or(-1);
-    println!("blinky: schtasks BlinkyUnlock: exit={exit_code} {stdout}{stderr}");
-
-    if exit_code == 0 {
-        // Give tscon time to reconnect the session before we declare success
-        std::thread::sleep(std::time::Duration::from_millis(1000));
-        Ok(())
-    } else {
-        Err(format!(
-            "BlinkyUnlock task not found or failed (exit {exit_code}). \
-             Run windows/unlock_provider/register.bat as Administrator.\n{stdout}{stderr}"
-        ))
-    }
 }
 
 fn try_named_pipe_unlock(pin_or_password: &str) -> Result<(), String> {
@@ -178,8 +125,8 @@ fn try_named_pipe_unlock(pin_or_password: &str) -> Result<(), String> {
 
     println!("blinky: attempting unlock via named pipe {pipe_path} for user '{username}' (domain: '{domain}')");
 
-    // Attempt connecting to the named pipe with retries (LogonUI might take ~500ms to initialize upon lock)
-    for attempt in 1..=10 {
+    // Attempt connecting to the named pipe with retries (LogonUI might take up to ~2-3s to initialize upon display wake)
+    for attempt in 1..=20 {
         match std::fs::OpenOptions::new().read(true).write(true).open(pipe_path) {
             Ok(mut file) => {
                 // Format accepted by UnlockProvider: UNLOCK:domain\username:password or UNLOCK:username:password
@@ -192,14 +139,22 @@ fn try_named_pipe_unlock(pin_or_password: &str) -> Result<(), String> {
                 let resp_str = String::from_utf8_lossy(&resp_buf[..n]);
                 println!("blinky: CredentialProviderPipe response: {resp_str}");
                 if resp_str.starts_with("OK") {
+                    // Give LogonUI time to complete logon transition
+                    for _ in 0..10 {
+                        std::thread::sleep(Duration::from_millis(200));
+                        if !is_workstation_locked() {
+                            println!("blinky: Workstation confirmed unlocked!");
+                            return Ok(());
+                        }
+                    }
                     return Ok(());
                 } else {
                     return Err(format!("Unlock provider returned: {resp_str}"));
                 }
             }
             Err(e) => {
-                if attempt == 10 {
-                    println!("blinky: CredentialProviderPipe not reachable after 10 attempts ({e})");
+                if attempt == 20 {
+                    println!("blinky: CredentialProviderPipe not reachable after 20 attempts ({e})");
                 }
                 std::thread::sleep(Duration::from_millis(200));
             }

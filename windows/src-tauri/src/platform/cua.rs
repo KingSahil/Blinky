@@ -1427,6 +1427,7 @@ pub fn press_key(x: i32, y: i32, key: &str) -> Result<(), String> {
 }
 
 /// Structured health payload, for diagnostics surfaces.
+#[allow(dead_code)]
 pub fn doctor() -> Result<Value, String> {
     call("health_report", json!({}))
 }

@@ -307,6 +307,78 @@ class AgentRouterOpenUrlRequestTests(unittest.IsolatedAsyncioTestCase):
         mock_open.assert_called_once_with("spotify")
         mock_send.assert_any_call("abc", "success", data={"response": "Opened spotify."})
 
+    async def test_click_command_bypasses_llm_and_uses_screen_vision(self):
+        mock_tutor_result = {
+            "summary": "I found Instagram.",
+            "steps": [{
+                "step": 1,
+                "instruction": "Click Instagram.",
+                "target_text": "Instagram",
+                "match": {
+                    "x": 550,
+                    "y": 420,
+                    "width": 40,
+                    "height": 40,
+                }
+            }],
+            "active_app": {"title": "Desktop", "process": "explorer.exe", "supported": True},
+            "ocr": {"count": 1, "items": []},
+            "screenshot": {"path": "dummy.png"},
+        }
+        with (
+            patch("agent_router.ask_text_model", side_effect=AssertionError("LLM classify should not be called")),
+            patch("main.classify_request", side_effect=AssertionError("classify_request should not be called")),
+            patch("main.run", return_value=mock_tutor_result) as mock_main_run,
+            patch("agent_router.send_response") as mock_send,
+        ):
+            await handle_request('{"requestId":"click123","query":"click instagram"}')
+        mock_send.assert_any_call("click123", "action", data={
+            "type": "click",
+            "x": 550,
+            "y": 420,
+            "label": "Instagram",
+        })
+        mock_send.assert_any_call("click123", "success", data={"response": "Clicked Instagram."})
+
+    async def test_find_command_bypasses_llm_and_points_cursor(self) -> None:
+        mock_tutor_result = {
+            "summary": "Located 'Instagram' (Button).",
+            "steps": [{
+                "step": 1,
+                "instruction": "Here is the Instagram.",
+                "target_ref": "ref_12",
+                "target_text": "Instagram",
+                "match": {
+                    "x": 300,
+                    "y": 600,
+                    "width": 50,
+                    "height": 50,
+                }
+            }],
+            "active_app": {"title": "Desktop", "process": "explorer.exe", "supported": True},
+            "ocr": {"count": 1, "items": []},
+        }
+        with (
+            patch("agent_router.ask_text_model", side_effect=AssertionError("LLM classify should not be called")),
+            patch("main.classify_request", side_effect=AssertionError("classify_request should not be called")),
+            patch("main.run", return_value=mock_tutor_result) as mock_main_run,
+            patch("agent_router.send_response") as mock_send,
+        ):
+            await handle_request('{"requestId":"find456","query":"find instagram"}')
+        mock_send.assert_any_call("find456", "action", data={
+            "type": "point",
+            "x": 300,
+            "y": 600,
+            "label": "Instagram",
+        })
+        mock_send.assert_any_call("find456", "success", data={
+            "response": "Located 'Instagram' (Button).",
+            "steps": mock_tutor_result["steps"],
+            "active_app": mock_tutor_result["active_app"],
+            "ocr": mock_tutor_result["ocr"],
+        })
+
 
 if __name__ == "__main__":
     unittest.main()
+
