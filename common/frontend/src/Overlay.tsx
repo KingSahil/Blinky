@@ -41,6 +41,7 @@ export function Overlay() {
   const isAgentModeActiveRef = useRef(false);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [isClicking, setIsClicking] = useState(false);
+  const [currentInstruction, setCurrentInstruction] = useState<string | null>(null);
 
   const isAgentActingRef = useRef(false);
   const actingTimeoutRef = useRef<any>(null);
@@ -196,6 +197,7 @@ export function Overlay() {
         activeGlideAnimRef.current = null;
       }
 
+      setCurrentInstruction(event.payload.instruction || null);
       isAgentActingRef.current = true;
 
       const startCssX = currentPosRef.current.x;
@@ -269,6 +271,7 @@ export function Overlay() {
         activeGlideAnimRef.current = null;
       }
       setIsClicking(false);
+      setCurrentInstruction(null);
 
       const el = cursorRef.current;
       if (el && (isAgentModeActiveRef.current || isVoiceActiveRef.current || agentCursorVisible)) {
@@ -568,6 +571,11 @@ export function Overlay() {
         <svg className="agent-cursor" viewBox="0 0 24 24" width="28" height="28" fill="var(--accent-strong)" xmlns="http://www.w3.org/2000/svg">
           <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z"/>
         </svg>
+        {currentInstruction && (
+          <div className="agent-instruction-box">
+            {currentInstruction}
+          </div>
+        )}
         {isVoiceActive && (
           <div className="agent-visualizer">
             <div className="bar" />
