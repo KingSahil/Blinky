@@ -618,6 +618,7 @@ export default function App() {
       }
     });
     activeAntigravityMsgIdRef.current = null;
+    setAgentStatus('idle');
   }, [antigravityComplete]);
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
 
@@ -919,6 +920,8 @@ export default function App() {
       const prompt = queryText.replace(/^(\/agy\s*|antigravity:\s*)/i, '').trim();
       if (prompt) {
         sendAntigravityPrompt(prompt);
+        setAgentStatus('processing');
+        setTimerSeconds(0);
         const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const agyMsgId = generateUuid();
         activeAntigravityMsgIdRef.current = agyMsgId;
