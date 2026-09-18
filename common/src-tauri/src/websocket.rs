@@ -295,6 +295,29 @@ async fn start_antigravity_hook_server(app: AppHandle) {
                     resp_json
                 );
                 let _ = stream.write_all(http_resp.as_bytes()).await;
+            } else if event == "TestApproval" || event == "Approval" {
+                let action_id = json_val.get("actionId").and_then(|a| a.as_str()).unwrap_or("test-action-1").to_string();
+                let tool_name = json_val.get("tool").and_then(|t| t.as_str()).unwrap_or("run_command").to_string();
+                let tool_args = json_val.get("args").cloned().unwrap_or(serde_json::json!({
+                    "CommandLine": "git log -n 2 --stat"
+                }));
+                let conv_id = json_val.get("conversationId").and_then(|c| c.as_str()).unwrap_or("").to_string();
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+
+                let notification = serde_json::json!({
+                    "type": "antigravity_approval",
+                    "actionId": action_id,
+                    "tool": tool_name,
+                    "args": tool_args,
+                    "conversationId": conv_id,
+                    "timestamp": now
+                });
+                let payload_str = notification.to_string();
+                let _ = app_clone.emit("blinky://antigravity-approval", notification);
+                broadcast_to_all_clients(&payload_str).await;
+
+                let http_resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+                let _ = stream.write_all(http_resp.as_bytes()).await;
             } else if event == "Progress" {
                 let tool_name = json_val.get("tool").and_then(|t| t.as_str()).unwrap_or("").to_string();
                 let detail = json_val.get("detail").and_then(|d| d.as_str()).unwrap_or("").to_string();
