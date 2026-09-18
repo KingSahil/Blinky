@@ -44,6 +44,7 @@ import {
 import { usePCWebSocket, ConnectionStatus } from './usePCWebSocket';
 import { sendWakeOnLan, MAC_STORAGE_KEY, WOL_BROADCAST_STORAGE_KEY } from './lib/wol';
 import { triggerHaptic } from './lib/haptics';
+import { MarkdownRenderer } from './MarkdownRenderer';
 export { triggerHaptic };
 
 const STORAGE_KEY = '@blinky_pc_ip';
@@ -1922,8 +1923,8 @@ export default function App() {
                   )}
 
                   <View style={isUser ? styles.userMessageBubble : styles.blinkyMessageBubble}>
-                    {/* Bubble main text */}
-                    <Text style={styles.messageText}>{message.text}</Text>
+                    {/* Bubble main text with full Markdown & LaTeX rendering */}
+                    <MarkdownRenderer content={message.text} isUser={isUser} />
 
                     {/* Nested Active Progress Card inside Blinky's response bubble */}
                     {!isUser && message.progress && (
