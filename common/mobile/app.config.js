@@ -2,7 +2,10 @@ const { expo } = require('./app.json');
 
 const isRelease = process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE === 'release';
 const ios = { ...expo.ios, infoPlist: { ...expo.ios?.infoPlist } };
-const android = { ...expo.android, usesCleartextTraffic: !isRelease };
+const plugins = [
+  ...(expo.plugins || []),
+  ['expo-build-properties', { android: { usesCleartextTraffic: !isRelease } }],
+];
 
 if (isRelease) {
   delete ios.infoPlist.NSAppTransportSecurity;
@@ -13,4 +16,4 @@ if (isRelease) {
   };
 }
 
-module.exports = { ...expo, ios, android };
+module.exports = { ...expo, ios, plugins };

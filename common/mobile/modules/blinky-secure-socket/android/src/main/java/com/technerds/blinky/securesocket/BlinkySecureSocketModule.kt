@@ -4,8 +4,11 @@ import android.util.Base64
 import android.content.Context
 import android.net.Uri
 import expo.modules.kotlin.exception.Exceptions
+import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -67,9 +70,15 @@ class BlinkySecureSocketModule : Module() {
       context.getSharedPreferences("blinky_secure", Context.MODE_PRIVATE)
         .edit().remove(key).apply()
     }
-    AsyncFunction("hashFile") { uri: String -> hashFile(uri) }
-    AsyncFunction("uploadFile") { options: Map<String, Any?> -> uploadFile(options) }
-    AsyncFunction("downloadFile") { options: Map<String, Any?> -> downloadFile(options) }
+    AsyncFunction("hashFile") Coroutine { uri: String ->
+      withContext(Dispatchers.IO) { hashFile(uri) }
+    }
+    AsyncFunction("uploadFile") Coroutine { options: Map<String, Any?> ->
+      withContext(Dispatchers.IO) { uploadFile(options) }
+    }
+    AsyncFunction("downloadFile") Coroutine { options: Map<String, Any?> ->
+      withContext(Dispatchers.IO) { downloadFile(options) }
+    }
     OnDestroy {
       sockets.keys.toList().forEach { closeSocket(it) }
     }
@@ -318,7 +327,10 @@ class BlinkySecureSocketModule : Module() {
     }
 
     val actualHash = hashFile(Uri.fromFile(partial).toString())["sha256"] as String
-    require(actualHash.equals(expectedSha256, ignoreCase = true)) { "Downloaded file SHA-256 did not match the PC" }
+    if (!actualHash.equals(expectedSha256, ignoreCase = true)) {
+      partial.delete()
+      throw IllegalStateException("Downloaded file SHA-256 did not match the PC")
+    }
     val destination = uniqueTransferFile(directory, filename)
     if (!partial.renameTo(destination)) throw IllegalStateException("Could not save the downloaded file")
     return Uri.fromFile(destination).toString()

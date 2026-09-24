@@ -19,7 +19,20 @@ if %errorlevel% neq 0 (
 echo Adding inbound rule for TCP port 9001...
 powershell -Command "New-NetFirewallRule -DisplayName 'Blinky WebSocket Port 9001' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 9001"
 if %errorlevel% neq 0 goto firewall_error
-powershell -Command "New-NetFirewallRule -DisplayName 'Blinky File Transfer Port 9002' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 9002"
+
+set "BLINKY_EXE=%LOCALAPPDATA%\Blinky\blinky.exe"
+if not exist "%BLINKY_EXE%" set "BLINKY_EXE=%LOCALAPPDATA%\Programs\Blinky\blinky.exe"
+if not exist "%BLINKY_EXE%" (
+    echo Could not find Blinky in the default per-user install locations.
+    set /p "BLINKY_EXE=Enter the full path to Blinky's blinky.exe: "
+)
+if not exist "%BLINKY_EXE%" (
+    echo [ERROR] The specified Blinky executable was not found.
+    goto firewall_error
+)
+
+echo Adding program-scoped inbound rule for TCP port 9002...
+netsh advfirewall firewall add rule name="Blinky File Transfer Port 9002" dir=in action=allow program="%BLINKY_EXE%" protocol=TCP localport=9002 enable=yes
 if %errorlevel% neq 0 goto firewall_error
 
 echo.

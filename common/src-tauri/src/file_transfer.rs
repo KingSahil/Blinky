@@ -47,6 +47,7 @@ struct TransferRecord {
     output_size: Option<u64>,
     output_sha256: Option<String>,
     editing: bool,
+    writing: bool,
     expires_at: Instant,
     notifier: ClientSender,
 }
@@ -266,6 +267,7 @@ async fn offer_file(app: &AppHandle, message: &Value, sender: ClientSender) {
             output_size: None,
             output_sha256: None,
             editing: false,
+            writing: false,
             expires_at: Instant::now() + SESSION_TTL,
             notifier: sender.clone(),
         },
@@ -351,14 +353,15 @@ async fn cancel_file(message: &Value, sender: ClientSender) {
             Some(record)
                 if token_matches(record, token)
                     && record.source_path.is_none()
-                    && !record.editing =>
+                    && !record.editing
+                    && !record.writing =>
             {
                 records.remove(transfer_id)
             }
             Some(record) if token_matches(record, token) => {
                 send_json(
                     &sender,
-                    json!({"type":"file_error","requestId":request_id,"message":"A completed upload or active AiCut job cannot be cancelled."}),
+                    json!({"type":"file_error","requestId":request_id,"message":"A completed upload, active upload write, or active AiCut job cannot be cancelled."}),
                 );
                 return;
             }
@@ -440,6 +443,7 @@ async fn start_edit(app: &AppHandle, message: &Value, sender: ClientSender) {
             return;
         }
         record.editing = true;
+        record.expires_at = Instant::now() + SESSION_TTL;
         record.notifier = sender.clone();
         source_path
     };
@@ -456,6 +460,7 @@ async fn start_edit(app: &AppHandle, message: &Value, sender: ClientSender) {
                     let mut records = transfers().lock().await;
                     records.get_mut(&transfer_id).map(|record| {
                         record.editing = false;
+                        record.expires_at = Instant::now() + SESSION_TTL;
                         record.output_path = Some(path);
                         record.output_filename = Some(filename.clone());
                         record.output_size = Some(size);
@@ -482,6 +487,7 @@ async fn start_edit(app: &AppHandle, message: &Value, sender: ClientSender) {
                     let mut records = transfers().lock().await;
                     records.get_mut(&transfer_id).map(|record| {
                         record.editing = false;
+                        record.expires_at = Instant::now() + SESSION_TTL;
                         record.notifier.clone()
                     })
                 };
@@ -874,6 +880,20 @@ struct ChunkFailure {
     offset: Option<u64>,
 }
 
+struct ChunkReservation {
+    staging_path: PathBuf,
+    filename: String,
+    expected_size: u64,
+    expected_sha256: String,
+    hasher: Sha256,
+}
+
+struct WrittenChunk {
+    next_offset: u64,
+    hasher: Sha256,
+    destination: Option<(PathBuf, String)>,
+}
+
 async fn validate_upload_request(
     transfer_id: &str,
     token: &str,
@@ -898,6 +918,13 @@ async fn validate_upload_request(
             status: 409,
             message: "Upload is already complete".into(),
             offset: Some(record.uploaded_bytes),
+        });
+    }
+    if record.writing {
+        return Err(ChunkFailure {
+            status: 423,
+            message: "Another upload chunk is still being written".into(),
+            offset: None,
         });
     }
     if offset != record.uploaded_bytes {
@@ -933,83 +960,201 @@ async fn accept_chunk(
     offset: u64,
     chunk: &[u8],
 ) -> Result<(u16, u64, bool), ChunkFailure> {
+    let reservation = {
+        let mut records = transfers().lock().await;
+        let record = records.get_mut(transfer_id).ok_or_else(|| ChunkFailure {
+            status: 404,
+            message: "Transfer session was not found".into(),
+            offset: None,
+        })?;
+        if record.expires_at <= Instant::now() || !token_matches(record, token) {
+            return Err(ChunkFailure {
+                status: 401,
+                message: "Transfer token expired or is invalid".into(),
+                offset: None,
+            });
+        }
+        if record.source_path.is_some() {
+            return Err(ChunkFailure {
+                status: 409,
+                message: "Upload is already complete".into(),
+                offset: Some(record.uploaded_bytes),
+            });
+        }
+        if record.writing {
+            return Err(ChunkFailure {
+                status: 423,
+                message: "Another upload chunk is still being written".into(),
+                offset: None,
+            });
+        }
+        if offset != record.uploaded_bytes {
+            return Err(ChunkFailure {
+                status: 409,
+                message: "Upload offset does not match the server state".into(),
+                offset: Some(record.uploaded_bytes),
+            });
+        }
+        let end = offset
+            .checked_add(chunk.len() as u64)
+            .ok_or_else(|| ChunkFailure {
+                status: 413,
+                message: "Upload size overflow".into(),
+                offset: Some(record.uploaded_bytes),
+            })?;
+        if end > record.expected_size {
+            return Err(ChunkFailure {
+                status: 413,
+                message: "Chunk exceeds the offered file size".into(),
+                offset: Some(record.uploaded_bytes),
+            });
+        }
+
+        record.writing = true;
+        ChunkReservation {
+            staging_path: record.staging_path.clone(),
+            filename: record.filename.clone(),
+            expected_size: record.expected_size,
+            expected_sha256: record.expected_sha256.clone(),
+            hasher: record.hasher.clone(),
+        }
+    };
+
+    let written = write_upload_chunk(&reservation, offset, chunk).await;
+    let written = match written {
+        Ok(written) => written,
+        Err(failure) => {
+            let mut records = transfers().lock().await;
+            if failure.status == 422 {
+                let staging_path = records
+                    .remove(transfer_id)
+                    .map(|record| record.staging_path)
+                    .unwrap_or(reservation.staging_path);
+                drop(records);
+                let _ = tokio::fs::remove_file(staging_path).await;
+            } else if let Some(record) = records.get_mut(transfer_id) {
+                record.writing = false;
+            }
+            return Err(failure);
+        }
+    };
+
+    let WrittenChunk {
+        next_offset,
+        hasher,
+        destination,
+    } = written;
     let mut records = transfers().lock().await;
-    let record = records.get_mut(transfer_id).ok_or_else(|| ChunkFailure {
-        status: 404,
-        message: "Transfer session was not found".into(),
-        offset: None,
-    })?;
-    if record.expires_at <= Instant::now() || !token_matches(record, token) {
+    let Some(record) = records.get_mut(transfer_id) else {
+        let orphan = destination
+            .as_ref()
+            .map(|(path, _)| path.clone())
+            .unwrap_or(reservation.staging_path);
+        drop(records);
+        let _ = tokio::fs::remove_file(orphan).await;
         return Err(ChunkFailure {
-            status: 401,
-            message: "Transfer token expired or is invalid".into(),
+            status: 404,
+            message: "Transfer session was removed while writing the chunk".into(),
+            offset: None,
+        });
+    };
+    if !record.writing || !token_matches(record, token) {
+        let orphan = destination
+            .as_ref()
+            .map(|(path, _)| path.clone())
+            .unwrap_or_else(|| record.staging_path.clone());
+        record.writing = false;
+        drop(records);
+        let _ = tokio::fs::remove_file(orphan).await;
+        return Err(ChunkFailure {
+            status: 409,
+            message: "Transfer state changed while writing the chunk".into(),
             offset: None,
         });
     }
-    if record.source_path.is_some() {
-        return Err(ChunkFailure {
-            status: 409,
-            message: "Upload is already complete".into(),
-            offset: Some(record.uploaded_bytes),
-        });
-    }
-    if offset != record.uploaded_bytes {
-        return Err(ChunkFailure {
-            status: 409,
-            message: "Upload offset does not match the server state".into(),
-            offset: Some(record.uploaded_bytes),
-        });
-    }
-    let end = offset
-        .checked_add(chunk.len() as u64)
-        .ok_or_else(|| ChunkFailure {
-            status: 413,
-            message: "Upload size overflow".into(),
-            offset: Some(record.uploaded_bytes),
-        })?;
-    if end > record.expected_size {
-        return Err(ChunkFailure {
-            status: 413,
-            message: "Chunk exceeds the offered file size".into(),
-            offset: Some(record.uploaded_bytes),
-        });
+
+    record.writing = false;
+    record.uploaded_bytes = next_offset;
+    record.hasher = hasher;
+    let completed = if let Some((destination, filename)) = destination {
+        record.source_path = Some(destination);
+        Some((
+            record.notifier.clone(),
+            filename,
+            record.expected_size,
+            record.expected_sha256.clone(),
+        ))
+    } else {
+        None
+    };
+    drop(records);
+
+    if let Some((notifier, filename, size, sha256)) = completed.as_ref() {
+        send_json(
+            notifier,
+            json!({
+                "type":"file_received",
+                "transferId":transfer_id,
+                "name":filename,
+                "size":size,
+                "sha256":sha256,
+            }),
+        );
     }
 
+    Ok((
+        if completed.is_some() { 201 } else { 200 },
+        next_offset,
+        completed.is_some(),
+    ))
+}
+
+async fn write_upload_chunk(
+    reservation: &ChunkReservation,
+    offset: u64,
+    chunk: &[u8],
+) -> Result<WrittenChunk, ChunkFailure> {
+    let end = offset
+        .checked_add(chunk.len() as u64)
+        .filter(|end| *end <= reservation.expected_size)
+        .ok_or_else(|| ChunkFailure {
+            status: 413,
+            message: "Chunk exceeds the offered file size".into(),
+            offset: Some(offset),
+        })?;
+    let failure_offset = Some(offset);
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
-        .open(&record.staging_path)
+        .open(&reservation.staging_path)
         .await
         .map_err(|error| ChunkFailure {
             status: 500,
             message: error.to_string(),
-            offset: Some(record.uploaded_bytes),
+            offset: failure_offset,
         })?;
     tokio::io::AsyncSeekExt::seek(&mut file, std::io::SeekFrom::Start(offset))
         .await
         .map_err(|error| ChunkFailure {
             status: 500,
             message: error.to_string(),
-            offset: Some(record.uploaded_bytes),
+            offset: failure_offset,
         })?;
     file.write_all(chunk).await.map_err(|error| ChunkFailure {
         status: 500,
         message: error.to_string(),
-        offset: Some(record.uploaded_bytes),
+        offset: failure_offset,
     })?;
     file.sync_data().await.map_err(|error| ChunkFailure {
         status: 500,
         message: error.to_string(),
-        offset: Some(record.uploaded_bytes),
+        offset: failure_offset,
     })?;
 
-    let mut next_hasher = record.hasher.clone();
-    next_hasher.update(chunk);
-    let next_hash = format!("{:x}", next_hasher.clone().finalize());
-    if end == record.expected_size && next_hash != record.expected_sha256 {
-        let staging_path = record.staging_path.clone();
-        records.remove(transfer_id);
-        drop(records);
-        let _ = tokio::fs::remove_file(staging_path).await;
+    let mut hasher = reservation.hasher.clone();
+    hasher.update(chunk);
+    if end == reservation.expected_size
+        && format!("{:x}", hasher.clone().finalize()) != reservation.expected_sha256
+    {
         return Err(ChunkFailure {
             status: 422,
             message: "The completed file SHA-256 did not match the offered digest".into(),
@@ -1017,16 +1162,17 @@ async fn accept_chunk(
         });
     }
 
-    let mut completed = false;
-    if end == record.expected_size {
-        let (parent, filename) = destination_for_upload(&record.staging_path, &record.filename)
-            .map_err(|error| ChunkFailure {
-                status: 500,
-                message: error.to_string(),
-                offset: Some(end),
-            })?;
-        let destination = move_to_unique_path(
-            &record.staging_path,
+    let destination = if end == reservation.expected_size {
+        let (parent, filename) =
+            destination_for_upload(&reservation.staging_path, &reservation.filename).map_err(
+                |error| ChunkFailure {
+                    status: 500,
+                    message: error.to_string(),
+                    offset: Some(end),
+                },
+            )?;
+        let path = move_to_unique_path(
+            &reservation.staging_path,
             &parent,
             Path::new(&filename)
                 .file_stem()
@@ -1043,30 +1189,21 @@ async fn accept_chunk(
             message: error.to_string(),
             offset: Some(end),
         })?;
-        let safe_name = destination
+        let safe_name = path
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or(&filename)
             .to_string();
-        record.hasher = next_hasher;
-        record.uploaded_bytes = end;
-        record.source_path = Some(destination.clone());
-        completed = true;
-        send_json(
-            &record.notifier,
-            json!({
-                "type":"file_received",
-                "transferId":transfer_id,
-                "name":safe_name,
-                "size":record.expected_size,
-                "sha256":record.expected_sha256,
-            }),
-        );
+        Some((path, safe_name))
     } else {
-        record.hasher = next_hasher;
-        record.uploaded_bytes = end;
-    }
-    Ok((if completed { 201 } else { 200 }, end, completed))
+        None
+    };
+
+    Ok(WrittenChunk {
+        next_offset: end,
+        hasher,
+        destination,
+    })
 }
 
 async fn get_download(transfer_id: &str, token: &str) -> Option<(PathBuf, u64, String, String)> {
@@ -1088,7 +1225,10 @@ async fn expire_old_transfers() {
         let mut records = transfers().lock().await;
         let ids: Vec<String> = records
             .iter()
-            .filter_map(|(id, record)| (record.expires_at <= Instant::now()).then_some(id.clone()))
+            .filter_map(|(id, record)| {
+                (!record.editing && !record.writing && record.expires_at <= Instant::now())
+                    .then_some(id.clone())
+            })
             .collect();
         ids.into_iter()
             .filter_map(|id| records.remove(&id).map(|record| record.staging_path))

@@ -15,7 +15,7 @@
   ; Allow LAN WebSocket control (9001) and HTTPS file transfer (9002).
   DetailPrint "Configuring Windows Firewall for mobile connectivity..."
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Blinky WebSocket Port 9001" dir=in action=allow protocol=TCP localport=9001'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Blinky File Transfer Port 9002" dir=in action=allow protocol=TCP localport=9002'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Blinky File Transfer Port 9002" dir=in action=allow program="$INSTDIR\blinky.exe" protocol=TCP localport=9002'
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Blinky Application" dir=in action=allow program="$INSTDIR\blinky.exe" enable=yes'
 
   ; Execute our python addon setup script and wait for it to complete.

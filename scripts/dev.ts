@@ -268,8 +268,11 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
     } else {
       if (process.platform === "win32") {
         try {
-          const killProc = spawn(["powershell", "-Command", "Get-NetTCPConnection -LocalPort 8081 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"]);
-          await killProc.exited;
+          const portCheck = Bun.spawnSync(["powershell", "-NoProfile", "-Command", "Get-NetTCPConnection -State Listen -LocalPort 8081 -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess -Unique | ForEach-Object { $owner = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; \"port $($_.LocalPort), PID $($_.OwningProcess), process $($owner.ProcessName)\" }"]);
+          const listeners = portCheck.stdout.toString().trim();
+          if (listeners) {
+            console.warn(`[Mobile] Port 8081 is occupied; leaving the existing listener running. Stop it manually if Metro cannot start.\n${listeners}`);
+          }
         } catch {}
       }
 
@@ -370,15 +373,25 @@ if (process.platform === "win32" && !existsSync("common/python_runtime/Python313
 
 const customPort = process.env.PORT ? parseInt(process.env.PORT, 10) : 5173;
 
-/** Stops stale Windows development processes and listeners. */
+/** Stops only the Windows process tree started by this dev run. */
 const killWindowsProcessTree = (pid?: number) => {
-  if (process.platform !== "win32") return;
+  if (process.platform !== "win32" || !pid) return;
   try {
-    if (pid) {
-      Bun.spawnSync(["taskkill", "/F", "/T", "/PID", String(pid)]);
+    Bun.spawnSync(["taskkill", "/F", "/T", "/PID", String(pid)]);
+  } catch {}
+};
+
+/** Reports existing Windows listeners without terminating unrelated processes. */
+const reportWindowsPortConflicts = () => {
+  if (process.platform !== "win32") return;
+  const ports = [...new Set([customPort, 9001, 9002])].filter(Number.isInteger);
+  const command = `Get-NetTCPConnection -State Listen -LocalPort ${ports.join(",")} -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess -Unique | ForEach-Object { $owner = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; "port $($_.LocalPort), PID $($_.OwningProcess), process $($owner.ProcessName)" }`;
+  try {
+    const result = Bun.spawnSync(["powershell", "-NoProfile", "-Command", command]);
+    const listeners = result.stdout.toString().trim();
+    if (listeners) {
+      console.warn(`[Blinky] Existing listeners detected; they will be left running. Resolve these port conflicts if startup fails:\n${listeners}`);
     }
-    Bun.spawnSync(["taskkill", "/F", "/T", "/IM", "blinky.exe"]);
-    Bun.spawnSync(["powershell", "-NoProfile", "-Command", `Get-NetTCPConnection -LocalPort ${customPort},9001,9002 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`]);
   } catch {}
 };
 
@@ -404,7 +417,7 @@ const restoreWindowsSystemCursor = () => {
 
 // Pre-flight cleanup to ensure the frontend and mobile service ports are free and the native cursor is active.
 restoreWindowsSystemCursor();
-killWindowsProcessTree();
+reportWindowsPortConflicts();
 
 const tauriArgs = ["bun", "tauri", "dev"];
 if (process.env.PORT) {

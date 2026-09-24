@@ -238,7 +238,10 @@ public final class BlinkySecureSocketModule: Module, URLSessionWebSocketDelegate
     }
 
     let localHash = try hashFile(uri: partial.absoluteString)["sha256"] as? String
-    guard localHash?.lowercased() == expectedHash else { throw SecureSocketError("Downloaded file SHA-256 did not match the PC") }
+    guard localHash?.lowercased() == expectedHash else {
+      try? FileManager.default.removeItem(at: partial)
+      throw SecureSocketError("Downloaded file SHA-256 did not match the PC")
+    }
     let destination = uniqueTransferURL(directory: directory, filename: filename)
     try FileManager.default.moveItem(at: partial, to: destination)
     return destination.absoluteString
