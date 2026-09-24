@@ -45,6 +45,7 @@ import { usePCWebSocket, ConnectionStatus } from './usePCWebSocket';
 import { sendWakeOnLan, MAC_STORAGE_KEY, WOL_BROADCAST_STORAGE_KEY } from './lib/wol';
 import { triggerHaptic } from './lib/haptics';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { FileTransferPanel } from './FileTransferPanel';
 export { triggerHaptic };
 
 const STORAGE_KEY = '@blinky_pc_ip';
@@ -555,6 +556,7 @@ export default function App() {
     antigravityApproval,
     antigravityComplete,
     antigravityProgress,
+    fileTransferMessage,
     connect,
     disconnect,
     sendCommand,
@@ -563,6 +565,8 @@ export default function App() {
     sendAntigravityDecision,
     sendAntigravityPrompt,
     dismissAntigravityComplete,
+    sendFileTransferMessage,
+    getFileTransferModule,
   } = usePCWebSocket();
   const [macAddress, setMacAddress] = useState('');
   const [wolBroadcastIp, setWolBroadcastIp] = useState('255.255.255.255');
@@ -574,6 +578,7 @@ export default function App() {
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [discoveryProgress, setDiscoveryProgress] = useState<string | null>(null);
+  const [showFileTransfer, setShowFileTransfer] = useState(false);
 
   const [queryText, setQueryText] = useState('');
   const [runningQuery, setRunningQuery] = useState('');
@@ -2145,6 +2150,16 @@ export default function App() {
               </TouchableOpacity>
             )}
 
+            <TouchableOpacity
+              style={[styles.fileAttachBtn, !isConnected && styles.voiceMicBtnDisabled]}
+              onPress={() => setShowFileTransfer(true)}
+              disabled={!isConnected}
+              accessibilityLabel="Send a file to PC"
+              activeOpacity={0.7}
+            >
+              <Ionicons name="attach-outline" size={21} color="#B9A7FF" />
+            </TouchableOpacity>
+
             <TextInput
               style={styles.chatTextInput}
               placeholder="Message Blinky or /agy <prompt>"
@@ -2194,6 +2209,17 @@ export default function App() {
               />
             )}
           </Modal>
+          <FileTransferPanel
+            visible={showFileTransfer}
+            connected={isConnected}
+            hostAddress={ipAddress}
+            releaseTransport={RELEASE_TRANSPORT}
+            certificatePin={certificatePin}
+            fileTransferMessage={fileTransferMessage}
+            sendMessage={sendFileTransferMessage}
+            getNativeModule={getFileTransferModule}
+            onClose={() => setShowFileTransfer(false)}
+          />
         </KeyboardAvoidingView>
       </View>
     </LinearGradient>
@@ -2664,6 +2690,14 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     paddingHorizontal: 8,
     fontSize: 15,
+  },
+  fileAttachBtn: {
+    width: 36,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 2,
   },
   chatSendBtn: {
     width: 40,

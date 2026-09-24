@@ -37,19 +37,25 @@ exit /b 1
 
 :run_adb
 echo.
-echo Running 'adb reverse tcp:9001 tcp:9001' and 'adb reverse tcp:8081 tcp:8081'...
+echo Running 'adb reverse tcp:9001 tcp:9001', 'adb reverse tcp:9002 tcp:9002', and 'adb reverse tcp:8081 tcp:8081'...
 %ADB_PATH% reverse tcp:9001 tcp:9001
+if %ERRORLEVEL% neq 0 goto reverse_error
+%ADB_PATH% reverse tcp:9002 tcp:9002
+if %ERRORLEVEL% neq 0 goto reverse_error
 %ADB_PATH% reverse tcp:8081 tcp:8081 >nul 2>nul
-if %ERRORLEVEL% equ 0 (
-    echo [SUCCESS] USB reverse routing established!
-    echo Inside the Blinky Mobile App, connect using IP: localhost
-    echo Make sure your Blinky desktop app is running.
-) else (
-    echo [ERROR] Failed to run adb reverse.
-    echo Please make sure:
-    echo 1. Your phone is connected via USB.
-    echo 2. USB Debugging is ENABLED in Developer Options on your phone.
-    echo 3. You accepted the 'Allow USB debugging' prompt on your phone screen.
-)
+if %ERRORLEVEL% neq 0 goto reverse_error
+echo [SUCCESS] USB reverse routing established!
+echo Inside the Blinky Mobile App, connect using IP: localhost
+echo Make sure your Blinky desktop app is running.
+goto finish
+
+:reverse_error
+echo [ERROR] Failed to run adb reverse.
+echo Please make sure:
+echo 1. Your phone is connected via USB.
+echo 2. USB Debugging is ENABLED in Developer Options on your phone.
+echo 3. You accepted the 'Allow USB debugging' prompt on your phone screen.
+
+:finish
 echo.
 pause

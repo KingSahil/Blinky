@@ -2,6 +2,7 @@ package com.technerds.blinky.securesocket
 
 import android.util.Base64
 import android.content.Context
+import android.net.Uri
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -12,6 +13,11 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import java.net.URI
+import java.net.HttpURLConnection
+import java.net.URL
+import java.io.File
+import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.Cipher
@@ -30,10 +36,11 @@ class BlinkySecureSocketModule : Module() {
   private val sockets = ConcurrentHashMap<String, WebSocket>()
   private val clients = ConcurrentHashMap<String, OkHttpClient>()
   private val secureKeyAlias = "blinky_remote_credentials"
+  private val transferChunkSize = 16 * 1024 * 1024
 
   override fun definition() = ModuleDefinition {
     Name("BlinkySecureSocket")
-    Events("onOpen", "onMessage", "onClose", "onError")
+    Events("onOpen", "onMessage", "onClose", "onError", "onTransferProgress")
 
     AsyncFunction("connect") { id: String, url: String, pin: String ->
       connect(id, url, pin)
@@ -60,6 +67,9 @@ class BlinkySecureSocketModule : Module() {
       context.getSharedPreferences("blinky_secure", Context.MODE_PRIVATE)
         .edit().remove(key).apply()
     }
+    AsyncFunction("hashFile") { uri: String -> hashFile(uri) }
+    AsyncFunction("uploadFile") { options: Map<String, Any?> -> uploadFile(options) }
+    AsyncFunction("downloadFile") { options: Map<String, Any?> -> downloadFile(options) }
     OnDestroy {
       sockets.keys.toList().forEach { closeSocket(it) }
     }
@@ -156,6 +166,208 @@ class BlinkySecureSocketModule : Module() {
       null
     }
   }
+
+  private fun hashFile(uri: String): Map<String, Any> {
+    val digest = MessageDigest.getInstance("SHA-256")
+    var size = 0L
+    context.contentResolver.openInputStream(Uri.parse(uri))?.use { input ->
+      val buffer = ByteArray(1024 * 1024)
+      while (true) {
+        val count = input.read(buffer)
+        if (count < 0) break
+        digest.update(buffer, 0, count)
+        size += count
+      }
+    } ?: throw IllegalArgumentException("Unable to open the selected file")
+    return mapOf("size" to size, "sha256" to digest.digest().toHex())
+  }
+
+  private fun uploadFile(options: Map<String, Any?>): Map<String, Any> {
+    val sourceUri = options.string("sourceUri")
+    val transferId = options.string("transferId")
+    val url = options.string("url")
+    val token = options.string("token")
+    val pin = options["pin"] as? String
+    val totalSize = options.long("size")
+    val chunkSize = options.long("chunkSize", transferChunkSize.toLong()).coerceIn(1, transferChunkSize.toLong()).toInt()
+    var offset = options.long("offset")
+    require(totalSize > 0 && offset in 0..totalSize) { "Invalid upload size or offset" }
+
+    var input = openSourceAtOffset(sourceUri, offset)
+    try {
+      while (offset < totalSize) {
+        val chunk = readStreamChunk(input, minOf(chunkSize.toLong(), totalSize - offset).toInt())
+        if (chunk.isEmpty()) throw IllegalStateException("Selected file ended before its reported size")
+        val connection = transferConnection(url, pin)
+        try {
+          connection.requestMethod = "POST"
+          connection.doOutput = true
+          connection.connectTimeout = 30_000
+          connection.readTimeout = 300_000
+          connection.setRequestProperty("Authorization", "Bearer $token")
+          connection.setRequestProperty("Upload-Offset", offset.toString())
+          connection.setRequestProperty("Content-Type", "application/octet-stream")
+          connection.setFixedLengthStreamingMode(chunk.size)
+          connection.outputStream.use { it.write(chunk) }
+          val status = connection.responseCode
+          val nextOffset = connection.getHeaderField("Upload-Offset")?.toLongOrNull()
+          if (status == 409 && nextOffset != null && nextOffset in 0..totalSize) {
+            offset = nextOffset
+            input.close()
+            input = openSourceAtOffset(sourceUri, offset)
+            continue
+          }
+          if (status != 200 && status != 201) {
+            val detail = runCatching { connection.errorStream?.bufferedReader()?.use { it.readText() } }.getOrNull()
+            throw IllegalStateException("Upload failed ($status)${if (detail.isNullOrBlank()) "" else ": $detail"}")
+          }
+          val updated = nextOffset ?: (offset + chunk.size)
+          require(updated > offset && updated <= totalSize) { "PC returned an invalid upload offset" }
+          offset = updated
+          sendEvent("onTransferProgress", mapOf("id" to transferId, "direction" to "upload", "bytes" to offset, "total" to totalSize))
+        } finally {
+          connection.disconnect()
+        }
+      }
+    } finally {
+      input.close()
+    }
+    return mapOf("transferId" to transferId, "uploadOffset" to offset, "complete" to true)
+  }
+
+  private fun openSourceAtOffset(uri: String, offset: Long): java.io.InputStream {
+    val input = context.contentResolver.openInputStream(Uri.parse(uri))
+      ?: throw IllegalArgumentException("Unable to open the selected file")
+    try {
+      var remaining = offset
+      while (remaining > 0) {
+        val skipped = input.skip(remaining)
+        if (skipped <= 0) {
+          if (input.read() < 0) throw IllegalStateException("Selected file ended before the resume offset")
+          remaining -= 1
+        } else remaining -= skipped
+      }
+      return input
+    } catch (error: Throwable) {
+      input.close()
+      throw error
+    }
+  }
+
+  private fun readStreamChunk(input: java.io.InputStream, maxBytes: Int): ByteArray {
+    val buffer = ByteArray(maxBytes)
+    var count = 0
+    while (count < maxBytes) {
+      val read = input.read(buffer, count, maxBytes - count)
+      if (read < 0) break
+      count += read
+    }
+    return if (count == buffer.size) buffer else buffer.copyOf(count)
+  }
+
+  private fun downloadFile(options: Map<String, Any?>): String {
+    val transferId = options.string("transferId")
+    val url = options.string("url")
+    val token = options.string("token")
+    val pin = options["pin"] as? String
+    val expectedSize = options.long("size")
+    val expectedSha256 = options.string("sha256").lowercase()
+    val filename = safeName(options.string("filename"))
+    require(expectedSize > 0) { "Invalid download size" }
+
+    val directory = File(context.filesDir, "BlinkyTransfers").apply { mkdirs() }
+    val partial = File(directory, "$transferId.part")
+    var offset = partial.length()
+    if (offset > expectedSize) {
+      partial.delete()
+      offset = 0
+    }
+    while (offset < expectedSize) {
+      val end = minOf(expectedSize - 1, offset + transferChunkSize - 1)
+      val connection = transferConnection(url, pin)
+      try {
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 30_000
+        connection.readTimeout = 300_000
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.setRequestProperty("Range", "bytes=$offset-$end")
+        val status = connection.responseCode
+        if (status != 206) throw IllegalStateException("Download failed ($status)")
+        require(connection.getHeaderField("X-File-Size")?.toLongOrNull() == expectedSize) { "PC returned a different file size" }
+        require(connection.getHeaderField("X-File-Sha256")?.equals(expectedSha256, ignoreCase = true) == true) { "PC returned a different file digest" }
+        val expectedChunk = end - offset + 1
+        var received = 0L
+        FileOutputStream(partial, true).use { output ->
+          connection.inputStream.use { input ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {
+              val count = input.read(buffer)
+              if (count < 0) break
+              output.write(buffer, 0, count)
+              received += count
+            }
+          }
+          output.fd.sync()
+        }
+        require(received == expectedChunk) { "Download chunk was incomplete" }
+        offset += received
+        sendEvent("onTransferProgress", mapOf("id" to transferId, "direction" to "download", "bytes" to offset, "total" to expectedSize))
+      } finally {
+        connection.disconnect()
+      }
+    }
+
+    val actualHash = hashFile(Uri.fromFile(partial).toString())["sha256"] as String
+    require(actualHash.equals(expectedSha256, ignoreCase = true)) { "Downloaded file SHA-256 did not match the PC" }
+    val destination = uniqueTransferFile(directory, filename)
+    if (!partial.renameTo(destination)) throw IllegalStateException("Could not save the downloaded file")
+    return Uri.fromFile(destination).toString()
+  }
+
+  private fun transferConnection(url: String, pin: String?): HttpURLConnection {
+    val parsed = URI(url)
+    require(parsed.scheme.equals("http", true) || parsed.scheme.equals("https", true)) { "Transfer URL must use HTTP or HTTPS" }
+    val connection = URL(url).openConnection() as HttpURLConnection
+    if (connection is javax.net.ssl.HttpsURLConnection) {
+      require(!pin.isNullOrBlank()) { "HTTPS transfers require the saved certificate pin" }
+      val trustManager = PinnedCertificateTrustManager(pin)
+      val sslContext = SSLContext.getInstance("TLS").apply { init(null, arrayOf<TrustManager>(trustManager), SecureRandom()) }
+      connection.sslSocketFactory = sslContext.socketFactory
+      connection.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
+    } else {
+      require(pin.isNullOrBlank()) { "Pinned release transfers must use HTTPS" }
+    }
+    return connection
+  }
+
+  private fun safeName(value: String): String {
+    val cleaned = value.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").trim().trim('.')
+    return cleaned.takeIf { it.isNotEmpty() && it != ".." } ?: "blinky-download.bin"
+  }
+
+  private fun uniqueTransferFile(directory: File, filename: String): File {
+    val original = File(directory, filename)
+    if (!original.exists()) return original
+    val stem = original.nameWithoutExtension
+    val extension = original.extension
+    for (index in 1..99999) {
+      val suffix = if (extension.isEmpty()) " ($index)" else " ($index).$extension"
+      val candidate = File(directory, "$stem$suffix")
+      if (!candidate.exists()) return candidate
+    }
+    throw IllegalStateException("Could not find a free file name")
+  }
+
+  private fun Map<String, Any?>.string(key: String): String = this[key] as? String
+    ?: throw IllegalArgumentException("Missing $key")
+
+  private fun Map<String, Any?>.long(key: String, default: Long = 0): Long = when (val value = this[key]) {
+    is Number -> value.toLong()
+    null -> default
+    else -> throw IllegalArgumentException("Invalid $key")
+  }
+
+  private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
   private fun setSecureValue(key: String, value: String) {
     val cipher = Cipher.getInstance("AES/GCM/NoPadding")

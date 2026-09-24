@@ -1,4 +1,5 @@
 pub(crate) mod platform;
+mod file_transfer;
 mod tls_identity;
 mod transport;
 mod websocket;

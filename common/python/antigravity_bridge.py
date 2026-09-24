@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-BLINKY_HOOK_URL = "http://127.0.0.1:9002/hook"
+BLINKY_HOOK_URL = "http://127.0.0.1:9003/hook"
 QUEUE_FILE = Path(__file__).resolve().parent.parent.parent / ".agents" / "prompt_queue.json"
 DEBUG_LOG = Path(__file__).resolve().parent / "bridge_debug.log"
 
@@ -30,7 +30,7 @@ def log_debug(msg: str):
 
 
 def post_to_blinky(payload: dict, timeout: float = 0.5) -> dict | None:
-    """Send hook payload to Blinky desktop server on loopback port 9002 (fast, non-blocking)."""
+    """Send hook payload to Blinky desktop server on loopback port 9003 (fast, non-blocking)."""
     try:
         data_bytes = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(

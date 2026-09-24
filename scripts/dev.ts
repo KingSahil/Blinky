@@ -247,11 +247,13 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
       console.log(`  - ${dev}`);
     }
 
-    console.log("[Mobile] Setting up USB reverse port forwarding (tcp:9001, tcp:8081)...");
+    console.log("[Mobile] Setting up USB reverse port forwarding (tcp:9001, tcp:9002, tcp:8081)...");
     const rev1 = spawn([adb, "reverse", "tcp:9001", "tcp:9001"]);
     await Promise.race([rev1.exited, new Promise(r => setTimeout(r, 1500))]);
-    const rev2 = spawn([adb, "reverse", "tcp:8081", "tcp:8081"]);
+    const rev2 = spawn([adb, "reverse", "tcp:9002", "tcp:9002"]);
     await Promise.race([rev2.exited, new Promise(r => setTimeout(r, 1500))]);
+    const rev3 = spawn([adb, "reverse", "tcp:8081", "tcp:8081"]);
+    await Promise.race([rev3.exited, new Promise(r => setTimeout(r, 1500))]);
 
     // Check if Metro bundler is already running on IPv4
     let mobileProc: Subprocess | null = null;
@@ -376,7 +378,7 @@ const killWindowsProcessTree = (pid?: number) => {
       Bun.spawnSync(["taskkill", "/F", "/T", "/PID", String(pid)]);
     }
     Bun.spawnSync(["taskkill", "/F", "/T", "/IM", "blinky.exe"]);
-    Bun.spawnSync(["powershell", "-NoProfile", "-Command", `Get-NetTCPConnection -LocalPort ${customPort},9001 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`]);
+    Bun.spawnSync(["powershell", "-NoProfile", "-Command", `Get-NetTCPConnection -LocalPort ${customPort},9001,9002 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`]);
   } catch {}
 };
 
@@ -400,7 +402,7 @@ const restoreWindowsSystemCursor = () => {
   }
 };
 
-// Pre-flight cleanup to ensure port and 9001 are free and native cursor is active
+// Pre-flight cleanup to ensure the frontend and mobile service ports are free and the native cursor is active.
 restoreWindowsSystemCursor();
 killWindowsProcessTree();
 

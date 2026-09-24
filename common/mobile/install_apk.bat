@@ -66,7 +66,7 @@ if %ERRORLEVEL% equ 0 (
     echo.
     echo Next steps:
     echo 1. Keep your phone connected via USB.
-    echo 2. Run 'connect_usb.bat' to forward port 9001.
+    echo 2. Run 'connect_usb.bat' to forward ports 9001 and 9002.
     echo 3. Open the 'mobile' app on your phone, type 'localhost' as IP, and click connect!
 ) else (
     echo.

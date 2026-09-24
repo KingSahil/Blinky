@@ -3,7 +3,7 @@ echo ===================================================
 echo Blinky Windows Firewall Setup Helper
 echo ===================================================
 echo.
-echo This script will add an inbound firewall rule for Port 9001.
+echo This script will add inbound firewall rules for Blinky ports 9001 and 9002.
 echo It must be run as Administrator.
 echo.
 
@@ -18,14 +18,19 @@ if %errorlevel% neq 0 (
 
 echo Adding inbound rule for TCP port 9001...
 powershell -Command "New-NetFirewallRule -DisplayName 'Blinky WebSocket Port 9001' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 9001"
+if %errorlevel% neq 0 goto firewall_error
+powershell -Command "New-NetFirewallRule -DisplayName 'Blinky File Transfer Port 9002' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 9002"
+if %errorlevel% neq 0 goto firewall_error
 
-if %errorlevel% equ 0 (
-    echo.
-    echo [SUCCESS] Firewall rule added successfully!
-    echo Blinky is now allowed to accept connections from your phone on port 9001.
-) else (
-    echo.
-    echo [ERROR] Failed to add firewall rule. Please check if PowerShell is blocked.
-)
+echo.
+echo [SUCCESS] Firewall rules added successfully!
+echo Blinky is now allowed to accept WebSocket and file transfer connections from your phone.
+goto finish
+
+:firewall_error
+echo.
+echo [ERROR] Failed to add both firewall rules. Please check if PowerShell is blocked.
+
+:finish
 echo.
 pause

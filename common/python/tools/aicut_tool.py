@@ -197,7 +197,12 @@ def _detect_preset_name(q_lower: str) -> str | None:
     return None
 
 
-def resolve_aicut_request(query: str) -> dict[str, Any] | None:
+def resolve_aicut_request(
+    query: str,
+    *,
+    context_files: list[str] | None = None,
+    explorer_context: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Deterministically parse and classify an AiCut video editor query, supporting multi-step pipelines."""
     if not query:
         return None
@@ -206,18 +211,26 @@ def resolve_aicut_request(query: str) -> dict[str, Any] | None:
 
     # Check for explicitly referenced / dragged-in files in query
     referenced_files = []
-    ref_match = re.search(r"\[Referenced Files:\s*(.*?)\]", query, re.DOTALL | re.IGNORECASE)
-    if ref_match:
-        for p in ref_match.group(1).split(","):
-            p_clean = p.strip()
-            if p_clean and (Path(p_clean).exists() or Path(p_clean).is_file()):
-                referenced_files.append(str(Path(p_clean).resolve()))
+    if context_files is not None:
+        # A caller-supplied file boundary is authoritative. This keeps a remote
+        # transfer job from resolving another file from the desktop Explorer.
+        for p in context_files:
+            candidate = Path(p)
+            if candidate.is_file():
+                referenced_files.append(str(candidate.resolve()))
+    else:
+        ref_match = re.search(r"\[Referenced Files:\s*(.*?)\]", query, re.DOTALL | re.IGNORECASE)
+        if ref_match:
+            for p in ref_match.group(1).split(","):
+                p_clean = p.strip()
+                if p_clean and (Path(p_clean).exists() or Path(p_clean).is_file()):
+                    referenced_files.append(str(Path(p_clean).resolve()))
 
     ref_videos = [f for f in referenced_files if Path(f).suffix.lower() in MEDIA_EXTENSIONS.get("video", {".mp4", ".mov", ".mkv", ".avi", ".webm"})]
     ref_audios = [f for f in referenced_files if Path(f).suffix.lower() in MEDIA_EXTENSIONS.get("audio", {".mp3", ".wav", ".aac", ".m4a"})]
 
     # Get active Explorer context
-    explorer = get_active_explorer_context()
+    explorer = explorer_context if explorer_context is not None else get_active_explorer_context()
     active_dir = explorer.get("active_directory")
     selected_videos = ref_videos if ref_videos else explorer.get("selected_videos", [])
     selected_audios = ref_audios if ref_audios else explorer.get("selected_audios", [])
@@ -269,7 +282,7 @@ def resolve_aicut_request(query: str) -> dict[str, Any] | None:
 
     # ── Candidate Resolution ──
     # Videos
-    video_matches = re.findall(r"([^\s\"\']+\.(?:mp4|mov|mkv|avi|webm))", q_lower)
+    video_matches = [] if context_files is not None else re.findall(r"([^\s\"\']+\.(?:mp4|mov|mkv|avi|webm))", q_lower)
     resolved_videos: list[str] = []
     for v in video_matches:
         found = find_candidate_file(v, active_dir)
@@ -293,7 +306,7 @@ def resolve_aicut_request(query: str) -> dict[str, Any] | None:
                 resolved_videos = folder_vids
 
     # Audio
-    audio_match = re.search(r"([^\s\"\']+\.(?:mp3|wav|aac|m4a|flac|ogg))", q_lower)
+    audio_match = None if context_files is not None else re.search(r"([^\s\"\']+\.(?:mp3|wav|aac|m4a|flac|ogg))", q_lower)
     has_explicit_media_in_query = bool(video_matches) or bool(ref_videos)
     if has_explicit_media_in_query:
         has_audio = bool(audio_match) or bool(ref_audios) or has_audio_keyword
@@ -319,7 +332,7 @@ def resolve_aicut_request(query: str) -> dict[str, Any] | None:
             resolved_audio = audios[0]
 
     # SRT subtitle file (if burning existing SRT)
-    srt_match = re.search(r"([^\s\"\']+\.(?:srt|vtt))", q_lower)
+    srt_match = None if context_files is not None else re.search(r"([^\s\"\']+\.(?:srt|vtt))", q_lower)
     resolved_srt: str | None = None
     if srt_match:
         found_s = find_candidate_file(srt_match.group(1), active_dir)
