@@ -175,7 +175,7 @@ export function usePCWebSocket() {
 
     if (RELEASE_TRANSPORT) {
       const nativeModule = loadNativeSecureSocketModule();
-      if (!nativeModule) {
+      if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative)) {
         setStatus('error');
         setErrorMsg('The release secure socket module is missing. Install a release/internal development build.');
         return;

@@ -968,6 +968,7 @@ where
                             client_tx.clone(),
                             has_presented_token,
                             !server_token.is_empty(),
+                            mode,
                         )
                         .await;
                         continue;

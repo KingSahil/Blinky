@@ -116,13 +116,19 @@ pub(crate) async fn handle_control_message(
     sender: ClientSender,
     has_presented_token: bool,
     configured_token: bool,
+    mode: crate::transport::TransportMode,
 ) {
     let request_id = message
         .get("requestId")
         .and_then(Value::as_str)
         .unwrap_or("");
     let kind = message.get("type").and_then(Value::as_str).unwrap_or("");
-    if !has_presented_token || !configured_token {
+    let authorized = if mode.is_release() {
+        has_presented_token && configured_token
+    } else {
+        !configured_token || has_presented_token
+    };
+    if !authorized {
         send_json(
             &sender,
             json!({
@@ -404,7 +410,7 @@ async fn start_edit(app: &AppHandle, message: &Value, sender: ClientSender) {
         .unwrap_or("")
         .trim()
         .to_string();
-    if instruction.is_empty() || instruction.len() > 8_000 {
+    if instruction.len() > 8_000 {
         send_json(
             &sender,
             json!({"type":"file_error","requestId":request_id,"message":"Enter an AiCut edit instruction of at most 8,000 characters."}),
@@ -412,40 +418,83 @@ async fn start_edit(app: &AppHandle, message: &Value, sender: ClientSender) {
         return;
     }
 
-    let source = {
+    let additional_ids: Vec<String> = message
+        .get("additionalTransferIds")
+        .or_else(|| message.get("transferIds"))
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .filter(|id| id != &transfer_id)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let (source, all_sources) = {
         let mut records = transfers().lock().await;
-        let Some(record) = records.get_mut(&transfer_id) else {
-            send_json(
-                &sender,
-                json!({"type":"file_error","requestId":request_id,"message":"Transfer session expired or was cancelled."}),
-            );
-            return;
+        let source_path = match records.get(&transfer_id) {
+            Some(record) => {
+                if record.expires_at <= Instant::now() || !token_matches(record, &token) {
+                    send_json(
+                        &sender,
+                        json!({"type":"file_error","requestId":request_id,"message":"Transfer session expired or its temporary token is invalid."}),
+                    );
+                    return;
+                }
+                let Some(sp) = record.source_path.clone() else {
+                    send_json(
+                        &sender,
+                        json!({"type":"file_error","requestId":request_id,"message":"The upload must finish before AiCut can start."}),
+                    );
+                    return;
+                };
+                if record.editing {
+                    send_json(
+                        &sender,
+                        json!({"type":"file_error","requestId":request_id,"message":"AiCut is already processing this transfer."}),
+                    );
+                    return;
+                }
+                sp
+            }
+            None => {
+                send_json(
+                    &sender,
+                    json!({"type":"file_error","requestId":request_id,"message":"Transfer session expired or was cancelled."}),
+                );
+                return;
+            }
         };
-        if record.expires_at <= Instant::now() || !token_matches(record, &token) {
+
+        let mut sources = vec![source_path.clone()];
+        for add_id in &additional_ids {
+            if let Some(other_record) = records.get(add_id) {
+                if let Some(ref path) = other_record.source_path {
+                    sources.push(path.clone());
+                } else {
+                    send_json(
+                        &sender,
+                        json!({"type":"file_error","requestId":request_id,"message":"An uploaded file in the batch is not ready yet."}),
+                    );
+                    return;
+                }
+            }
+        }
+
+        if instruction.is_empty() && sources.len() <= 1 {
             send_json(
                 &sender,
-                json!({"type":"file_error","requestId":request_id,"message":"Transfer session expired or its temporary token is invalid."}),
+                json!({"type":"file_error","requestId":request_id,"message":"Enter an AiCut edit instruction of at most 8,000 characters."}),
             );
             return;
         }
-        let Some(source_path) = record.source_path.clone() else {
-            send_json(
-                &sender,
-                json!({"type":"file_error","requestId":request_id,"message":"The upload must finish before AiCut can start."}),
-            );
-            return;
-        };
-        if record.editing {
-            send_json(
-                &sender,
-                json!({"type":"file_error","requestId":request_id,"message":"AiCut is already processing this transfer."}),
-            );
-            return;
+
+        if let Some(record) = records.get_mut(&transfer_id) {
+            record.editing = true;
+            record.expires_at = Instant::now() + SESSION_TTL;
+            record.notifier = sender.clone();
         }
-        record.editing = true;
-        record.expires_at = Instant::now() + SESSION_TTL;
-        record.notifier = sender.clone();
-        source_path
+        (source_path, sources)
     };
 
     send_json(
@@ -454,7 +503,7 @@ async fn start_edit(app: &AppHandle, message: &Value, sender: ClientSender) {
     );
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        match run_aicut_job(&app, &transfer_id, &source, &instruction).await {
+        match run_aicut_job(&app, &transfer_id, &source, &all_sources, &instruction).await {
             Ok((path, filename, size, sha256)) => {
                 let event = {
                     let mut records = transfers().lock().await;
@@ -506,6 +555,7 @@ async fn run_aicut_job(
     app: &AppHandle,
     transfer_id: &str,
     source_path: &Path,
+    all_sources: &[PathBuf],
     instruction: &str,
 ) -> Result<(PathBuf, String, u64, String), Box<dyn std::error::Error + Send + Sync>> {
     let root = crate::websocket::project_root();
@@ -531,7 +581,11 @@ async fn run_aicut_job(
         .stderr(std::process::Stdio::null());
 
     let mut child = command.spawn()?;
-    let payload = json!({"instruction":instruction,"input_path":source_path});
+    let payload = json!({
+        "instruction": instruction,
+        "input_path": source_path,
+        "input_paths": all_sources
+    });
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(payload.to_string().as_bytes()).await?;
         stdin.shutdown().await?;

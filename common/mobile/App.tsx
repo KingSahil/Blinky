@@ -66,7 +66,9 @@ const loadNativeSecureSocketModule = (): NativeSecureSocketModule | null => {
 
 const readSavedCredential = async (secureKey: string, legacyKey: string): Promise<string | null> => {
   if (RELEASE_TRANSPORT) {
-    return loadNativeSecureSocketModule()?.getSecureValue(secureKey) || null;
+    const mod = loadNativeSecureSocketModule();
+    if (mod && 'isNative' in mod && !(mod as any).isNative) return null;
+    return mod?.getSecureValue(secureKey) || null;
   }
   return AsyncStorage.getItem(legacyKey);
 };
@@ -74,7 +76,9 @@ const readSavedCredential = async (secureKey: string, legacyKey: string): Promis
 const saveCredential = async (secureKey: string, legacyKey: string, value: string): Promise<void> => {
   if (RELEASE_TRANSPORT) {
     const nativeModule = loadNativeSecureSocketModule();
-    if (!nativeModule) throw new Error('Secure credential storage is unavailable in this build.');
+    if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative)) {
+      throw new Error('Secure credential storage is unavailable in this build.');
+    }
     await nativeModule.setSecureValue(secureKey, value);
     return;
   }
@@ -110,7 +114,7 @@ const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 1500, certificat
 
   if (RELEASE_TRANSPORT) {
     const nativeModule = loadNativeSecureSocketModule();
-    if (!nativeModule || !certificatePin?.trim()) {
+    if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative) || !certificatePin?.trim()) {
       return Promise.reject(new Error('Release discovery requires the secure socket module and certificate pin.'));
     }
     const socketId = `discovery-${ip}-${Date.now()}-${Math.random().toString(16).slice(2)}`;

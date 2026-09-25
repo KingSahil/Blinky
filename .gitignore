@@ -65,3 +65,5 @@ log[0-9]*.txt
 cache/huggingface/
 models/
 *.bin
+esp32_firmware/BlinkyUniversalDaemon/config.h
+scratch/

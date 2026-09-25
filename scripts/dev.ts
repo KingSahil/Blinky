@@ -334,13 +334,19 @@ function getTailscaleIp(): string | null {
       }
 
       try {
-        const launchCustom = spawn([adb, "shell", "am", "start", "-n", "com.technerds.blinkyremote/.MainActivity"]);
-        await launchCustom.exited;
-      } catch {
-        try {
+        const checkPkg = Bun.spawnSync([adb, "shell", "pm", "list", "packages", "com.technerds.blinkyremote"]);
+        const isCustomInstalled = checkPkg.stdout.toString().includes("com.technerds.blinkyremote");
+        if (isCustomInstalled) {
+          console.log("[Mobile] 📱 Launching Blinky custom native app on device...");
+          const launchCustom = spawn([adb, "shell", "am", "start", "-n", "com.technerds.blinkyremote/.MainActivity"]);
+          await launchCustom.exited;
+        } else {
+          console.log("[Mobile] 📱 Launching Expo Go on device...");
           const launchExpo = spawn([adb, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
           await launchExpo.exited;
-        } catch {}
+        }
+      } catch (err: any) {
+        console.warn(`[Mobile] Could not launch app on device: ${err?.message || err}`);
       }
     })();
 
@@ -482,15 +488,33 @@ if (process.stdin.isTTY) {
       // Handle direct adb mobile actions
       const k = key.toLowerCase();
       if (adbCmd) {
+        const checkCustomInstalled = () => {
+          try {
+            const checkPkg = Bun.spawnSync([adbCmd, "shell", "pm", "list", "packages", "com.technerds.blinkyremote"]);
+            return checkPkg.stdout.toString().includes("com.technerds.blinkyremote");
+          } catch {
+            return false;
+          }
+        };
+
         if (k === "r") {
           console.log("\n[Mobile] 🔄 Reloading app on connected device...");
-          spawn([adbCmd, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
+          if (checkCustomInstalled()) {
+            spawn([adbCmd, "shell", "am", "start", "-n", "com.technerds.blinkyremote/.MainActivity"]);
+          } else {
+            spawn([adbCmd, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
+          }
         } else if (k === "m") {
           console.log("\n[Mobile] 📱 Toggling developer menu on device...");
           spawn([adbCmd, "shell", "input", "keyevent", "82"]);
         } else if (k === "a") {
-          console.log("\n[Mobile] 📱 Opening Expo Go on device...");
-          spawn([adbCmd, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
+          if (checkCustomInstalled()) {
+            console.log("\n[Mobile] 📱 Opening Blinky custom native app on device...");
+            spawn([adbCmd, "shell", "am", "start", "-n", "com.technerds.blinkyremote/.MainActivity"]);
+          } else {
+            console.log("\n[Mobile] 📱 Opening Expo Go on device...");
+            spawn([adbCmd, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
+          }
         }
       }
     });

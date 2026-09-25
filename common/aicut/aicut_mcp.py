@@ -269,16 +269,64 @@ def add_song(
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, cwd=str(ROOT_DIR))
         success = proc.returncode == 0 and out.exists()
+        if success:
+            return {
+                "success": True,
+                "action": "add_song",
+                "video_path": str(v_path),
+                "song_path": str(s_path),
+                "output_path": str(out),
+                "music_volume": music_volume,
+                "stdout": proc.stdout.strip(),
+                "stderr": "",
+                "error": None,
+            }
+
+        # Fallback to direct ffmpeg if AIVideoEditor fails (e.g. video has no audio track or amix issue)
+        probe = probe_media(str(v_path))
+        has_audio = bool(probe.get("audio_codec"))
+        if has_audio:
+            filter_complex = f"[1:a]volume={music_volume}[music];[0:a][music]amix=inputs=2:duration=longest:dropout_transition=2[a]"
+        else:
+            filter_complex = f"[1:a]volume={music_volume}[a]"
+
+        fallback_cmd = [
+            "ffmpeg", "-y",
+            "-i", str(v_path),
+            "-stream_loop", "-1",
+            "-i", str(s_path),
+            "-filter_complex", filter_complex,
+            "-map", "0:v:0",
+            "-map", "[a]",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-shortest",
+            str(out),
+        ]
+        fallback_proc = subprocess.run(fallback_cmd, capture_output=True, text=True, timeout=120)
+        if fallback_proc.returncode == 0 and out.exists():
+            return {
+                "success": True,
+                "action": "add_song",
+                "video_path": str(v_path),
+                "song_path": str(s_path),
+                "output_path": str(out),
+                "music_volume": music_volume,
+                "stdout": fallback_proc.stdout.strip(),
+                "stderr": "",
+                "error": None,
+            }
+
         return {
-            "success": success,
+            "success": False,
             "action": "add_song",
             "video_path": str(v_path),
             "song_path": str(s_path),
             "output_path": str(out),
             "music_volume": music_volume,
             "stdout": proc.stdout.strip(),
-            "stderr": proc.stderr.strip() if not success else "",
-            "error": None if success else (proc.stderr.strip() or proc.stdout.strip() or "Add song failed"),
+            "stderr": proc.stderr.strip(),
+            "error": proc.stderr.strip() or proc.stdout.strip() or "Add song failed",
         }
     except Exception as exc:
         return {"success": False, "action": "add_song", "error": str(exc)}
