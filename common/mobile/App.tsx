@@ -22,7 +22,6 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import {
@@ -45,6 +44,20 @@ import { usePCWebSocket, ConnectionStatus } from './usePCWebSocket';
 import { sendWakeOnLan, MAC_STORAGE_KEY, WOL_BROADCAST_STORAGE_KEY } from './lib/wol';
 import { triggerHaptic } from './lib/haptics';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import SplashScreen from './SplashScreen';
+import { BrandHeader } from './components/BrandHeader';
+import { MessageBubble } from './components/MessageBubble';
+import { ChatHome } from './components/ChatHome';
+import { CommandComposer } from './components/CommandComposer';
+import { SlashCommandMenu, SlashCommandDef } from './components/SlashCommandMenu';
+import { ActionsScreen } from './components/ActionsScreen';
+import { SystemScreen } from './components/SystemScreen';
+import { SettingsModal } from './components/SettingsModal';
+import { FilesScreen } from './components/FilesScreen';
+import { BottomNavigation } from './components/BottomNavigation';
+import { TabScreen } from './types';
+import { colors } from './theme/theme';
+import { useFonts } from 'expo-font';
 export { triggerHaptic };
 
 const STORAGE_KEY = '@blinky_pc_ip';
@@ -84,7 +97,7 @@ let VolumeManager: any = null;
 try {
   VolumeManager = require('react-native-volume-manager').VolumeManager;
 } catch (e) {
-  console.log('react-native-volume-manager not available in this environment');
+  // VolumeManager is optional
 }
 
 const getExpoHostIp = (): string | null => {
@@ -511,7 +524,7 @@ interface SlashCommand {
   color: string;
 }
 
-const SLASH_COMMANDS: SlashCommand[] = [
+const SLASH_COMMANDS: SlashCommandDef[] = [
   {
     id: 'antigravity',
     prefix: '/agy ',
@@ -543,6 +556,14 @@ const SLASH_COMMANDS: SlashCommand[] = [
 
 /** Renders the Blinky mobile companion and coordinates its desktop connection. */
 export default function App() {
+  const [fontsLoaded] = useFonts({
+    'Unigeo': require('./assets/fonts/unigeo.ttf'),
+    'TypoFormal': require('./assets/fonts/typo-formal.otf'),
+    'OkineSans': require('./assets/fonts/okine-regular.otf'),
+    'OkineSansMedium': require('./assets/fonts/okine-medium.otf'),
+  });
+
+  const [showSplash, setShowSplash] = useState(true);
   const [ipAddress, setIpAddress] = useState('');
   const [remoteToken, setRemoteToken] = useState('');
   const [certificatePin, setCertificatePin] = useState('');
@@ -580,6 +601,7 @@ export default function App() {
   const [agentStatus, setAgentStatus] = useState<'idle' | 'processing' | 'success' | 'error'>('idle');
   
   // Custom message history state
+  const [activeTab, setActiveTab] = useState<TabScreen>('Chat');
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
@@ -1596,10 +1618,13 @@ export default function App() {
       Alert.alert('Error', 'Failed to send command. Check link.');
     }
   };
+  if (!fontsLoaded) {
+    return null;
+  }
 
-    return (
+  return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <LinearGradient colors={['#070313', '#090710', '#05020B']} style={styles.container}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
         <StatusBar barStyle="light-content" />
         <View style={styles.safeArea}>
           <KeyboardAvoidingView
@@ -1607,257 +1632,39 @@ export default function App() {
             style={styles.keyboardView}
           >
           {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.headerLeft}>
-              <Ionicons name="sparkles" size={24} color="#FF5A36" style={{ marginRight: 8 }} />
-              <Text style={styles.title}>BLINKY</Text>
-            </View>
-            <View style={styles.headerRight}>
-              <TouchableOpacity
-                style={styles.statusRowHeader}
-                onPress={() => {
-                  triggerHaptic('light');
-                  setShowSettings(!showSettings);
-                }}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.statusDotHeader, { backgroundColor: isConnected ? '#10B981' : (status === 'connecting' ? '#F59E0B' : '#EF4444') }]} />
-                <Text style={styles.statusTextHeader}>
-                  {isConnected ? 'Connected' : (status === 'connecting' ? 'Connecting...' : 'Disconnected')}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => { triggerHaptic('light'); setShowMenu(!showMenu); }} style={styles.menuBtn}>
-                <Ionicons name="ellipsis-vertical" size={20} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-          </View>
+          <BrandHeader
+            status={status}
+            isConnected={isConnected}
+            onPressConnection={() => setShowSettings(!showSettings)}
+            onPressMenu={() => setShowMenu(!showMenu)}
+          />
 
-          {/* Three Dots Dropdown Overlay Menu */}
+          {/* Three Dots Dropdown Overlay Menu (Temporary fallback) */}
           {showMenu && (
             <View style={styles.dropdownMenu}>
               <TouchableOpacity style={styles.dropdownItem} onPress={() => { triggerHaptic('light'); setShowMenu(false); setShowSettings(!showSettings); }}>
                 <Ionicons name="settings-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
                 <Text style={styles.dropdownText}>Local Link Setup</Text>
               </TouchableOpacity>
-
               <View style={styles.dropdownDivider} />
-
-              <TouchableOpacity
-                style={styles.dropdownItem}
-                onPress={onWakePcPressed}
-                disabled={isSendingWol}
-              >
+              <TouchableOpacity style={styles.dropdownItem} onPress={onWakePcPressed} disabled={isSendingWol}>
                 <Ionicons name="flash" size={18} color="#10B981" style={styles.dropdownIcon} />
                 <Text style={[styles.dropdownText, { color: '#10B981', fontWeight: '600' }]}>
                   {isSendingWol ? 'Waking PC...' : isWorkstationLocked ? 'Wake / Unlock PC' : 'Wake PC (WoL)'}
                 </Text>
               </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerQuickAction('volume_mute', 'Mute')}>
+              <TouchableOpacity style={styles.dropdownItem} onPress={() => { setShowMenu(false); triggerQuickAction('volume_mute', 'Mute'); }}>
                 <Ionicons name="volume-mute-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
                 <Text style={styles.dropdownText}>Mute Volume</Text>
               </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={handleCaptureScreenshot}>
+              <TouchableOpacity style={styles.dropdownItem} onPress={() => { setShowMenu(false); handleCaptureScreenshot(); }}>
                 <Ionicons name="crop-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
                 <Text style={styles.dropdownText}>Capture Screenshot</Text>
               </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.dropdownItem}
-                onPress={() => {
-                  if (isWorkstationLocked) {
-                    handleUnlockWorkstation();
-                  } else {
-                    triggerQuickAction('lock' as any, 'Lock');
-                  }
-                }}
-              >
-                <Ionicons
-                  name={isWorkstationLocked ? 'lock-open-outline' : 'lock-closed-outline'}
-                  size={18}
-                  color={isWorkstationLocked ? '#10B981' : '#FFFFFF'}
-                  style={styles.dropdownIcon}
-                />
-                <Text style={[styles.dropdownText, isWorkstationLocked && { color: '#10B981', fontWeight: '600' }]}>
-                  {isWorkstationLocked ? 'Unlock Workstation' : 'Lock Workstation'}
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerPowerCommand('hibernate', 'Hibernate')}>
-                <Ionicons name="moon" size={18} color="#A78BFA" style={styles.dropdownIcon} />
-                <Text style={[styles.dropdownText, { color: '#A78BFA' }]}>Hibernate Host</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerPowerCommand('sleep', 'Sleep')}>
-                <Ionicons name="moon-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
-                <Text style={styles.dropdownText}>Sleep Mode</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerPowerCommand('restart', 'Reboot')}>
-                <Ionicons name="refresh-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
-                <Text style={styles.dropdownText}>Reboot PC</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerPowerCommand('power_off', 'Shutdown')}>
-                <Ionicons name="power-outline" size={18} color="#EF4444" style={styles.dropdownIcon} />
-                <Text style={[styles.dropdownText, { color: '#EF4444' }]}>Shutdown PC</Text>
-              </TouchableOpacity>
             </View>
           )}
 
-          {/* Local Link Setup Box (Shows right below header when toggled) */}
-          {showSettings && (
-            <View style={styles.connectionCard}>
-              <View style={styles.connectionHeaderRow}>
-                <Text style={styles.connectionTitle}>Local Wi-Fi Link Setup</Text>
-                <TouchableOpacity onPress={() => setShowSettings(false)}>
-                  <Ionicons name="close" size={20} color="#8A86AA" />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.connectionSubtitle}>
-                {RELEASE_TRANSPORT
-                  ? 'Enter the PC IP, remote token, and the pinned certificate value from the PC release build.'
-                  : 'Enter your PC\'s IP (e.g. 100.122.62.2) or tap "Auto-Discover" to automatically locate and connect to Blinky.'}
-              </Text>
-              <View style={styles.inputWrapper}>
-                <Ionicons name="link-outline" size={20} color="#6C6985" style={styles.inputIcon} />
-                <TextInput
-                  style={[styles.input, isConnected && styles.inputDisabled]}
-                  placeholder="Enter PC IP (e.g. 100.122.62.2)"
-                  placeholderTextColor="#6C6985"
-                  value={ipAddress}
-                  onChangeText={setIpAddress}
-                  editable={!isConnected && status !== 'connecting'}
-                  keyboardType="numeric"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </View>
-              <View style={styles.inputWrapper}>
-                <Ionicons name="key-outline" size={20} color="#6C6985" style={styles.inputIcon} />
-                <TextInput
-                  style={[styles.input, isConnected && styles.inputDisabled]}
-                  placeholder="Remote token (BLINKY_REMOTE_TOKEN)"
-                  placeholderTextColor="#6C6985"
-                  value={remoteToken}
-                  onChangeText={setRemoteToken}
-                  editable={!isConnected && status !== 'connecting'}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </View>
-              {RELEASE_TRANSPORT && (
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="shield-checkmark-outline" size={20} color="#6C6985" style={styles.inputIcon} />
-                  <TextInput
-                    style={[styles.input, isConnected && styles.inputDisabled]}
-                    placeholder="Certificate pin (sha256/...)"
-                    placeholderTextColor="#6C6985"
-                    value={certificatePin}
-                    onChangeText={setCertificatePin}
-                    editable={!isConnected && status !== 'connecting'}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                </View>
-              )}
-              <View style={styles.inputWrapper}>
-                <Ionicons name="lock-open-outline" size={20} color="#6C6985" style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Windows Account Password"
-                  placeholderTextColor="#6C6985"
-                  value={workstationPin}
-                  onChangeText={(val) => {
-                    setWorkstationPin(val);
-                    AsyncStorage.setItem(WORKSTATION_PIN_STORAGE_KEY, val).catch(() => {});
-                  }}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </View>
-              <Text style={{ color: '#6C6985', fontSize: 11, marginTop: -6, marginBottom: 8, paddingHorizontal: 4, lineHeight: 15 }}>
-                Enter your Windows password (not Windows Hello PIN) to unlock remotely via the Unlock Provider.
-              </Text>
-              <View style={styles.actionRow}>
-
-                {status !== 'connected' && status !== 'connecting' ? (
-                  <>
-                    <TouchableOpacity style={styles.connectBtn} onPress={handleConnect} activeOpacity={0.8} disabled={isDiscovering}>
-                      <LinearGradient
-                        colors={isDiscovering ? ['#4B5563', '#374151'] : ['#3B82F6', '#1D4ED8']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.gradientBtn}
-                      >
-                        <Text style={styles.btnText}>Establish Link</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.discoverBtn} onPress={handleAutoDiscover} activeOpacity={0.8} disabled={isDiscovering}>
-                      <LinearGradient
-                        colors={isDiscovering ? ['#4B5563', '#374151'] : ['#8B5CF6', '#6D28D9']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.gradientBtn}
-                      >
-                        <Text style={styles.btnText}>Auto-Discover</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <TouchableOpacity style={styles.disconnectBtn} onPress={() => { triggerHaptic('heavy'); disconnect(); }} activeOpacity={0.8}>
-                    <Text style={styles.disconnectBtnText}>
-                      {status === 'connecting' ? 'Cancel Connection' : 'Disconnect Link'}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-              {discoveryProgress && (
-                <View style={styles.discoveryProgressContainer}>
-                  <ActivityIndicator size="small" color="#8B5CF6" style={{ marginRight: 8 }} />
-                  <Text style={styles.discoveryProgressText}>{discoveryProgress}</Text>
-                </View>
-              )}
-              {errorMsg && (
-                <View style={styles.errorContainer}>
-                  <Text style={styles.errorText}>{errorMsg}</Text>
-                </View>
-              )}
-
-              {/* Target MAC address for Wake-on-LAN */}
-              <View style={{ marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255, 255, 255, 0.08)' }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <Text style={{ color: '#8A86AA', fontSize: 11, fontWeight: '700', letterSpacing: 0.5 }}>TARGET PC MAC ADDRESS</Text>
-                  {systemInfo?.network?.mac_address ? (
-                    <TouchableOpacity
-                      onPress={() => {
-                        triggerHaptic('light');
-                        setMacAddress(systemInfo.network.mac_address);
-                      }}
-                      style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: 'rgba(16, 185, 129, 0.15)', borderWidth: 1, borderColor: 'rgba(16, 185, 129, 0.3)' }}
-                    >
-                      <Text style={{ fontSize: 10, color: '#10B981', fontWeight: '700' }}>⚡ Auto-detected</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="hardware-chip-outline" size={18} color="#6C6985" style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    placeholder={systemInfo?.network?.mac_address || "e.g. 68:c6:ac:a2:d2:30"}
-                    placeholderTextColor="#6C6985"
-                    value={macAddress}
-                    onChangeText={setMacAddress}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                </View>
-              </View>
-            </View>
-          )}
+          {/* Settings modal extracted to SettingsModal.tsx */}
 
           {/* Disconnected Alert Banner (if disconnected and settings not open) */}
           {!isConnected && !showSettings && (
@@ -1955,230 +1762,113 @@ export default function App() {
             </View>
           )}
 
-          {/* Main Messaging Feed */}
-          <ScrollView
-            ref={scrollViewRef}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.chatScrollContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            {messages.map((message) => {
-              const isUser = message.sender === 'user';
-              return (
-                <View key={message.id} style={isUser ? styles.userMessageRow : styles.blinkyMessageRow}>
-                  {/* Blinky Avatar */}
-                  {!isUser && (
-                    <View style={styles.avatarContainer}>
-                      <Ionicons name="sparkles" size={14} color="#FF5A36" />
-                    </View>
-                  )}
-
-                  <View style={isUser ? styles.userMessageBubble : styles.blinkyMessageBubble}>
-                    {/* Bubble main text with full Markdown & LaTeX rendering */}
-                    <MarkdownRenderer content={message.text} isUser={isUser} />
-
-                    {/* Nested Active Progress Card inside Blinky's response bubble */}
-                    {!isUser && message.progress && (
-                      <View style={styles.nestedProgressCard}>
-                        {/* Progress slider line */}
-                        <View style={styles.progressBarWrapper}>
-                          <View style={styles.progressBarContainer}>
-                            <View 
-                              style={[
-                                styles.progressBarFill, 
-                                { width: `${message.progress.percent}%` }
-                              ]} 
-                            />
-                          </View>
-                          <Text style={styles.progressPercent}>{message.progress.percent}%</Text>
-                        </View>
-
-                        {/* Status message */}
-                        <View style={styles.progressStatusRow}>
-                          <View style={styles.progressStatusDot} />
-                          <Text style={styles.progressStatusText} numberOfLines={2}>
-                            {message.progress.statusText}
-                          </Text>
-                        </View>
-
-                        {/* Stopwatch */}
-                        <View style={styles.progressTimerRow}>
-                          <Ionicons name="time-outline" size={14} color="#8A86AA" style={{ marginRight: 6 }} />
-                          <Text style={styles.progressTimerText}>{formatTime(message.progress.duration)}</Text>
-                        </View>
-                      </View>
-                    )}
-
-                    {/* Screenshot results inside the final success bubble */}
-                    {!isUser && message.screenshot_b64 && (
-                      <TouchableOpacity
-                        activeOpacity={0.88}
-                        onPress={() => {
-                          triggerHaptic('light');
-                          setPreviewImageUri(`data:image/jpeg;base64,${message.screenshot_b64}`);
-                        }}
-                        style={styles.screenshotTouchable}
-                      >
-                        <Image
-                          source={{ uri: `data:image/jpeg;base64,${message.screenshot_b64}` }}
-                          style={styles.bubbleScreenshot}
-                        />
-                        <View style={styles.enlargeBadge}>
-                          <Ionicons name="expand-outline" size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
-                          <Text style={styles.enlargeBadgeText}>Tap to enlarge</Text>
-                        </View>
-                      </TouchableOpacity>
-                    )}
-
-                    {/* Steps trace inside the final success bubble */}
-                    {!isUser && message.steps && message.steps.length > 0 && (
-                      <View style={styles.bubbleStepsContainer}>
-                        {message.steps.map((step: any, index: number) => (
-                          <View key={index} style={styles.bubbleStepItem}>
-                            <View style={styles.bubbleStepBadge}>
-                              <Text style={styles.bubbleStepBadgeText}>{step.step || index + 1}</Text>
-                            </View>
-                            <View style={styles.bubbleStepContent}>
-                              <Text style={styles.bubbleStepText}>{step.instruction}</Text>
-                              {step.target_text && (
-                                <View style={styles.bubbleStepTargetBadge}>
-                                  <Text style={styles.bubbleStepTargetText}>{step.target_text}</Text>
-                                </View>
-                              )}
-                            </View>
-                          </View>
-                        ))}
-                      </View>
-                    )}
-                  </View>
-
-                  {/* Timestamp aligned right under user or blinky message */}
-                  <View style={isUser ? styles.userMetaRow : styles.blinkyMetaRow}>
-                    <Text style={styles.metaTimestamp}>{message.timestamp}</Text>
-                    {isUser && (
-                      <View style={styles.checkmarksRow}>
-                        <Ionicons name="checkmark-done" size={14} color="#FF5A36" />
-                      </View>
-                    )}
-                  </View>
-                </View>
-              );
-            })}
-          </ScrollView>
-
-          {/* Slash Commands Dropdown Menu */}
-          {(() => {
-            const showSlashMenu = queryText.startsWith('/') && !queryText.includes(' ');
-            const slashFilter = queryText.toLowerCase().replace('/', '');
-            const filteredCommands = SLASH_COMMANDS.filter(cmd =>
-              !slashFilter ||
-              cmd.id.includes(slashFilter) ||
-              cmd.title.toLowerCase().includes(slashFilter) ||
-              cmd.badge.toLowerCase().includes(slashFilter)
-            );
-
-            if (!showSlashMenu || filteredCommands.length === 0) return null;
-
-            return (
-              <View style={styles.slashMenuContainer}>
-                <View style={styles.slashMenuHeader}>
-                  <Ionicons name="terminal-outline" size={13} color="#FF5A36" style={{ marginRight: 6 }} />
-                  <Text style={styles.slashMenuHeaderText}>COMMANDS</Text>
-                </View>
-                {filteredCommands.map((cmd, idx) => (
-                  <TouchableOpacity
-                    key={cmd.id}
-                    style={[
-                      styles.slashMenuItem,
-                      idx < filteredCommands.length - 1 && styles.slashMenuItemBorder
-                    ]}
-                    onPress={() => {
-                      triggerHaptic('light');
-                      setQueryText(cmd.prefix);
+          {/* TAB ROUTING */}
+          {activeTab === 'Chat' && (
+            <View style={{ flex: 1 }}>
+              {/* Main Messaging Feed */}
+              <ScrollView
+                ref={scrollViewRef}
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={[styles.chatScrollContent, { paddingBottom: 24 }]}
+                keyboardShouldPersistTaps="handled"
+              >
+                {messages.length <= 1 && (
+                  <ChatHome
+                    onQuickAction={(action) => {
+                      if (action === 'Screenshot') handleCaptureScreenshot();
+                      else if (action === 'Open app') setQueryText('/app ');
+                      else if (action === 'Run command') setQueryText('/run ');
                     }}
-                    activeOpacity={0.7}
-                  >
-                    <View style={[styles.slashMenuIconBadge, { backgroundColor: `${cmd.color}22`, borderColor: `${cmd.color}55` }]}>
-                      <Ionicons name={cmd.icon} size={15} color={cmd.color} />
-                    </View>
-                    <View style={styles.slashMenuContent}>
-                      <View style={styles.slashMenuTitleRow}>
-                        <Text style={styles.slashMenuTitle}>{cmd.title}</Text>
-                        <View style={[styles.slashMenuBadge, { backgroundColor: `${cmd.color}22` }]}>
-                          <Text style={[styles.slashMenuBadgeText, { color: cmd.color }]}>{cmd.badge}</Text>
-                        </View>
-                      </View>
-                      <Text style={styles.slashMenuDesc} numberOfLines={1}>
-                        {cmd.description}
-                      </Text>
-                    </View>
-                    <Ionicons name="return-down-back-outline" size={14} color="#6C6985" />
-                  </TouchableOpacity>
+                  />
+                )}
+                {messages.map((message) => (
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    formatTime={formatTime}
+                    onEnlargeScreenshot={(uri) => {
+                      triggerHaptic('light');
+                      setPreviewImageUri(uri);
+                    }}
+                  />
                 ))}
-              </View>
-            );
-          })()}
+              </ScrollView>
 
-          {/* Bottom Chat Bar */}
-          <View style={[styles.chatInputBar, !isConnected && styles.chatInputBarDisabled]}>
-            {/* Voice Command Mic Circle Button */}
-            {isVoiceTranscribing ? (
-              <View style={styles.voiceSpinnerWrapper}>
-                <ActivityIndicator size="small" color="#FF5A36" />
-              </View>
-            ) : (
-              <TouchableOpacity
-                style={[
-                  styles.voiceMicBtn,
-                  isVoiceRecording && styles.voiceMicBtnRecording,
-                  !isConnected && styles.voiceMicBtnDisabled
-                ]}
-                onPress={toggleVoiceRecording}
-                disabled={!isConnected || isVoiceTranscribing}
-                activeOpacity={0.7}
-              >
-                <Ionicons 
-                  name={isVoiceRecording ? "mic" : "mic"} 
-                  size={20} 
-                  color={isVoiceRecording ? "#EF4444" : "#FF5A36"} 
-                />
-              </TouchableOpacity>
-            )}
+              {/* Slash Commands Dropdown Menu */}
+              <SlashCommandMenu
+                queryText={queryText}
+                onSelectCommand={setQueryText}
+                commands={SLASH_COMMANDS}
+              />
 
-            <TextInput
-              style={styles.chatTextInput}
-              placeholder="Message Blinky or /agy <prompt>"
-              placeholderTextColor="#6C6985"
-              value={queryText}
-              onChangeText={setQueryText}
-              editable={isConnected && agentStatus !== 'processing'}
-              autoCapitalize="none"
-              autoCorrect={false}
-              onSubmitEditing={handleQuery}
+              {/* Command Composer */}
+              <CommandComposer
+                queryText={queryText}
+                setQueryText={setQueryText}
+                onSubmit={handleQuery}
+                onStop={handleStopQuery}
+                status={agentStatus}
+                isConnected={isConnected}
+                isVoiceRecording={isVoiceRecording}
+                isVoiceTranscribing={isVoiceTranscribing}
+                onToggleVoice={toggleVoiceRecording}
+              />
+            </View>
+          )}
+
+          {activeTab === 'Actions' && (
+            <ActionsScreen 
+              isConnected={isConnected}
+              onExecuteAction={(cmd) => {
+                // Send the command directly using the existing websocket query function
+                sendQuery(cmd, generateUuid());
+              }}
             />
+          )}
 
-            {/* Stop Action or Send Button */}
-            {agentStatus === 'processing' ? (
-              <TouchableOpacity 
-                style={styles.stopCircleBtn} 
-                onPress={handleStopQuery}
-                activeOpacity={0.7}
-              >
-                <View style={styles.stopSquare} />
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity 
-                style={[
-                  styles.chatSendBtn, 
-                  (!isConnected || !queryText.trim()) && styles.chatSendBtnDisabled
-                ]}
-                onPress={handleQuery}
-                disabled={!isConnected || !queryText.trim()}
-              >
-                <Ionicons name="arrow-up" size={20} color="#FFFFFF" />
-              </TouchableOpacity>
-            )}
-          </View>
+          {activeTab === 'PC' && (
+            <SystemScreen 
+              systemInfo={systemInfo}
+              isConnected={isConnected}
+              onPowerAction={(action) => {
+                // Example of sending a JSON power event to the server
+                if (action === 'sleep') sendQuery('/sleep', generateUuid());
+                if (action === 'lock') sendQuery('/lock', generateUuid());
+                if (action === 'restart') sendQuery('/restart', generateUuid());
+                if (action === 'hibernate') sendQuery('/hibernate', generateUuid());
+              }}
+            />
+          )}
+
+          {activeTab === 'Files' && (
+            <FilesScreen isConnected={isConnected} />
+          )}
+
+          <SettingsModal 
+            visible={showSettings}
+            onClose={() => setShowSettings(false)}
+            isConnected={isConnected}
+            status={status}
+            ipAddress={ipAddress}
+            setIpAddress={setIpAddress}
+            remoteToken={remoteToken}
+            setRemoteToken={setRemoteToken}
+            certificatePin={certificatePin}
+            setCertificatePin={setCertificatePin}
+            workstationPin={workstationPin}
+            setWorkstationPin={setWorkstationPin}
+            macAddress={macAddress}
+            setMacAddress={setMacAddress}
+            systemInfo={systemInfo}
+            isDiscovering={isDiscovering}
+            handleConnect={handleConnect}
+            handleAutoDiscover={handleAutoDiscover}
+            disconnect={disconnect}
+            discoveryProgress={discoveryProgress}
+            errorMsg={errorMsg}
+            RELEASE_TRANSPORT={RELEASE_TRANSPORT}
+            WORKSTATION_PIN_STORAGE_KEY={WORKSTATION_PIN_STORAGE_KEY}
+          />
 
           {/* Fullscreen Image Preview Modal with Pinch to Zoom */}
           <Modal
@@ -2195,8 +1885,10 @@ export default function App() {
             )}
           </Modal>
         </KeyboardAvoidingView>
+        <BottomNavigation activeTab={activeTab} onTabChange={setActiveTab} />
       </View>
-    </LinearGradient>
+      {showSplash && <SplashScreen onDismiss={() => setShowSplash(false)} />}
+      </View>
     </GestureHandlerRootView>
   );
 }
