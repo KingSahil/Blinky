@@ -345,7 +345,11 @@ def run(
         wa_action = str(extracted_params.get("wa_action") or "status").lower().strip()
         wa_chat_name = extracted_params.get("wa_chat_name") or None
         return run_whatsapp_tool(wa_action, wa_chat_name, started, warnings)
+    elif intent == "ESP32_LIGHT":
+        LOGGER.info("Routing to ESP32 Light tool for intent: ESP32_LIGHT")
+        return run_esp32_light_tool(extracted_params, started, warnings)
     elif intent in {"COMPUTER_USE", "OPEN_APP", "MEDIA_PLAYBACK", "SYSTEM_SHORTCUT"}:
+
         LOGGER.info("Automatically enabling agent mode for classified intent: %s", intent)
         agent_mode = True
     elif intent in {"SCREEN_EXPLANATION", "LOCATOR"}:
@@ -965,6 +969,19 @@ def classify_request(
             }
     except Exception as exc:
         LOGGER.debug("Fast-path WhatsApp resolution failed: %s", exc)
+    try:
+        from tools.esp32_light_tool import resolve_light_request
+        light_match = resolve_light_request(question)
+        if light_match:
+            return {
+                "intent": "ESP32_LIGHT",
+                "needs_screen": False,
+                "is_continuation": False,
+                "extracted_params": light_match,
+            }
+    except Exception as exc:
+        LOGGER.debug("Fast-path ESP32 light resolution failed: %s", exc)
+
 
     try:
         payload = ask_text_model(build_preflight_prompt(question, previous_question, conversation_history))
@@ -1108,6 +1125,33 @@ def run_whatsapp_tool(
         summary = "WhatsApp tool timed out. The backend may be busy or not running."
     except Exception as exc:
         summary = f"Failed to run WhatsApp tool: {exc}"
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": summary,
+        "steps": [],
+        "active_app": {"title": "", "process": "", "supported": False},
+        "ocr": {"count": 0, "items": []},
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+        "is_continuation": False,
+    }
+
+
+def run_esp32_light_tool(
+    params: dict,
+    started: float,
+    warnings: list[str],
+) -> dict:
+    """Execute ESP32 Light command and return a Blinky-formatted result."""
+    from tools.esp32_light_tool import handle_request
+    _emit_status("esp32_light", "Controlling ESP32 physical light...")
+    res = handle_request(params)
+    if res.get("success"):
+        summary = res.get("message", "Light updated successfully.")
+    else:
+        summary = f"Failed to control light: {res.get('error', 'ESP32 unreachable')}"
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     return {

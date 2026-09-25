@@ -1,0 +1,29 @@
+{
+  "desk_light": {
+    "name": "desk_light",
+    "type": "rgb",
+    "description": "RGB ambient desk light",
+    "pins": [25, 26, 27],
+    "triggers": ["light", "lights", "desk light", "rgb"]
+  },
+  "door_lock": {
+    "name": "door_lock",
+    "type": "servo",
+    "pin": 18,
+    "description": "Door lock mechanism",
+    "triggers": ["door", "lock", "unlock door", "lock door", "open door"],
+    "positions": {
+      "unlock": 90,
+      "open": 90,
+      "lock": 0,
+      "close": 0
+    }
+  },
+  "buzzer": {
+    "name": "buzzer",
+    "type": "tone",
+    "pin": 19,
+    "description": "Alert buzzer",
+    "triggers": ["buzzer", "beep", "buzz", "alarm", "siren"]
+  }
+}

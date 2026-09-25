@@ -78,5 +78,23 @@
     "verification_args": {
       "action": "explorer_context"
     }
+  },
+  "esp32_light": {
+    "name": "esp32_light",
+    "description": "Control the physical ESP32 RGB light (turn on, turn off, change colors like red, green, blue, yellow, cyan, purple, orange, warm white, etc. or set RGB values).",
+    "filepath": "python/tools/esp32_light_tool.py",
+    "arguments": [
+      "color",
+      "action",
+      "r",
+      "g",
+      "b",
+      "brightness"
+    ],
+    "status": "generalized",
+    "verification_args": {
+      "color": "red"
+    }
   }
 }
+

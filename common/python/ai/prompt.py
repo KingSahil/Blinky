@@ -52,7 +52,11 @@ Intents to choose from:
     - "music_volume": background music volume (float between 0.0 and 1.0)
     - "input_paths": list of video paths when merging clips
     - "subtitles": boolean whether subtitles/captions should be burned (default false unless captions requested)
-9. `DESKTOP_AUTOMATION`: Any step-by-step guidance on the user's active desktop screen/application UI (e.g. "how do I install python extension?", "click the install button", "where is the settings tab?").
+9. `ESP32_LIGHT`: The user wants to control physical room or desk lights connected to an ESP32 micro-controller (e.g. "turn on red light", "turn off the light", "set light to blue", "make the light warm white", "dim light"). Extract:
+    - "action": "set_color" or "turn_off"
+    - "color": color name like "red", "green", "blue", "yellow", "cyan", "purple", "white", "warm_white" (or null if turning off)
+    - "brightness": float between 0.0 and 1.0 (or null)
+10. `DESKTOP_AUTOMATION`: Any step-by-step guidance on the user's active desktop screen/application UI (e.g. "how do I install python extension?", "click the install button", "where is the settings tab?").
 
 Compound-request rule (IMPORTANT):
 - If the request combines OPENING an app WITH a follow-up action inside it
@@ -62,7 +66,8 @@ Compound-request rule (IMPORTANT):
 
 Rules for needs_screen:
 - needs_screen is true ONLY when the student wants guidance tied to visible UI (like clicking, opening, selecting, locating, highlighting, installing, or navigating something in an app, menu, button, tab, or window), OR when the student asks what is on their screen ("what's on my screen", "whats on my screen", "describe my screen", "explain my screen", "what am I looking at").
-- needs_screen is false for COMPUTER_USE, OPEN_APP, MEDIA_PLAYBACK, SYSTEM_SHORTCUT, WEB_SEARCH, INFORMATIONAL_CHAT, WHATSAPP, and VIDEO_EDIT.
+- needs_screen is false for COMPUTER_USE, OPEN_APP, MEDIA_PLAYBACK, SYSTEM_SHORTCUT, WEB_SEARCH, INFORMATIONAL_CHAT, WHATSAPP, VIDEO_EDIT, and ESP32_LIGHT.
+
 
 Rules for is_continuation:
 - is_continuation is true ONLY if the request is a short follow-up or query directly continuing or asking about the status/next step of the previous active goal/task (e.g. "what next?", "done", "now what?", "it is not showing up", "continue").
