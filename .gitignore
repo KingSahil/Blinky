@@ -65,8 +65,8 @@ log[0-9]*.txt
 cache/huggingface/
 models/
 *.bin
-
 # Hardware firmware credentials & build configs
 config.h
 esp32_firmware/**/config.h
+scratch/
 

@@ -17,12 +17,12 @@ import time
 import urllib.request
 from pathlib import Path
 
-BLINKY_HOOK_URL = "http://127.0.0.1:9002/hook"
+BLINKY_HOOK_URL = "http://127.0.0.1:9003/hook"
 QUEUE_FILE = Path(__file__).resolve().parent.parent.parent / ".agents" / "prompt_queue.json"
 
 
 def post_to_blinky(payload: dict, timeout: float = 2.0) -> dict | None:
-    """Send hook payload to Blinky desktop server on loopback port 9002."""
+    """Send hook payload to Blinky desktop server on loopback port 9003."""
     try:
         data_bytes = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(

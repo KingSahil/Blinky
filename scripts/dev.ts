@@ -247,11 +247,13 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
       console.log(`  - ${dev}`);
     }
 
-    console.log("[Mobile] Setting up USB reverse port forwarding (tcp:9001, tcp:8081)...");
+    console.log("[Mobile] Setting up USB reverse port forwarding (tcp:9001, tcp:9002, tcp:8081)...");
     const rev1 = spawn([adb, "reverse", "tcp:9001", "tcp:9001"]);
     await Promise.race([rev1.exited, new Promise(r => setTimeout(r, 1500))]);
-    const rev2 = spawn([adb, "reverse", "tcp:8081", "tcp:8081"]);
+    const rev2 = spawn([adb, "reverse", "tcp:9002", "tcp:9002"]);
     await Promise.race([rev2.exited, new Promise(r => setTimeout(r, 1500))]);
+    const rev3 = spawn([adb, "reverse", "tcp:8081", "tcp:8081"]);
+    await Promise.race([rev3.exited, new Promise(r => setTimeout(r, 1500))]);
 
     // Check if Metro bundler is already running on IPv4
     let mobileProc: Subprocess | null = null;
@@ -266,8 +268,11 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
     } else {
       if (process.platform === "win32") {
         try {
-          const killProc = spawn(["powershell", "-Command", "Get-NetTCPConnection -LocalPort 8081 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"]);
-          await killProc.exited;
+          const portCheck = Bun.spawnSync(["powershell", "-NoProfile", "-Command", "Get-NetTCPConnection -State Listen -LocalPort 8081 -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess -Unique | ForEach-Object { $owner = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; \"port $($_.LocalPort), PID $($_.OwningProcess), process $($owner.ProcessName)\" }"]);
+          const listeners = portCheck.stdout.toString().trim();
+          if (listeners) {
+            console.warn(`[Mobile] Port 8081 is occupied; leaving the existing listener running. Stop it manually if Metro cannot start.\n${listeners}`);
+          }
         } catch {}
       }
 
@@ -329,13 +334,19 @@ function getTailscaleIp(): string | null {
       }
 
       try {
-        const launchCustom = spawn([adb, "shell", "am", "start", "-n", "com.technerds.blinkyremote/.MainActivity"]);
-        await launchCustom.exited;
-      } catch {
-        try {
+        const checkPkg = Bun.spawnSync([adb, "shell", "pm", "list", "packages", "com.technerds.blinkyremote"]);
+        const isCustomInstalled = checkPkg.stdout.toString().includes("com.technerds.blinkyremote");
+        if (isCustomInstalled) {
+          console.log("[Mobile] 📱 Launching Blinky custom native app on device...");
+          const launchCustom = spawn([adb, "shell", "am", "start", "-n", "com.technerds.blinkyremote/.MainActivity"]);
+          await launchCustom.exited;
+        } else {
+          console.log("[Mobile] 📱 Launching Expo Go on device...");
           const launchExpo = spawn([adb, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
           await launchExpo.exited;
-        } catch {}
+        }
+      } catch (err: any) {
+        console.warn(`[Mobile] Could not launch app on device: ${err?.message || err}`);
       }
     })();
 
@@ -368,15 +379,25 @@ if (process.platform === "win32" && !existsSync("common/python_runtime/Python313
 
 const customPort = process.env.PORT ? parseInt(process.env.PORT, 10) : 5173;
 
-/** Stops stale Windows development processes and listeners. */
+/** Stops only the Windows process tree started by this dev run. */
 const killWindowsProcessTree = (pid?: number) => {
-  if (process.platform !== "win32") return;
+  if (process.platform !== "win32" || !pid) return;
   try {
-    if (pid) {
-      Bun.spawnSync(["taskkill", "/F", "/T", "/PID", String(pid)]);
+    Bun.spawnSync(["taskkill", "/F", "/T", "/PID", String(pid)]);
+  } catch {}
+};
+
+/** Reports existing Windows listeners without terminating unrelated processes. */
+const reportWindowsPortConflicts = () => {
+  if (process.platform !== "win32") return;
+  const ports = [...new Set([customPort, 9001, 9002])].filter(Number.isInteger);
+  const command = `Get-NetTCPConnection -State Listen -LocalPort ${ports.join(",")} -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess -Unique | ForEach-Object { $owner = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; "port $($_.LocalPort), PID $($_.OwningProcess), process $($owner.ProcessName)" }`;
+  try {
+    const result = Bun.spawnSync(["powershell", "-NoProfile", "-Command", command]);
+    const listeners = result.stdout.toString().trim();
+    if (listeners) {
+      console.warn(`[Blinky] Existing listeners detected; they will be left running. Resolve these port conflicts if startup fails:\n${listeners}`);
     }
-    Bun.spawnSync(["taskkill", "/F", "/T", "/IM", "blinky.exe"]);
-    Bun.spawnSync(["powershell", "-NoProfile", "-Command", `Get-NetTCPConnection -LocalPort ${customPort},9001 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`]);
   } catch {}
 };
 
@@ -400,9 +421,9 @@ const restoreWindowsSystemCursor = () => {
   }
 };
 
-// Pre-flight cleanup to ensure port and 9001 are free and native cursor is active
+// Pre-flight cleanup to ensure the frontend and mobile service ports are free and the native cursor is active.
 restoreWindowsSystemCursor();
-killWindowsProcessTree();
+reportWindowsPortConflicts();
 
 const tauriArgs = ["bun", "tauri", "dev"];
 if (process.env.PORT) {
@@ -467,15 +488,33 @@ if (process.stdin.isTTY) {
       // Handle direct adb mobile actions
       const k = key.toLowerCase();
       if (adbCmd) {
+        const checkCustomInstalled = () => {
+          try {
+            const checkPkg = Bun.spawnSync([adbCmd, "shell", "pm", "list", "packages", "com.technerds.blinkyremote"]);
+            return checkPkg.stdout.toString().includes("com.technerds.blinkyremote");
+          } catch {
+            return false;
+          }
+        };
+
         if (k === "r") {
           console.log("\n[Mobile] 🔄 Reloading app on connected device...");
-          spawn([adbCmd, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
+          if (checkCustomInstalled()) {
+            spawn([adbCmd, "shell", "am", "start", "-n", "com.technerds.blinkyremote/.MainActivity"]);
+          } else {
+            spawn([adbCmd, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
+          }
         } else if (k === "m") {
           console.log("\n[Mobile] 📱 Toggling developer menu on device...");
           spawn([adbCmd, "shell", "input", "keyevent", "82"]);
         } else if (k === "a") {
-          console.log("\n[Mobile] 📱 Opening Expo Go on device...");
-          spawn([adbCmd, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
+          if (checkCustomInstalled()) {
+            console.log("\n[Mobile] 📱 Opening Blinky custom native app on device...");
+            spawn([adbCmd, "shell", "am", "start", "-n", "com.technerds.blinkyremote/.MainActivity"]);
+          } else {
+            console.log("\n[Mobile] 📱 Opening Expo Go on device...");
+            spawn([adbCmd, "shell", "am", "start", "-a", "android.intent.action.VIEW", "-d", "exp://127.0.0.1:8081", "host.exp.exponent"]);
+          }
         }
       }
     });

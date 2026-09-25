@@ -406,3 +406,21 @@ def test_get_fast_video_encoder_args():
     assert "-preset" in args
 
 
+def test_file_transfer_aicut_multi_file_merge(tmp_path, monkeypatch):
+    import os
+    from file_transfer_aicut import run_transfer_edit
+    dance_path = find_candidate_file("dance.mp4")
+    assert dance_path is not None
+
+    monkeypatch.setenv("BLINKY_TRANSFER_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setenv("BLINKY_TRANSFER_ID", "test-transfer-123")
+
+    # Run transfer edit with 2 videos (using dance.mp4 twice) and merge instruction
+    res = run_transfer_edit("", dance_path, input_paths=[dance_path, dance_path])
+    assert res.get("success") is True
+    assert res.get("action") == "merge"
+    assert "output_path" in res
+    assert Path(res["output_path"]).is_file()
+
+
+

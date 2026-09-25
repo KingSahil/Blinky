@@ -14,6 +14,23 @@ type NativeSecureSocket = {
   authenticated: boolean;
 };
 
+export type FileTransferMessage = {
+  type: string;
+  requestId?: string;
+  transferId?: string;
+  temporaryToken?: string;
+  uploadOffset?: number;
+  chunkSize?: number;
+  expiresInSeconds?: number;
+  complete?: boolean;
+  editing?: boolean;
+  edited?: boolean;
+  name?: string;
+  size?: number;
+  sha256?: string;
+  message?: string;
+};
+
 const RELEASE_TRANSPORT = process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE === 'release';
 
 function loadNativeSecureSocketModule(): NativeSecureSocketModule | null {
@@ -114,6 +131,7 @@ export function usePCWebSocket() {
   const [antigravityApproval, setAntigravityApproval] = useState<AntigravityApproval | null>(null);
   const [antigravityComplete, setAntigravityComplete] = useState<AntigravityComplete | null>(null);
   const [antigravityProgress, setAntigravityProgress] = useState<AntigravityProgress | null>(null);
+  const [fileTransferMessage, setFileTransferMessage] = useState<FileTransferMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const nativeRef = useRef<NativeSecureSocket | null>(null);
 
@@ -157,7 +175,7 @@ export function usePCWebSocket() {
 
     if (RELEASE_TRANSPORT) {
       const nativeModule = loadNativeSecureSocketModule();
-      if (!nativeModule) {
+      if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative)) {
         setStatus('error');
         setErrorMsg('The release secure socket module is missing. Install a release/internal development build.');
         return;
@@ -204,7 +222,9 @@ export function usePCWebSocket() {
               disconnect('The PC rejected the remote token.');
             }
           } else if (nativeRef.current.authenticated) {
-            if (parsed.type === 'system_info') {
+            if (typeof parsed.type === 'string' && parsed.type.startsWith('file_')) {
+              setFileTransferMessage(parsed as FileTransferMessage);
+            } else if (parsed.type === 'system_info') {
               setSystemInfo(parsed as SystemInfo);
             } else if (parsed.type === 'power_event') {
               setLatestPowerEvent(parsed as PowerEvent);
@@ -300,6 +320,8 @@ export function usePCWebSocket() {
             const parsed = JSON.parse(e.data);
             if (parsed.type === 'system_info') {
               setSystemInfo(parsed as SystemInfo);
+            } else if (typeof parsed.type === 'string' && parsed.type.startsWith('file_')) {
+              setFileTransferMessage(parsed as FileTransferMessage);
             } else if (parsed.type === 'power_event') {
               setLatestPowerEvent(parsed as PowerEvent);
             } else if (parsed.type === 'antigravity_approval') {
@@ -379,6 +401,18 @@ export function usePCWebSocket() {
     return false;
   }, [sendNativeText]);
 
+  const sendFileTransferMessage = useCallback((message: Record<string, unknown>) => {
+    const payload = JSON.stringify(message);
+    if (RELEASE_TRANSPORT) return sendNativeText(payload);
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(payload);
+      return true;
+    }
+    return false;
+  }, [sendNativeText]);
+
+  const getFileTransferModule = useCallback(() => loadNativeSecureSocketModule(), []);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -423,10 +457,13 @@ export function usePCWebSocket() {
     antigravityApproval,
     antigravityComplete,
     antigravityProgress,
+    fileTransferMessage,
     connect,
     disconnect,
     sendCommand,
     sendQuery,
+    sendFileTransferMessage,
+    getFileTransferModule,
     fetchSystemInfo,
     sendAntigravityDecision,
     sendAntigravityPrompt,

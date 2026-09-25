@@ -63,7 +63,7 @@ Pre-PR review found and fixed an empty-token bypass: comparing two empty tokens 
 
 After the fix on September 10, all 26 Rust tests passed with `BLINKY_TRANSPORT_MODE=release TAURI_CONFIG='{"bundle":{"resources":[]}}' cargo test --locked --manifest-path common/src-tauri/Cargo.toml`, including the real pinned loopback WSS round trip.
 
-Known iOS merge blocker: socket/pin dictionaries are accessed from Expo's async queue, URLSession delegates, and main-queue receive callbacks without serialization. Fix this race and validate reconnect/concurrent discovery in Xcode/device tests before accepting the iOS implementation; autolinking success is insufficient.
+Known iOS validation gap from the September 10 review: socket/pin dictionaries were accessed from Expo's async queue, URLSession delegates, and main-queue receive callbacks without serialization. The file-transfer implementation now protects socket/pin state and transfer pins with locks. This addresses that source-level race, but the iOS module still needs an Xcode build and device validation before the iOS path is fully verified.
 
 - Install the newest APK and verify normal Wi-Fi pairing, a harmless volume command, and a query with streamed status/result.
 - Verify bad token shows an error, bad pin fails, and correcting credentials reconnects without restarting. Reopen the app and repeat.

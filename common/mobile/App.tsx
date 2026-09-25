@@ -45,6 +45,7 @@ import { usePCWebSocket, ConnectionStatus } from './usePCWebSocket';
 import { sendWakeOnLan, MAC_STORAGE_KEY, WOL_BROADCAST_STORAGE_KEY } from './lib/wol';
 import { triggerHaptic } from './lib/haptics';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { FileTransferPanel } from './FileTransferPanel';
 export { triggerHaptic };
 
 const STORAGE_KEY = '@blinky_pc_ip';
@@ -65,7 +66,9 @@ const loadNativeSecureSocketModule = (): NativeSecureSocketModule | null => {
 
 const readSavedCredential = async (secureKey: string, legacyKey: string): Promise<string | null> => {
   if (RELEASE_TRANSPORT) {
-    return loadNativeSecureSocketModule()?.getSecureValue(secureKey) || null;
+    const mod = loadNativeSecureSocketModule();
+    if (mod && 'isNative' in mod && !(mod as any).isNative) return null;
+    return mod?.getSecureValue(secureKey) || null;
   }
   return AsyncStorage.getItem(legacyKey);
 };
@@ -73,7 +76,9 @@ const readSavedCredential = async (secureKey: string, legacyKey: string): Promis
 const saveCredential = async (secureKey: string, legacyKey: string, value: string): Promise<void> => {
   if (RELEASE_TRANSPORT) {
     const nativeModule = loadNativeSecureSocketModule();
-    if (!nativeModule) throw new Error('Secure credential storage is unavailable in this build.');
+    if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative)) {
+      throw new Error('Secure credential storage is unavailable in this build.');
+    }
     await nativeModule.setSecureValue(secureKey, value);
     return;
   }
@@ -109,7 +114,7 @@ const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 1500, certificat
 
   if (RELEASE_TRANSPORT) {
     const nativeModule = loadNativeSecureSocketModule();
-    if (!nativeModule || !certificatePin?.trim()) {
+    if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative) || !certificatePin?.trim()) {
       return Promise.reject(new Error('Release discovery requires the secure socket module and certificate pin.'));
     }
     const socketId = `discovery-${ip}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -555,6 +560,7 @@ export default function App() {
     antigravityApproval,
     antigravityComplete,
     antigravityProgress,
+    fileTransferMessage,
     connect,
     disconnect,
     sendCommand,
@@ -563,6 +569,8 @@ export default function App() {
     sendAntigravityDecision,
     sendAntigravityPrompt,
     dismissAntigravityComplete,
+    sendFileTransferMessage,
+    getFileTransferModule,
   } = usePCWebSocket();
   const [macAddress, setMacAddress] = useState('');
   const [wolBroadcastIp, setWolBroadcastIp] = useState('255.255.255.255');
@@ -574,6 +582,7 @@ export default function App() {
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [discoveryProgress, setDiscoveryProgress] = useState<string | null>(null);
+  const [showFileTransfer, setShowFileTransfer] = useState(false);
 
   const [queryText, setQueryText] = useState('');
   const [runningQuery, setRunningQuery] = useState('');
@@ -2145,6 +2154,16 @@ export default function App() {
               </TouchableOpacity>
             )}
 
+            <TouchableOpacity
+              style={[styles.fileAttachBtn, !isConnected && styles.voiceMicBtnDisabled]}
+              onPress={() => setShowFileTransfer(true)}
+              disabled={!isConnected}
+              accessibilityLabel="Send a file to PC"
+              activeOpacity={0.7}
+            >
+              <Ionicons name="attach-outline" size={21} color="#B9A7FF" />
+            </TouchableOpacity>
+
             <TextInput
               style={styles.chatTextInput}
               placeholder="Message Blinky or /agy <prompt>"
@@ -2194,6 +2213,17 @@ export default function App() {
               />
             )}
           </Modal>
+          <FileTransferPanel
+            visible={showFileTransfer}
+            connected={isConnected}
+            hostAddress={ipAddress}
+            releaseTransport={RELEASE_TRANSPORT}
+            certificatePin={certificatePin}
+            fileTransferMessage={fileTransferMessage}
+            sendMessage={sendFileTransferMessage}
+            getNativeModule={getFileTransferModule}
+            onClose={() => setShowFileTransfer(false)}
+          />
         </KeyboardAvoidingView>
       </View>
     </LinearGradient>
@@ -2664,6 +2694,14 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     paddingHorizontal: 8,
     fontSize: 15,
+  },
+  fileAttachBtn: {
+    width: 36,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 2,
   },
   chatSendBtn: {
     width: 40,
