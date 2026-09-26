@@ -500,8 +500,24 @@ MCP_TOOL_SCHEMAS = [
                 "transcribe": {"type": "boolean", "description": "Force transcription even if an SRT is provided (default false).", "default": False},
                 "model_size": {"type": "string", "description": "faster-whisper model size for auto-transcription (tiny/base/small/medium/large-v3, default tiny).", "default": "tiny"},
                 "language": {"type": "string", "description": "Optional language hint for transcription (e.g. 'en', 'hi'). Auto-detected if omitted."},
+                "manual_script": {"type": "string", "description": "Optional manual text or script to burn as captions, automatically synchronized to the video audio."},
             },
             "required": ["video_path"],
+        },
+    },
+    {
+        "name": "aicut_align_script",
+        "description": "Force-align manual script/captions text to speech in media file and generate timed SRT with precise audio timing.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "media_path": {"type": "string", "description": "Path to video or audio file."},
+                "script_text": {"type": "string", "description": "Manual script or caption text to align to audio."},
+                "output_srt": {"type": "string", "description": "Optional path for output SRT file."},
+                "model_size": {"type": "string", "description": "Whisper model size (default: tiny).", "default": "tiny"},
+                "language": {"type": "string", "description": "Optional language hint."},
+            },
+            "required": ["media_path", "script_text"],
         },
     },
     {
@@ -648,6 +664,31 @@ def _srt_timestamp(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+def align_script_to_audio(
+    media_path: str,
+    script_text: str,
+    output_srt: str | None = None,
+    *,
+    model_size: str = "tiny",
+    language: str | None = None,
+) -> dict[str, Any]:
+    """Force-align manual script/captions text to speech in media file and generate timed SRT."""
+    import sys as _sys
+
+    common_python = ROOT_DIR.parent / "python"
+    if str(common_python) not in _sys.path:
+        _sys.path.insert(0, str(common_python))
+
+    from subtitles.forced_aligner import align_script_to_media
+    return align_script_to_media(
+        media_path=media_path,
+        script_text=script_text,
+        output_srt=output_srt,
+        model_size=model_size,
+        language=language,
+    )
+
+
 def burn_subtitles(
     video_path: str,
     srt_path: str | None = None,
@@ -658,9 +699,12 @@ def burn_subtitles(
     model_size: str = "tiny",
     language: str | None = None,
     words_data: list[dict[str, Any]] | None = None,
+    manual_script: str | None = None,
 ) -> dict[str, Any]:
     """Burn styled subtitles into a video using the subtitles preset system.
 
+    If manual_script is provided, it is automatically force-aligned to speech
+    in the video's audio, generating precise timestamps before burning.
     If srt_path is None (or transcribe=True), the video's audio is first
     transcribed locally with faster-whisper into an SRT, then burned.
     """
@@ -685,9 +729,26 @@ def burn_subtitles(
             "error": f"Unknown subtitle preset '{preset}'. Available: {available}",
         }
 
-    # Auto-transcribe when no SRT given (or explicitly requested)
+    # If manual script provided, perform forced audio alignment
+    align_result = None
+    if manual_script and manual_script.strip():
+        from subtitles.forced_aligner import align_script_to_media
+
+        align_result = align_script_to_media(
+            media_path=v_path,
+            script_text=manual_script,
+            model_size=model_size,
+            language=language,
+        )
+        if not align_result.get("success"):
+            return align_result
+        srt_path = align_result["srt_path"]
+        if not words_data:
+            words_data = align_result.get("words")
+
+    # Auto-transcribe when no SRT given (and no manual script given)
     transcribe_result = None
-    if srt_path is None or transcribe:
+    if srt_path is None and not align_result:
         transcribe_result = transcribe_audio(str(v_path), model_size=model_size, language=language)
         if not transcribe_result.get("success"):
             return transcribe_result
@@ -695,7 +756,7 @@ def burn_subtitles(
         if not words_data:
             words_data = transcribe_result.get("words")
 
-    assert srt_path is not None  # guaranteed by transcribe or caller
+    assert srt_path is not None  # guaranteed by transcribe, align, or caller
     s_path = Path(srt_path).resolve()
     if not s_path.exists():
         return {"success": False, "error": f"SRT file not found: {srt_path}"}
@@ -711,6 +772,10 @@ def burn_subtitles(
         result["preset"] = preset
         if transcribe_result:
             result["transcription"] = transcribe_result
+        if align_result:
+            result["alignment"] = align_result
+            result["audio_synced"] = align_result.get("audio_synced", False)
+            result["word_count"] = align_result.get("word_count", 0)
     return result
 
 
@@ -778,6 +843,15 @@ def handle_mcp_request(request: dict[str, Any]) -> dict[str, Any]:
                     preset=args.get("preset", "hormozi"),
                     output_path=args.get("output_path"),
                     transcribe=args.get("transcribe", False),
+                    model_size=args.get("model_size", "tiny"),
+                    language=args.get("language"),
+                    manual_script=args.get("manual_script"),
+                )
+            elif tool_name == "aicut_align_script":
+                res = align_script_to_audio(
+                    media_path=args.get("media_path") or args.get("video_path") or args.get("audio_path"),
+                    script_text=args.get("script_text") or args.get("manual_script") or "",
+                    output_srt=args.get("output_srt"),
                     model_size=args.get("model_size", "tiny"),
                     language=args.get("language"),
                 )

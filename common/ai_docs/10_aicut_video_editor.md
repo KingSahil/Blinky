@@ -50,7 +50,8 @@ flowchart TD
 ### 4. Burning Styled Subtitles (`subtitles`)
 - **Tool**: `aicut_burn_subtitles`
 - **Behavior**: Converts `.srt` subtitles into styled `.ass` (Advanced SubStation Alpha) and burns them directly into video frames with FFmpeg `libass`.
-- **Auto-Transcription**: If no `.srt` file is supplied, it automatically transcribes the video audio using `faster-whisper` first, generates the SRT, and burns it in one pass.
+- **Manual Script Input via Chatbar**: Users can paste/type their exact script or captions directly into the CommandBar. It performs phonetic sequence forced alignment against the video's audio track, preserving 100% of user vocabulary, casing, and punctuation while locking timestamps precisely to spoken words.
+- **Auto-Transcription**: If no `.srt` file or manual script is supplied, it automatically transcribes the video audio using `faster-whisper` first, generates the SRT, and burns it in one pass.
 - **16 Presets**:
   - *Viral*: `hormozi` (yellow keyword pop), `word-karaoke` (`\k` fill), `pill-yellow`, `pill-red`, `typewriter`, `color-switch`
   - *Business/Edu*: `hormozi-clean`, `keyword-green`, `lecture-dual`

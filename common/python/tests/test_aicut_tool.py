@@ -423,4 +423,114 @@ def test_file_transfer_aicut_multi_file_merge(tmp_path, monkeypatch):
     assert Path(res["output_path"]).is_file()
 
 
+def test_forced_aligner_tokenization_and_alignment():
+    from subtitles.forced_aligner import (
+        extract_tokens_from_script,
+        align_tokens_to_audio_words,
+        words_to_subtitle_segments,
+        segments_to_srt,
+    )
+
+    script = """Welcome to StockSense — a modern, intelligent ERP and double-entry inventory management system built for real-time warehouse velocity and audit precision. Let's sign in through our secure authentication portal."""
+
+    tokens = extract_tokens_from_script(script)
+    assert any("StockSense" in t for t in tokens)
+    assert "double-entry" in tokens
+    assert "real-time" in tokens
+
+    whisper_words = [
+        {"start": 0.1, "end": 0.5, "word": "Welcome"},
+        {"start": 0.55, "end": 0.7, "word": "to"},
+        {"start": 0.75, "end": 1.1, "word": "stock"},
+        {"start": 1.15, "end": 1.5, "word": "sense"},
+        {"start": 1.6, "end": 1.7, "word": "a"},
+        {"start": 1.75, "end": 2.1, "word": "modern"},
+        {"start": 2.15, "end": 2.8, "word": "intelligent"},
+        {"start": 2.85, "end": 3.2, "word": "ERP"},
+        {"start": 3.25, "end": 3.4, "word": "and"},
+        {"start": 3.45, "end": 3.8, "word": "double"},
+        {"start": 3.85, "end": 4.2, "word": "entry"},
+        {"start": 4.25, "end": 4.8, "word": "inventory"},
+        {"start": 4.85, "end": 5.4, "word": "management"},
+        {"start": 5.45, "end": 5.9, "word": "system"},
+        {"start": 6.0, "end": 6.3, "word": "built"},
+        {"start": 6.35, "end": 6.5, "word": "for"},
+        {"start": 6.55, "end": 6.8, "word": "real"},
+        {"start": 6.85, "end": 7.1, "word": "time"},
+        {"start": 7.15, "end": 7.6, "word": "warehouse"},
+        {"start": 7.65, "end": 8.1, "word": "velocity"},
+        {"start": 8.15, "end": 8.3, "word": "and"},
+        {"start": 8.35, "end": 8.7, "word": "audit"},
+        {"start": 8.75, "end": 9.3, "word": "precision."},
+        {"start": 9.8, "end": 10.1, "word": "Let's"},
+        {"start": 10.15, "end": 10.3, "word": "sign"},
+        {"start": 10.35, "end": 10.5, "word": "in"},
+        {"start": 10.55, "end": 10.8, "word": "through"},
+        {"start": 10.85, "end": 11.0, "word": "our"},
+        {"start": 11.05, "end": 11.4, "word": "secure"},
+        {"start": 11.45, "end": 12.1, "word": "authentication"},
+        {"start": 12.15, "end": 12.6, "word": "portal."},
+    ]
+
+    aligned = align_tokens_to_audio_words(tokens, whisper_words, 15.0)
+    assert len(aligned) == len(tokens)
+
+    # Check that StockSense took audio span from stock + sense
+    stocksense_tok = next(w for w in aligned if "StockSense" in w["word"])
+    assert stocksense_tok["start"] == 0.75
+    assert stocksense_tok["end"] == 1.5
+
+    # Check segments generation
+    segs = words_to_subtitle_segments(aligned)
+    assert len(segs) >= 2
+    srt_text = segments_to_srt(segs)
+    assert "StockSense" in srt_text
+    assert "-->" in srt_text
+
+
+def test_resolve_manual_captions_chatbar_multiline():
+    query = """Welcome to StockSense — a modern, intelligent ERP and double-entry inventory management system built for real-time warehouse velocity and audit precision. Let's sign in through our secure authentication portal.
+
+Right on the manager dashboard, you get instant visibility across your entire supply chain.
+
+add the ability to add captions by giving captions like this manually by typing into chatbar if specified which sync automatically to audio"""
+
+    res = resolve_aicut_request(query)
+    assert res is not None
+    assert res["action"] == "subtitles"
+    assert res.get("sync_audio") is True
+    assert "StockSense" in res.get("manual_script", "")
+    assert res.get("preset") in ("instagram", "hormozi")
+
+
+def test_resolve_manual_captions_explicit_marker():
+    query = """burn subtitles on dance.mp4 with captions:
+Welcome to StockSense — an intelligent ERP platform."""
+
+    res = resolve_aicut_request(query)
+    assert res is not None
+    assert res["action"] == "subtitles"
+    assert res.get("sync_audio") is True
+    assert "StockSense" in res.get("manual_script", "")
+    assert "dance.mp4" in res.get("video_path", "").lower()
+
+
+def test_format_aicut_summary_with_aligned_captions():
+    res = {
+        "success": True,
+        "action": "subtitles",
+        "output_path": "C:\\video_subtitled.mp4",
+        "preset": "instagram",
+        "alignment": {
+            "word_count": 42,
+            "audio_synced": True,
+        },
+    }
+    summary = format_aicut_summary(res)
+    assert "Styled Subtitles Burned" in summary
+    assert "42" in summary
+    assert "Automatically synced to audio speech" in summary
+
+
+
 

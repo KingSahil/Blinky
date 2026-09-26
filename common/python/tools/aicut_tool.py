@@ -143,7 +143,6 @@ PRESET_ALIASES: dict[str, str] = {
     "red box": "pill-red",
     "typewriter": "typewriter",
     "type writer": "typewriter",
-    "typing": "typewriter",
     "color-switch": "color-switch",
     "color switch": "color-switch",
     "colorful": "color-switch",
@@ -197,6 +196,54 @@ def _detect_preset_name(q_lower: str) -> str | None:
     return None
 
 
+def _extract_manual_script(query: str) -> tuple[str | None, str]:
+    """Extract manual script/captions text from user query, returning (manual_script, clean_instruction)."""
+    q = query.strip()
+
+    # Preserve [Referenced Files: ...] prefix if present
+    ref_match = re.search(r"(\[Referenced Files:\s*.*?\])", q, re.DOTALL | re.IGNORECASE)
+    ref_prefix = ref_match.group(1) if ref_match else ""
+    body = q.replace(ref_prefix, "").strip() if ref_prefix else q
+
+    # Case A: Multi-line text where the first or last line contains a caption/subtitle instruction
+    lines = [l for l in body.splitlines() if l.strip()]
+    if len(lines) >= 2:
+        last_line = lines[-1].strip()
+        last_line_lower = last_line.lower()
+        caption_kw = r"\b(?:captions?|subtitles?|subs?)\b"
+        action_kw = r"\b(?:add|burn|put|apply|sync|give|giving|make|create|type|typing|specified)\b"
+
+        if re.search(caption_kw, last_line_lower) and re.search(action_kw, last_line_lower):
+            script_candidate = "\n\n".join(lines[:-1]).strip()
+            if len(script_candidate) > 40:
+                clean_inst = f"{ref_prefix} {last_line}".strip()
+                return script_candidate, clean_inst
+
+        first_line = lines[0].strip()
+        first_line_lower = first_line.lower()
+        if re.search(caption_kw, first_line_lower) and re.search(action_kw, first_line_lower):
+            script_candidate = "\n\n".join(lines[1:]).strip()
+            if len(script_candidate) > 30:
+                clean_inst = re.sub(r":\s*$", "", first_line).strip()
+                clean_inst = f"{ref_prefix} {clean_inst}".strip()
+                return script_candidate, clean_inst
+
+    # Case B: Explicit marker like "captions: ...", "script: ...", "with text: ...", "with captions: ..."
+    marker_match = re.search(
+        r"(?:with\s+(?:the\s+)?(?:following\s+)?(?:captions?|subtitles?|script|text)|(?:captions?|subtitles?|script|text)\s*(?:like\s+this|here|below|as\s+follows)?)\s*:\s*\n?(.*)",
+        body,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if marker_match:
+        script = marker_match.group(1).strip()
+        inst_part = body[:marker_match.start()].strip()
+        clean_inst = f"{ref_prefix} {inst_part}".strip()
+        if len(script) > 10:
+            return script, clean_inst
+
+    return None, q
+
+
 def resolve_aicut_request(
     query: str,
     *,
@@ -206,7 +253,9 @@ def resolve_aicut_request(
     """Deterministically parse and classify an AiCut video editor query, supporting multi-step pipelines."""
     if not query:
         return None
-    q = query.strip()
+
+    manual_script, clean_instruction = _extract_manual_script(query)
+    q = clean_instruction.strip() if manual_script else query.strip()
     q_lower = q.lower()
 
     # Check for explicitly referenced / dragged-in files in query
@@ -266,7 +315,7 @@ def resolve_aicut_request(
         r"|\b(?:word\s+by\s+word|instagram|reels|tiktok)\b"
         r"|\b(?:captions?|subtitles?)\s+(?:in|on|to|into)\b"
     )
-    has_subtitles = bool(re.search(subtitle_pattern, q_lower)) and not is_transcribe_only
+    has_subtitles = (bool(re.search(subtitle_pattern, q_lower)) or bool(manual_script)) and not is_transcribe_only
 
     merge_pattern = r"\b(?:merge|combine|join|stitch|concat|concatenate)\b"
     has_merge = bool(re.search(merge_pattern, q_lower)) or (len(ref_videos) >= 2 and not re.search(r"\b(?:trim|cut)\b", q_lower))
@@ -282,28 +331,35 @@ def resolve_aicut_request(
 
     # ── Candidate Resolution ──
     # Videos
-    video_matches = [] if context_files is not None else re.findall(r"([^\s\"\']+\.(?:mp4|mov|mkv|avi|webm))", q_lower)
     resolved_videos: list[str] = []
-    for v in video_matches:
-        found = find_candidate_file(v, active_dir)
-        target_v = found if found else v
-        if target_v not in resolved_videos:
-            resolved_videos.append(target_v)
+    video_matches: list[str] = []
+    if ref_videos:
+        resolved_videos = list(ref_videos)
+    else:
+        if context_files is None:
+            video_matches = (
+                re.findall(r'["\']([^"\']+\.(?:mp4|mov|mkv|avi|webm))["\']', q, re.IGNORECASE)
+                or re.findall(r'([A-Za-z]:\\[^\n\r*?"<>|]+\.(?:mp4|mov|mkv|avi|webm))', q, re.IGNORECASE)
+                or re.findall(r'([^\s"\']+\.(?:mp4|mov|mkv|avi|webm))', q_lower)
+            )
+        for v in video_matches:
+            found = find_candidate_file(v, active_dir)
+            target_v = found if found else v
+            if target_v not in resolved_videos:
+                resolved_videos.append(target_v)
 
-    if not resolved_videos:
-        if ref_videos:
-            resolved_videos = list(ref_videos)
-        elif selected_videos:
-            if has_merge or any(w in q_lower for w in ["all", "them all", "merged them", "everything", "both", "these"]):
-                resolved_videos = list(selected_videos)
-            else:
-                resolved_videos = [selected_videos[0]]
-        elif media_in_folder:
-            folder_vids = [f for f in media_in_folder if Path(f).suffix.lower() in MEDIA_EXTENSIONS.get("video", {".mp4", ".mov"})]
-            if len(folder_vids) == 1:
-                resolved_videos = [folder_vids[0]]
-            elif has_merge and folder_vids:
-                resolved_videos = folder_vids
+        if not resolved_videos:
+            if selected_videos:
+                if has_merge or any(w in q_lower for w in ["all", "them all", "merged them", "everything", "both", "these"]):
+                    resolved_videos = list(selected_videos)
+                else:
+                    resolved_videos = [selected_videos[0]]
+            elif media_in_folder:
+                folder_vids = [f for f in media_in_folder if Path(f).suffix.lower() in MEDIA_EXTENSIONS.get("video", {".mp4", ".mov"})]
+                if len(folder_vids) == 1:
+                    resolved_videos = [folder_vids[0]]
+                elif has_merge and folder_vids:
+                    resolved_videos = folder_vids
 
     # Audio
     audio_match = None if context_files is not None else re.search(r"([^\s\"\']+\.(?:mp3|wav|aac|m4a|flac|ogg))", q_lower)
@@ -354,6 +410,15 @@ def resolve_aicut_request(
     # Transcribe only check (without burning)
     if is_transcribe_only and not has_subtitles and not has_merge and not has_trim:
         target_trans = resolved_videos[0] if resolved_videos else resolved_audio
+        if manual_script:
+            return {
+                "action": "align_script",
+                "video_path": target_trans,
+                "manual_script": manual_script,
+                "model_size": model_size,
+                "sync_audio": True,
+                "explorer": explorer,
+            }
         return {
             "action": "transcribe",
             "audio_path": target_trans,
@@ -391,6 +456,8 @@ def resolve_aicut_request(
             "srt_path": resolved_srt,
             "transcribe": resolved_srt is None,
             "model_size": model_size,
+            "manual_script": manual_script,
+            "sync_audio": bool(manual_script),
             "explorer": explorer,
         }
 
@@ -446,6 +513,8 @@ def resolve_aicut_request(
             "preset": preset_name or "instagram",
             "transcribe": resolved_srt is None,
             "model_size": model_size,
+            "manual_script": manual_script,
+            "sync_audio": bool(manual_script),
             "explorer": explorer,
         }
 
@@ -621,6 +690,7 @@ def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
                         transcribe=payload.get("transcribe", True) or payload.get("srt_path") is None,
                         model_size=payload.get("model_size") or "tiny",
                         language=payload.get("language"),
+                        manual_script=payload.get("manual_script"),
                     )
                     if not subs_res.get("success"):
                         return subs_res
@@ -630,6 +700,7 @@ def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
                         "preset": resolved_preset,
                         "output_path": current_video,
                         "transcription": subs_res.get("transcription"),
+                        "alignment": subs_res.get("alignment"),
                     })
 
                 return {
@@ -706,12 +777,13 @@ def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
 
         elif action == "subtitles":
             srt_path = payload.get("srt_path") or payload.get("subtitle_path")
+            manual_script = payload.get("manual_script")
             if not video_path:
                 return {
                     "success": False,
                     "error": "No video file specified or found in File Explorer. Please provide a video file (e.g. 'burn subtitles to dance.mp4').",
                 }
-            if not srt_path and not payload.get("transcribe"):
+            if not srt_path and not payload.get("transcribe") and not manual_script:
                 return {
                     "success": False,
                     "error": "No SRT subtitle file specified or found, and transcription is off. Please provide a subtitle file (e.g. 'burn subtitles from captions.srt to dance.mp4') or ask to transcribe the video audio.",
@@ -724,6 +796,23 @@ def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
                 preset=resolved_preset,
                 output_path=payload.get("output_path"),
                 transcribe=payload.get("transcribe", False) or srt_path is None,
+                model_size=payload.get("model_size") or "tiny",
+                language=payload.get("language"),
+                manual_script=manual_script,
+            )
+
+        elif action == "align_script":
+            media_path = payload.get("video_path") or payload.get("audio_path")
+            manual_script = payload.get("manual_script")
+            if not media_path or not manual_script:
+                return {
+                    "success": False,
+                    "error": "Missing media file or manual script to align.",
+                }
+            return aicut_mcp.align_script_to_audio(
+                media_path=media_path,
+                script_text=manual_script,
+                output_srt=payload.get("output_srt"),
                 model_size=payload.get("model_size") or "tiny",
                 language=payload.get("language"),
             )
@@ -776,7 +865,11 @@ def format_aicut_summary(result: dict[str, Any], query: str = "") -> str:
             elif act == "subtitles":
                 preset = step.get("preset", "instagram")
                 trans = step.get("transcription") or {}
-                if trans.get("text"):
+                align = step.get("alignment") or {}
+                if align.get("word_count"):
+                    synced_label = "synced to audio speech" if align.get("audio_synced") else "aligned to timestamps"
+                    lines.append(f"- **Manual Captions Burned**: `{align['word_count']}` words ({synced_label}) with preset `{preset}`\n")
+                elif trans.get("text"):
                     snippet = trans['text'][:140] + ("..." if len(trans['text']) > 140 else "")
                     lines.append(f"- **Captions Burned**: Preset `{preset}` (Transcribed {trans.get('language', 'en')}: *\"{snippet}\"*)\n")
                 else:
@@ -833,12 +926,31 @@ def format_aicut_summary(result: dict[str, Any], query: str = "") -> str:
             f"- **Preset**: `{preset}`\n",
             f"- **Saved Output**: `{vid}`\n",
         ]
+        align = result.get("alignment") or {}
+        if align.get("word_count") or result.get("word_count"):
+            wc = align.get("word_count") or result.get("word_count")
+            synced = align.get("audio_synced", result.get("audio_synced", False))
+            synced_str = "Automatically synced to audio speech" if synced else "Aligned to timestamps"
+            lines.append(f"- **Manual Captions**: `{wc}` words ({synced_str})\n")
         # If transcription happened as part of the burn, surface the text
         trans = result.get("transcription") or {}
         if trans.get("text"):
             lines.append(f"- **Transcribed ({trans.get('language')}, {trans.get('model')})**: {trans['text'][:200]}\n")
         lines.append("\nSubtitles rendered directly into the video frames with the `{0}` style.".format(preset))
         return "".join(lines)
+
+    if action == "align_script":
+        srt = result.get("srt_path", "")
+        wc = result.get("word_count", 0)
+        synced = result.get("audio_synced", False)
+        synced_str = "Synced to speech timing" if synced else "Structured"
+        return (
+            f"**Manual Captions Aligned** \n\n"
+            f"- **SRT File**: `{srt}`\n"
+            f"- **Words**: `{wc}` ({synced_str})\n"
+            f"- **Preview**: {result.get('text', '')[:250]}\n\n"
+            f"Caption file ready to burn with a subtitle preset."
+        )
 
     if action == "transcribe":
         srt = result.get("srt_path", "")
