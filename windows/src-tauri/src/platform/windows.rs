@@ -1,0 +1,654 @@
+use serde::Serialize;
+use std::thread;
+use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
+
+#[derive(Clone, Serialize)]
+pub struct GlobalClick {
+    pub x: i32,
+    pub y: i32,
+    pub overlay_x: i32,
+    pub overlay_y: i32,
+    pub scale_factor: f64,
+}
+
+pub fn get_cursor_position_impl() -> Result<(i32, i32), String> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut point = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut point) } != 0 {
+        Ok((point.x, point.y))
+    } else {
+        Err("Failed to get cursor position".to_string())
+    }
+}
+
+/// Click the UI element behind a screen point, preferring the background path.
+///
+/// `label` is the matched target text. With it, cua-driver resolves the element
+/// under the point inside the window that owns it and invokes it through UIA —
+/// the real pointer never moves and focus is never stolen. Without a resolvable
+/// element (canvas / video / WebGL surfaces) this degrades to the point click.
+pub fn click_element_impl(x: i32, y: i32, label: &str) -> Result<(), String> {
+    if super::cua::is_available() {
+        match super::cua::click_element_at(x, y, Some(label)) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                eprintln!("blinky: cua element click failed ({err}); falling back to point click")
+            }
+        }
+    }
+
+    click_screen_point_impl(x, y)
+}
+
+pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
+    // Prefer background delivery: cua-driver clicks the target without moving
+    // the real cursor or stealing focus. Falls through to SendInput when the
+    // driver is missing, unhealthy, or explicitly disabled.
+    if super::cua::is_available() {
+        match super::cua::click(x, y) {
+            Ok(()) => return Ok(()),
+            Err(err) => eprintln!("blinky: cua click failed ({err}); falling back to SendInput"),
+        }
+    }
+
+    use std::thread;
+    use std::time::Duration;
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
+        MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN,
+        SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    };
+
+    let mut original_pos = POINT { x: 0, y: 0 };
+    let has_original = unsafe { GetCursorPos(&mut original_pos) } != 0;
+
+    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+    if width <= 1 || height <= 1 {
+        return Err("Cannot determine virtual screen size".to_string());
+    }
+
+    let absolute_x = ((x - left) as i64 * 65535 / (width - 1) as i64) as i32;
+    let absolute_y = ((y - top) as i64 * 65535 / (height - 1) as i64) as i32;
+    let flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+
+    // Explicitly place cursor at coordinates to trigger window hover state
+    unsafe {
+        SetCursorPos(x, y);
+    }
+
+    let mut move_input = [
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: absolute_x,
+                    dy: absolute_y,
+                    mouseData: 0,
+                    dwFlags: flags | MOUSEEVENTF_MOVE,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+    ];
+    unsafe {
+        SendInput(1, move_input.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32);
+    }
+
+    thread::sleep(Duration::from_millis(20));
+
+    let mut down_input = [
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: absolute_x,
+                    dy: absolute_y,
+                    mouseData: 0,
+                    dwFlags: flags | MOUSEEVENTF_LEFTDOWN,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+    ];
+    unsafe {
+        SendInput(1, down_input.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32);
+    }
+
+    // Physical mouse hold duration for Windows application hit-test and button activation
+    thread::sleep(Duration::from_millis(35));
+
+    let mut up_input = [
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: absolute_x,
+                    dy: absolute_y,
+                    mouseData: 0,
+                    dwFlags: flags | MOUSEEVENTF_LEFTUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+    ];
+    unsafe {
+        SendInput(1, up_input.as_mut_ptr(), std::mem::size_of::<INPUT>() as i32);
+    }
+
+    // Instantly restore native cursor back to where the user's hand is
+    if has_original {
+        unsafe {
+            SetCursorPos(original_pos.x, original_pos.y);
+        }
+    }
+
+    Ok(())
+}
+
+
+pub fn scroll_at_point_impl(x: i32, y: i32, direction: &str, amount: i32) -> Result<(), String> {
+    // Background first, same contract as the click path. `cua::scroll` resolves
+    // the window under the point and stays window-scoped, so the wheel events
+    // are delivered without moving the real pointer.
+    if super::cua::is_available() {
+        match super::cua::scroll(x, y, direction, amount) {
+            Ok(()) => return Ok(()),
+            Err(err) => eprintln!("blinky: cua scroll failed ({err}); falling back to SendInput"),
+        }
+    }
+
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_MOVE,
+        MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEINPUT,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN,
+        SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    };
+
+    let mut original_pos = POINT { x: 0, y: 0 };
+    let has_original = unsafe { GetCursorPos(&mut original_pos) } != 0;
+
+    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+    if width <= 1 || height <= 1 {
+        return Err("Cannot determine virtual screen size".to_string());
+    }
+
+    let absolute_x = ((x - left) as i64 * 65535 / (width - 1) as i64) as i32;
+    let absolute_y = ((y - top) as i64 * 65535 / (height - 1) as i64) as i32;
+    let flags = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+
+    let wheel_delta = 120;
+    let scroll_amount = if direction.eq_ignore_ascii_case("down") {
+        -wheel_delta * amount
+    } else {
+        wheel_delta * amount
+    };
+
+    let mut inputs = [
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: absolute_x,
+                    dy: absolute_y,
+                    mouseData: 0,
+                    dwFlags: flags | MOUSEEVENTF_MOVE,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+        INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    dx: 0,
+                    dy: 0,
+                    mouseData: scroll_amount as u32,
+                    dwFlags: MOUSEEVENTF_WHEEL,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+    ];
+
+    let sent = unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_mut_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        )
+    };
+
+    if has_original {
+        unsafe {
+            SetCursorPos(original_pos.x, original_pos.y);
+        }
+    }
+
+    if sent != inputs.len() as u32 {
+        return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
+    }
+    Ok(())
+}
+
+impl GlobalClick {
+    pub fn with_overlay_metrics(mut self, overlay: &WebviewWindow) -> Self {
+        if let Ok(position) = overlay.outer_position() {
+            self.overlay_x = position.x;
+            self.overlay_y = position.y;
+        }
+        self.scale_factor = overlay.scale_factor().unwrap_or(1.0);
+        self
+    }
+}
+
+pub fn read_mouse_click(
+    was_left_down: &mut bool,
+    was_right_down: &mut bool,
+) -> Option<GlobalClick> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+    let is_left_down = unsafe { (GetAsyncKeyState(VK_LBUTTON as i32) & 0x8000u16 as i16) != 0 };
+    let is_right_down = unsafe { (GetAsyncKeyState(VK_RBUTTON as i32) & 0x8000u16 as i16) != 0 };
+    let clicked = (is_left_down && !*was_left_down) || (is_right_down && !*was_right_down);
+    *was_left_down = is_left_down;
+    *was_right_down = is_right_down;
+
+    if !clicked {
+        return None;
+    }
+
+    let mut point = POINT { x: 0, y: 0 };
+    let ok = unsafe { GetCursorPos(&mut point) };
+    if ok == 0 {
+        return None;
+    }
+
+    Some(GlobalClick {
+        x: point.x,
+        y: point.y,
+        overlay_x: 0,
+        overlay_y: 0,
+        scale_factor: 1.0,
+    })
+}
+
+pub fn read_enter_key(was_enter_down: &mut bool) -> Option<()> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_RETURN};
+
+    let is_enter_down = unsafe { (GetAsyncKeyState(VK_RETURN as i32) & 0x8000u16 as i16) != 0 };
+    let pressed = is_enter_down && !*was_enter_down;
+    *was_enter_down = is_enter_down;
+
+    if pressed {
+        Some(())
+    } else {
+        None
+    }
+}
+
+pub fn type_text_impl(x: i32, y: i32, text: &str, press_enter: bool) -> Result<(), String> {
+    // Background first. The point is threaded through so the driver can address the
+    // window the AI cursor is actually over, rather than whichever window happens to
+    // hold focus — a bare `type_text` is refused outright by the driver (see
+    // `cua::type_text`). Nothing here moves the real pointer, so a user typing
+    // elsewhere is not interrupted.
+    if super::cua::is_available() {
+        match super::cua::type_text(x, y, text) {
+            Ok(()) => {
+                if press_enter {
+                    if let Err(err) = super::cua::press_key(x, y, "Return") {
+                        eprintln!("blinky: cua press_key failed ({err}); falling back to SendInput");
+                    }
+                }
+                return Ok(());
+            }
+            Err(err) => {
+                eprintln!("blinky: cua type_text failed ({err}); falling back to SendInput")
+            }
+        }
+    }
+
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
+    };
+
+    let mut inputs = Vec::new();
+    for c in text.encode_utf16() {
+        inputs.push(keyboard_input_unicode(c, KEYEVENTF_UNICODE));
+        inputs.push(keyboard_input_unicode(
+            c,
+            KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+        ));
+    }
+
+    if !inputs.is_empty() {
+        let sent = unsafe {
+            SendInput(
+                inputs.len() as u32,
+                inputs.as_mut_ptr(),
+                std::mem::size_of::<INPUT>() as i32,
+            )
+        };
+        if sent != inputs.len() as u32 {
+            return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
+        }
+    }
+
+    if press_enter {
+        thread::sleep(Duration::from_millis(100));
+        send_keypress(0x0D)?;
+    }
+
+    Ok(())
+}
+
+fn keyboard_input_unicode(
+    wscan: u16,
+    flags: u32,
+) -> windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
+    };
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: 0,
+                wScan: wscan,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+fn send_keypress(vk: u16) -> Result<(), String> {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+    };
+    let mut inputs = [
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: 0,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+        INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    wScan: 0,
+                    dwFlags: KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        },
+    ];
+    let sent = unsafe {
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_mut_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        )
+    };
+    if sent != inputs.len() as u32 {
+        return Err(format!("SendInput sent {sent} of {} events", inputs.len()));
+    }
+    Ok(())
+}
+
+pub fn start_global_click_listener(app: AppHandle) {
+    thread::spawn(move || {
+        let mut was_left_down = false;
+        let mut was_right_down = false;
+        let mut was_enter_down = false;
+        let mut was_ptt_down = false;
+        let mut last_cursor_x = i32::MIN;
+        let mut last_cursor_y = i32::MIN;
+
+        loop {
+            if let Some(click) = read_mouse_click(&mut was_left_down, &mut was_right_down) {
+                if let Some(overlay) = app.get_webview_window("overlay") {
+                    if overlay.is_visible().unwrap_or(false) {
+                        let click = click.with_overlay_metrics(&overlay);
+                        let _ = overlay.emit("blinky://global-click", click);
+                    }
+                }
+            }
+
+            let is_win_down = unsafe {
+                (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x5B /* VK_LWIN */) as u16 & 0x8000 != 0)
+                    || (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x5C /* VK_RWIN */) as u16 & 0x8000 != 0)
+            };
+            let is_space_down = unsafe { (windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(0x20 /* VK_SPACE */) as u16 & 0x8000) != 0 };
+            let ptt_down = is_win_down && is_space_down;
+            if ptt_down != was_ptt_down {
+                was_ptt_down = ptt_down;
+                let _ = app.emit("blinky://push-to-talk", ptt_down);
+            }
+
+            let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+            if unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) } != 0 {
+                if pt.x != last_cursor_x || pt.y != last_cursor_y {
+                    last_cursor_x = pt.x;
+                    last_cursor_y = pt.y;
+                    if let Some(overlay) = app.get_webview_window("overlay") {
+                        let _ = overlay.emit(
+                            "blinky://native-cursor-move",
+                            serde_json::json!({
+                                "x": pt.x,
+                                "y": pt.y
+                            }),
+                        );
+                    }
+                }
+            }
+
+            // Keep overlay unconditionally topmost above Windows 11 Start Menu, Notification Sidebar, and taskbars
+            if let Some(overlay) = app.get_webview_window("overlay") {
+                if overlay.is_visible().unwrap_or(false) {
+                    if let Ok(hwnd) = overlay.hwnd() {
+                        unsafe {
+                            use windows_sys::Win32::Foundation::HWND;
+                            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                                SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+                                SWP_NOSIZE, BringWindowToTop,
+                            };
+                            let hwnd = hwnd.0 as HWND;
+                            SetWindowPos(
+                                hwnd,
+                                HWND_TOPMOST,
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                            );
+                            BringWindowToTop(hwnd);
+                        }
+                    }
+                }
+            }
+
+            if let Some(()) = read_enter_key(&mut was_enter_down) {
+                let _ = app.emit("blinky://global-enter", ());
+            }
+
+            thread::sleep(Duration::from_millis(6));
+        }
+    });
+}
+
+
+
+
+pub fn set_system_cursor_visibility(_visible: bool) {
+    unsafe {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_SETCURSORS};
+        // Always ensure native default system cursor remains visible alongside our companion AI cursor
+        SystemParametersInfoW(SPI_SETCURSORS, 0, std::ptr::null_mut(), 0);
+    }
+}
+
+
+
+pub fn register_exit_cursor_restorer() {
+
+    unsafe {
+        use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_SETCURSORS};
+
+        unsafe extern "system" fn ctrl_handler(_ctrl_type: u32) -> windows_sys::Win32::Foundation::BOOL {
+            SystemParametersInfoW(SPI_SETCURSORS, 0, std::ptr::null_mut(), 0);
+            0
+        }
+
+        SetConsoleCtrlHandler(Some(ctrl_handler), 1);
+    }
+
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        set_system_cursor_visibility(true);
+        original_hook(info);
+    }));
+}
+
+fn try_promote_to_system_band(hwnd: windows_sys::Win32::Foundation::HWND) {
+    unsafe {
+        use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+        let user32 = GetModuleHandleA(b"user32.dll\0".as_ptr());
+        if !user32.is_null() {
+            type PfnSetWindowBand = unsafe extern "system" fn(
+                windows_sys::Win32::Foundation::HWND,
+                windows_sys::Win32::Foundation::HWND,
+                u32,
+            ) -> windows_sys::Win32::Foundation::BOOL;
+
+            if let Some(set_window_band) = GetProcAddress(user32, b"SetWindowBand\0".as_ptr()) {
+                let set_window_band: PfnSetWindowBand = std::mem::transmute(set_window_band);
+                // Try system/accessibility topmost bands: ZBID_SYSTEM_TOOLS (16), ZBID_ABOVELOCK_UX (18), ZBID_IMMERSIVE_NOTIFICATION (4), ZBID_UIACCESS (2)
+                for band in [16u32, 18, 4, 2] {
+                    if set_window_band(hwnd, std::ptr::null_mut(), band) != 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn configure_overlay_passthrough(window: &WebviewWindow) {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+    };
+
+    let _ = window.set_fullscreen(false);
+
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
+        let size = monitor.size();
+        let position = monitor.position();
+        let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+            width: size.width,
+            height: size.height,
+        }));
+        let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+            x: position.x,
+            y: position.y,
+        }));
+    }
+
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe {
+            let hwnd = hwnd.0 as HWND;
+            let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+            SetWindowLongW(
+                hwnd,
+                GWL_EXSTYLE,
+                style
+                    | WS_EX_TRANSPARENT as i32
+                    | WS_EX_LAYERED as i32
+                    | WS_EX_TOOLWINDOW as i32
+                    | WS_EX_TOPMOST as i32
+                    | WS_EX_NOACTIVATE as i32,
+            );
+            SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+            BringWindowToTop(hwnd);
+            try_promote_to_system_band(hwnd);
+        }
+        let _ = window.set_always_on_top(true);
+    }
+}
+
+
+
+pub fn set_window_capture_exclusion(window: &WebviewWindow, exclude: bool) {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity;
+
+    if let Ok(hwnd) = window.hwnd() {
+        unsafe {
+            let hwnd = hwnd.0 as HWND;
+            let affinity = if exclude { 0x00000011 } else { 0x00000000 };
+            let _ = SetWindowDisplayAffinity(hwnd, affinity);
+        }
+    }
+}
+
+pub fn open_url_impl(url: &str) -> Result<(), String> {
+    let mut command = std::process::Command::new("rundll32");
+    command.arg("url.dll,FileProtocolHandler").arg(url);
+    command
+        .spawn()
+        .map_err(|err| format!("Failed to open link in default browser: {err}"))?;
+    Ok(())
+}
+

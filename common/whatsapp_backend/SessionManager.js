@@ -1,0 +1,69 @@
+import { readFile, writeFile, mkdir } from 'fs/promises';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { WaUserSession } from './WaUserSession.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PROJECT_ROOT = join(__dirname, '..', '..');
+
+const SESSIONS_FILE = join(PROJECT_ROOT, 'data', 'sessions.json');
+
+// In-memory map of sessionId → WaUserSession
+const sessions = new Map();
+
+let _io = null;
+
+const DEFAULT_SESSION_ID = 'blinky-default-session';
+
+async function loadSessionRegistry() {
+    try {
+        const raw = await readFile(SESSIONS_FILE, 'utf-8');
+        return JSON.parse(raw);
+    } catch {
+        return {};
+    }
+}
+
+async function saveSessionRegistry(registry) {
+    await mkdir(join(PROJECT_ROOT, 'data'), { recursive: true });
+    await writeFile(SESSIONS_FILE, JSON.stringify(registry, null, 2), 'utf-8');
+}
+
+/**
+ * Called once at server startup — restores ONLY the default session.
+ */
+export async function initSessionManager(io) {
+    _io = io;
+    console.log(`[SessionManager] Restoring only default session ${DEFAULT_SESSION_ID.slice(0, 8)}...`);
+    const session = new WaUserSession(DEFAULT_SESSION_ID, _io);
+    sessions.set(DEFAULT_SESSION_ID, session);
+    await session.start();
+    console.log(`[SessionManager] Default session restored.`);
+}
+
+/**
+ * Returns an existing session, or creates + starts a new one.
+ */
+export async function getOrCreateSession(sessionId) {
+    if (sessions.has(sessionId)) {
+        return { session: sessions.get(sessionId), isNew: false };
+    }
+
+    const session = new WaUserSession(sessionId, _io);
+    sessions.set(sessionId, session);
+
+    const registry = await loadSessionRegistry();
+    registry[sessionId] = { createdAt: new Date().toISOString() };
+    await saveSessionRegistry(registry);
+
+    await session.start();
+    return { session, isNew: true };
+}
+
+/**
+ * Returns an existing session or null.
+ */
+export function getSession(sessionId) {
+    return sessions.get(sessionId) || null;
+}

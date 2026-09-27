@@ -1,0 +1,1794 @@
+from __future__ import annotations
+
+import json
+import os
+import platform
+import re
+import sys
+import time
+from pathlib import Path
+
+# â”€â”€ sys.path setup: must run before any platform-specific imports â”€â”€
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_COMMON_PY = str(_SCRIPT_DIR)
+if _COMMON_PY not in sys.path:
+    sys.path.insert(0, _COMMON_PY)
+
+# Add platform-specific python directory with higher priority
+if sys.platform == "win32":
+    _PLATFORM_PY = str(_SCRIPT_DIR.parent.parent / "windows" / "python")
+else:
+    _PLATFORM_PY = str(_SCRIPT_DIR.parent.parent / "linux" / "python")
+if os.path.isdir(_PLATFORM_PY) and _PLATFORM_PY not in sys.path:
+    sys.path.insert(0, _PLATFORM_PY)
+
+def _load_env_file() -> None:
+    for candidate in [
+        _SCRIPT_DIR.parent.parent / ".env",
+        _SCRIPT_DIR.parent / ".env",
+        Path.cwd() / ".env",
+    ]:
+        if candidate.is_file():
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k, v = k.strip(), v.strip().strip("'\"")
+                            if k and k not in os.environ:
+                                os.environ[k] = v
+            except Exception:
+                pass
+            break
+
+_load_env_file()
+
+from ai.client import ask_model, ask_text_model, get_provider_label
+from ai.prompt import build_chat_prompt, build_preflight_prompt, build_prompt
+
+
+def _emit_status(phase: str, message: str) -> None:
+    """Emit a progress status event to stdout for the frontend."""
+    out = sys.__stdout__ if hasattr(sys, '__stdout__') else sys.stdout
+    print(json.dumps({"type": "status", "phase": phase, "message": message}), flush=True, file=out)
+
+
+def _has_computer_use_action(question: str) -> bool:
+    """Check if a query contains action verbs beyond just opening an app."""
+    normalized = question.lower().strip()
+    action_verbs = {
+        "calculate", "compute", "type", "click", "press",
+        "search", "search for", "find", "look up", "navigate to", "go to",
+        "scroll", "select", "choose", "fill", "enter",
+        "write", "input", "submit", "open a", "open the",
+    }
+    return any(verb in normalized for verb in action_verbs)
+from app_context import get_app_context
+from capture import capture_screen
+from computer_use import try_run_agent_action, is_web_destination, looks_like_app_name
+from computer_use.tools import normalize_app_name, APP_PROTOCOLS, APP_NAME_ALIASES
+from ocr import extract_visible_text
+from utils.logging import get_logger
+from utils.matching import attach_matches, find_best_match_with_score
+from utils.screen_elements import assign_screen_element_refs
+from utils.ui_map_cache import UiMapCache, window_signature
+try:
+    from uia import get_visible_ui_text
+except ImportError:
+    def get_visible_ui_text(**kwargs):
+        return []
+from utils.window import get_active_window, get_ignored_overlay_rects
+
+LOGGER = get_logger("blinky.main")
+UI_MAP_CACHE = UiMapCache()
+
+
+def skip_completed_navigation_steps(steps: list[dict]) -> list[dict]:
+    if len(steps) >= 2:
+        first_step = steps[0]
+        second_step = steps[1]
+        
+        if second_step.get("match") is not None:
+            first_instruction = str(first_step.get("instruction", "")).lower()
+            is_navigation = (
+                any(k in first_instruction for k in {"click", "open", "navigate", "select", "go to", "show"}) and 
+                any(k in first_instruction for k in {"tab", "sidebar", "menu", "icon", "panel", "button", "view"})
+            )
+            if is_navigation:
+                LOGGER.info(
+                    "Generic Step Skipping: Skipping first step '%s' because second step's target '%s' is already visible.",
+                    first_step.get("instruction"),
+                    second_step.get("target_text")
+                )
+                skipped = steps[1:]
+                for idx, step in enumerate(skipped, start=1):
+                    step["step"] = idx
+                return skipped
+    return steps
+
+
+def _fill_empty_search_targets(steps: list[dict], visible_items: list[dict]) -> list[dict]:
+    """If any step has a type/search/filter instruction but empty target_text and no match,
+    auto-find the first visible search/filter/find input on screen and attach it."""
+    _search_hints = {"type", "search", "filter", "find", "enter", "input", "marketplace"}
+
+    for step in steps:
+        target = str(step.get("target_text", "")).strip()
+        if target or step.get("match") is not None:
+            continue  # already has a target or a match
+
+        instruction_lower = str(step.get("instruction", "")).lower()
+        if not any(hint in instruction_lower for hint in _search_hints):
+            continue  # not a search/type instruction
+
+        # Find the best visible search input control
+        best_input = None
+        for item in visible_items:
+            text = str(item.get("text", "")).lower().strip()
+
+            # Skip browser address/URL bars to avoid highlighting them instead of page-level inputs
+            is_url = text.startswith(("http://", "https://", "www.")) or re.search(r"^[a-z0-9-]+\.[a-z]{2,}", text)
+            is_address_bar = item.get("is_address_bar", False) or is_url or any(
+                phrase in text
+                for phrase in {
+                    "search or enter web address",
+                    "search or enter address",
+                    "address and search bar",
+                    "search or type web address",
+                    "search or type a web address",
+                    "search or type url",
+                    "enter search term or address",
+                }
+            )
+            if is_address_bar:
+                continue
+
+            control_type = str(item.get("control_type", "")).lower()
+            is_input = control_type in {"edit", "textbox", "combobox"}
+            has_search_keyword = any(k in text for k in {"search", "filter", "find"})
+
+            if is_input or has_search_keyword:
+                # Prefer items that are both input controls AND have search keywords
+                if is_input and has_search_keyword:
+                    best_input = item
+                    break  # perfect match, stop
+                elif best_input is None:
+                    best_input = item
+
+        if best_input:
+            LOGGER.info(
+                "Search Target Fallback: Auto-attaching visible search input '%s' to step '%s'",
+                best_input.get("text"),
+                step.get("instruction"),
+            )
+            step["target_text"] = best_input.get("text", "")
+            step["target_ref"] = best_input.get("ref", "")
+            step["match"] = {
+                **best_input,
+                "match_method": "ref",
+                "is_exact_text": True,
+                "ambiguous_candidate_count": 1,
+            }
+
+    return steps
+
+
+def is_screen_explanation_question(question: str) -> bool:
+    normalized = " ".join(question.lower().strip().split())
+    if not normalized:
+        return False
+    patterns = [
+        r"\bwhat(?:'s|\s+is)\s+on\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhats\s+on\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhat\s+do\s+you\s+see(?:\s+on\s+(?:my\s+|the\s+)?screen)?\b",
+        r"\bdescribe\s+(?:my\s+|the\s+)?screen\b",
+        r"\bexplain\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhat\s+am\s+i\s+looking\s+at\b",
+        r"\bread\s+(?:my\s+|the\s+)?screen\b",
+        r"\bsummarize\s+(?:my\s+|the\s+)?screen\b",
+        r"\btell\s+me\s+what(?:'s|\s+is)\s+on\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhat\s+is\s+open\s+on\s+(?:my\s+|the\s+)?screen\b",
+        r"\bwhat\s+windows\s+are\s+open\b",
+        r"\bwhat\s+app\s+is\s+open\b",
+    ]
+    return any(re.search(pat, normalized) for pat in patterns)
+
+
+def should_skip_preflight_for_local_fast_path(question: str) -> bool:
+    normalized = " ".join(question.lower().strip().split())
+    if not normalized:
+        return False
+    if is_followup_continuation_question(normalized):
+        return True
+    if is_screen_explanation_question(normalized):
+        return True
+    click_words = {
+        "click", "select", "choose", "press", "tap", "change", "switch", "set",
+        "find", "locate", "spot", "hit", "push", "where", "show", "point", "look"
+    }
+    words = normalized.split()
+    first_word = words[0] if words else ""
+    if first_word in click_words:
+        return True
+    if extract_locator_target(normalized) or extract_click_target(normalized):
+        return True
+    return False
+
+
+
+def is_procedural_step_completed(
+    step: dict[str, Any],
+    completed_targets: set[str],
+    completed_instructions: set[str],
+) -> bool:
+    tgt = str(step.get("target", "")).lower().strip()
+    instr = str(step.get("instruction", "")).lower().strip()
+
+    if not tgt and not instr:
+        return True
+
+    if tgt:
+        if tgt in completed_targets:
+            return True
+        for c in completed_targets:
+            c_str = str(c).lower().strip()
+            if len(c_str) >= 3 and len(tgt) >= 3 and (tgt in c_str or c_str in tgt):
+                return True
+
+    if instr:
+        if instr in completed_instructions:
+            return True
+        for i in completed_instructions:
+            i_str = str(i).lower().strip()
+            if len(i_str) >= 5 and len(instr) >= 5 and (instr in i_str or i_str in instr):
+                return True
+
+    return False
+
+
+def is_web_research_question(question: str) -> bool:
+    norm = " ".join(question.lower().strip().split())
+    if not norm:
+        return False
+    if norm.startswith(("click ", "press ", "type ", "tap ", "select ", "choose ", "open ", "launch ", "start ")):
+        return False
+    research_indicators = [
+        "contact number", "phone number", "phone numbers", "contact details", "address", "addresses",
+        "best restaurant", "best restaurants", "best cafe", "best cafes", "top rated", "recommendations for",
+        "what is the price", "how much is", "weather in", "weather today", "weather forecast",
+        "who won", "latest news", "stock price", "reviews of", "reviews for"
+    ]
+    return any(ind in norm for ind in research_indicators)
+
+
+def run(
+    question: str,
+    previous_question: str | None = None,
+    progress: dict | None = None,
+    conversation_history: list[dict] | None = None,
+    web_search_enabled: bool = False,
+    agent_mode: bool = False,
+    ignored_rects: list[dict] | None = None,
+) -> dict:
+    """
+    RULE: Screenshots/OCR are ONLY taken when BOTH web_search_enabled=False
+    AND agent_mode=False. The priority order is:
+      1. web_search_enabled → SearXNG pipeline (no OCR, no screenshots)
+      2. agent_mode        → MCP desktop automation (no OCR, no screenshots)
+      3. default           → vision pipeline with screenshots + OCR
+    """
+    started = time.perf_counter()
+    warnings: list[str] = []
+
+    # Clean wake word prefixes from the incoming question (e.g., "Hey Blinky", "Blinky")
+    question = question.strip()
+    question = re.sub(r"^(?:hey\s+)?blinky[\s,.:;!?]*", "", question, flags=re.IGNORECASE).strip()
+
+    if ignored_rects:
+        from utils.window import set_ignored_overlay_rects
+        set_ignored_overlay_rects(ignored_rects)
+
+    # PATH 1: Web search — purely SearXNG, never touches the screen
+    if web_search_enabled:
+        return run_web_intelligence(question, conversation_history, started, warnings)
+
+    if agent_mode:
+        direct_result = try_run_agent_action(question)
+        if direct_result is not None:
+            # If the tool is a media control/shortcut or was successful, return it immediately without falling back to preflight
+            if direct_result.success or direct_result.tool in {"seek_spotify", "shortcut", "play_spotify", "play_youtube"}:
+                return build_agent_tool_result(direct_result.to_dict(), started, warnings)
+
+    locator_target = extract_locator_target(question)
+
+    has_progress = progress is not None and bool(
+        progress.get("completed_targets") or progress.get("completed_instructions")
+    )
+    skip_preflight = should_skip_preflight_for_local_fast_path(question) or has_progress
+
+    # RULE: agent_mode NEVER forces screen context — it goes through preflight
+    # for intent classification (COMPUTER_USE, OPEN_APP, etc.)
+    if agent_mode:
+        force_screen = False
+
+    preflight = None
+    if skip_preflight:
+        LOGGER.info("Skipping preflight for local fast-path or continuation question")
+    else:
+        if agent_mode:
+            _emit_status("analyzing", "Understanding your request...")
+        preflight_started = time.perf_counter()
+        preflight = classify_request(question, previous_question, warnings, conversation_history, agent_mode=agent_mode)
+        log_stage_timing("preflight", preflight_started)
+
+    intent = "DESKTOP_AUTOMATION"
+    extracted_params = {}
+    is_continuation = False
+
+    if preflight:
+        intent = preflight.get("intent", "DESKTOP_AUTOMATION")
+        extracted_params = preflight.get("extracted_params", {}) or {}
+        is_continuation = preflight.get("is_continuation", False)
+    elif previous_question and is_followup_continuation_question(question):
+        is_continuation = True
+
+    # Auto-enable or disable modes based on classified intent
+    if intent == "WEB_SEARCH" or is_web_research_question(question):
+        LOGGER.info("Automatically enabling web search mode for classified intent: WEB_SEARCH / research query")
+        web_search_enabled = True
+    elif intent == "VIDEO_EDIT":
+        LOGGER.info("Routing to AiCut video editor for intent: VIDEO_EDIT")
+        return run_aicut_tool(extracted_params, question, started, warnings)
+    elif intent == "WHATSAPP":
+        LOGGER.info("Routing to WhatsApp tool for intent: WHATSAPP")
+        wa_action = str(extracted_params.get("wa_action") or "status").lower().strip()
+        wa_chat_name = extracted_params.get("wa_chat_name") or None
+        return run_whatsapp_tool(wa_action, wa_chat_name, started, warnings)
+    elif intent == "ESP32_LIGHT":
+        LOGGER.info("Routing to ESP32 Light tool for intent: ESP32_LIGHT")
+        return run_esp32_light_tool(extracted_params, started, warnings)
+    elif intent in {"COMPUTER_USE", "OPEN_APP", "MEDIA_PLAYBACK", "SYSTEM_SHORTCUT"}:
+
+        LOGGER.info("Automatically enabling agent mode for classified intent: %s", intent)
+        agent_mode = True
+    elif intent in {"SCREEN_EXPLANATION", "LOCATOR"}:
+        agent_mode = False
+
+    if web_search_enabled:
+        return run_web_intelligence(question, conversation_history, started, warnings)
+
+    # Agent mode: every request is a fresh task. Continuation logic is for
+    # vision-guided workflows only (screenshot-based step tracking).
+    if agent_mode:
+        is_continuation = False
+
+    if agent_mode:
+        direct_agent_result = try_run_agent_action(question)
+        if direct_agent_result is not None and direct_agent_result.success:
+            return build_agent_tool_result(direct_agent_result.to_dict(), started, warnings)
+
+        direct_agent_result = None
+
+        # Reroute: if the query contains action verbs beyond just "open",
+        # treat it as COMPUTER_USE so the full tool loop runs.
+        if intent == "OPEN_APP" and _has_computer_use_action(question):
+            LOGGER.info("Rerouting OPEN_APP → COMPUTER_USE (query contains action verbs)")
+            intent = "COMPUTER_USE"
+
+        from computer_use.agent import STOP_SPOTIFY_RE
+        if STOP_SPOTIFY_RE.match(question.strip().rstrip("?.!,;:")):
+            from computer_use.tools import shortcut_tool
+            direct_agent_result = shortcut_tool("media_play_pause")
+        elif intent == "MEDIA_PLAYBACK":
+            from computer_use.agent import handle_media_playback_action
+            direct_agent_result = handle_media_playback_action(extracted_params, question)
+        elif intent == "OPEN_APP":
+            app = extracted_params.get("app_name")
+            if app:
+                normalized = normalize_app_name(app)
+                is_known_app = normalized in APP_PROTOCOLS or normalized in APP_NAME_ALIASES
+                if is_known_app:
+                    from computer_use.tools import open_app_tool
+                    direct_agent_result = open_app_tool(app)
+                elif is_web_destination(app) or is_in_app_action(app) or not looks_like_app_name(app):
+                    # Web destinations or in-app actions are handled directly via try_run_agent_action fallback.
+                    pass
+                else:
+                    from computer_use.tools import open_app_tool
+                    direct_agent_result = open_app_tool(app)
+        elif intent == "SYSTEM_SHORTCUT":
+            shortcut = extracted_params.get("shortcut")
+            if shortcut:
+                from computer_use.tools import shortcut_tool
+                direct_agent_result = shortcut_tool(shortcut)
+        elif intent == "COMPUTER_USE" and platform.system() == "Linux":
+            from computer_use.loop import run_computer_use_loop
+            loop_result = run_computer_use_loop(question)
+            if loop_result.get("success"):
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                # Normalize agent steps to include frontend-safe fields
+                safe_steps = []
+                for i, s in enumerate(loop_result.get("steps", [])):
+                    safe_steps.append({
+                        "step": i + 1,
+                        "instruction": s.get("message", ""),
+                        "target_text": "",
+                        "target_ref": "",
+                        "tool": s.get("tool", ""),
+                        "args": s.get("args", {}),
+                        "success": s.get("success", False),
+                    })
+                return {
+                    "summary": loop_result.get("answer", "Task completed."),
+                    "steps": safe_steps,
+                    "active_app": {"title": "", "process": "", "supported": False},
+                    "ocr": {"count": 0, "items": []},
+                    "elapsed_ms": elapsed_ms,
+                    "provider": get_provider_label(),
+                    "warnings": warnings,
+                    "is_continuation": False,
+                    "computer_use": True,
+                }
+
+        if direct_agent_result is not None and not direct_agent_result.success:
+            direct_agent_result = None
+
+        if direct_agent_result is None:
+            direct_agent_result = try_run_agent_action(question)
+            if direct_agent_result is not None and not direct_agent_result.success:
+                direct_agent_result = None
+
+        if direct_agent_result is not None:
+            return build_agent_tool_result(direct_agent_result.to_dict(), started, warnings)
+
+        # Procedural step planning via SearXNG & Groq text model + OmniParser UI grounding
+        from computer_use.step_planner import generate_procedural_plan
+        from computer_use.text_grounder import ground_step_to_screen
+
+        active_app_quick = None
+        try:
+            active_app_quick = get_active_window()
+        except Exception:
+            pass
+
+        is_screen_action = bool(
+            extract_click_target(question)
+            or extract_locator_target(question)
+            or is_control_locator_question(question)
+            or is_click_target_question(question)
+        )
+
+        plan = None
+        if not is_screen_explanation_question(question) and not is_screen_action:
+            plan = generate_procedural_plan(question, active_app=active_app_quick, conversation_history=conversation_history)
+        if plan and plan.get("steps") and plan.get("source") != "fallback":
+            completed_targets = {str(t).lower().strip() for t in progress.get("completed_targets", [])} if progress else set()
+            completed_instructions = {str(i).lower().strip() for i in progress.get("completed_instructions", [])} if progress else set()
+            failed_targets = {str(t).lower().strip() for t in progress.get("failed_targets", [])} if progress else set()
+            failed_refs = {str(r).strip() for r in progress.get("failed_refs", [])} if progress else set()
+
+            uncompleted_steps = [s for s in plan["steps"] if not is_procedural_step_completed(s, completed_targets, completed_instructions)]
+
+            if not uncompleted_steps:
+                # All steps in procedural plan have been completed!
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                return {
+                    "summary": f"Autopilot successfully completed: {question}!",
+                    "steps": [],
+                    "active_app": active_app_quick or {"title": "", "process": "", "supported": True},
+                    "ocr": {"count": 0, "items": []},
+                    "elapsed_ms": elapsed_ms,
+                    "provider": get_provider_label(),
+                    "warnings": warnings,
+                    "is_continuation": False,
+                    "computer_use": True,
+                }
+
+            next_step = uncompleted_steps[0]
+
+            # If the plan specifies an app/URI to open on step 1 and nothing is completed yet
+            if not completed_targets and not completed_instructions and plan.get("app_to_open"):
+                app_to_open = plan["app_to_open"]
+                try:
+                    if os.name == "nt" and ":" in app_to_open:
+                        import subprocess
+                        subprocess.Popen(f"start {app_to_open}", shell=True)
+                        time.sleep(1.0)
+                    else:
+                        from computer_use.tools import open_app_tool
+                        open_app_tool(app_to_open)
+                        time.sleep(1.0)
+                except Exception as exc:
+                    LOGGER.warning("Failed to open plan app '%s': %s", app_to_open, exc)
+
+            # Observe screen state (extracts UI elements via OmniParser / UIA / OCR)
+            screenshot = capture_screen()
+            print("__BLINKY_CAPTURED__", flush=True)
+            observation = observe_app_state(screenshot)
+            visible_items = observation["visible_items"]
+
+            # Deepest visible step resolution:
+            # Check remaining planned steps in reverse order (from deepest step to first)
+            # to pick the furthest actionable step visible on screen (e.g. if already on Personalization page, pick Colors)
+            grounded = None
+            selected_step = next_step
+            uncompleted_steps = [s for s in plan["steps"] if s.get("target", "").lower().strip() not in completed_targets]
+
+            for candidate_step in reversed(uncompleted_steps):
+                cand_grounded = ground_step_to_screen(
+                    candidate_step,
+                    visible_items,
+                    observation.get("active_app"),
+                    failed_refs=failed_refs,
+                    failed_targets=failed_targets,
+                    user_task=question,
+                )
+                if cand_grounded and cand_grounded.get("match", {}).get("score", 0) >= 0.80:
+                    grounded = cand_grounded
+                    selected_step = candidate_step
+                    break
+
+            if not grounded and uncompleted_steps:
+                first_step = uncompleted_steps[0]
+                grounded = ground_step_to_screen(
+                    first_step,
+                    visible_items,
+                    observation.get("active_app"),
+                    failed_refs=failed_refs,
+                    failed_targets=failed_targets,
+                    user_task=question,
+                )
+                selected_step = first_step
+
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            if grounded:
+                return {
+                    "summary": plan.get("summary") or f"Step {selected_step.get('step')}: {selected_step.get('instruction')}",
+                    "markdown_guide": plan.get("markdown_guide", ""),
+                    "steps": [grounded],
+                    "active_app": observation["active_app"],
+                    "app_context": observation.get("app_context", ""),
+                    "ocr": {"count": len(visible_items), "items": visible_items[:200]},
+                    "screenshot": {
+                        "path": str(screenshot.path),
+                        "width": screenshot.width,
+                        "height": screenshot.height,
+                        "screen_width": screenshot.screen_width,
+                        "screen_height": screenshot.screen_height,
+                    },
+                    "elapsed_ms": elapsed_ms,
+                    "provider": get_provider_label(),
+                    "warnings": warnings,
+                    "is_continuation": is_continuation,
+                }
+            else:
+                fallback_step = {
+                    "step": selected_step.get("step", 1),
+                    "instruction": selected_step.get("instruction") or f"Click {selected_step.get('target')}",
+                    "target_text": selected_step.get("target", ""),
+                    "target_ref": "",
+                }
+                return {
+                    "summary": plan.get("summary") or f"Step {selected_step.get('step')}: {selected_step.get('instruction')}",
+                    "markdown_guide": plan.get("markdown_guide", ""),
+                    "steps": [fallback_step],
+                    "active_app": observation["active_app"],
+                    "app_context": observation.get("app_context", ""),
+                    "ocr": {"count": len(visible_items), "items": visible_items[:200]},
+                    "screenshot": {
+                        "path": str(screenshot.path),
+                        "width": screenshot.width,
+                        "height": screenshot.height,
+                        "screen_width": screenshot.screen_width,
+                        "screen_height": screenshot.screen_height,
+                    },
+                    "elapsed_ms": elapsed_ms,
+                    "provider": get_provider_label(),
+                    "warnings": warnings,
+                    "is_continuation": is_continuation,
+                }
+
+        if not is_screen_action:
+            # AGENT MODE RULE: when agent automation is enabled and no plan matches, report failure cleanly.
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            return {
+                "summary": "I wasn't able to handle that request with desktop automation. Try rephrasing your request, or disable agent mode for screen-based guidance.",
+                "steps": [],
+                "active_app": {"title": "", "process": "", "supported": False},
+                "ocr": {"count": 0, "items": []},
+                "elapsed_ms": elapsed_ms,
+                "provider": get_provider_label(),
+                "warnings": warnings,
+                "is_continuation": False,
+                "agent_fallback": True,
+            }
+
+    effective_question = question
+    latest_update = None
+    if is_continuation and previous_question:
+        effective_question = previous_question
+        latest_update = question
+    else:
+        progress = None
+
+    needs_screen = True
+    if preflight:
+        needs_screen = bool(preflight.get("needs_screen", True))
+        
+    if is_continuation:
+        needs_screen = True
+
+    if not needs_screen:
+        chat_started = time.perf_counter()
+        chat_result = answer_without_screen(question, conversation_history)
+        log_stage_timing("chat", chat_started)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return {
+            "summary": chat_result["summary"],
+            "steps": [],
+            "active_app": {"title": "", "process": "", "supported": False},
+            "ocr": {"count": 0, "items": []},
+            "elapsed_ms": elapsed_ms,
+            "provider": get_provider_label(),
+            "warnings": warnings,
+            "is_continuation": is_continuation,
+        }
+
+    # 1. Lock the target window by PID and capture the screenshot only after
+    # we know the request needs screen context.
+    # Caching the pywinauto element itself would cause a stale COM descriptor
+    # after ~15 s; caching the PID is stable and forces a fresh element
+    # lookup when UIA runs.
+    from utils.window import get_target_window_element
+    _initial = get_target_window_element()
+    target_pid: int | None = None
+    try:
+        target_pid = _initial.process_id() if _initial else None
+    except Exception:
+        pass
+
+    capture_started = time.perf_counter()
+    screenshot = capture_screen()
+    log_stage_timing("capture", capture_started)
+    # Print the capture marker to stdout and flush immediately so Rust can restore windows
+    print("__BLINKY_CAPTURED__", flush=True)
+
+    # Locator fast-path: screenshot-only, no LLM. NEVER runs for app-opening
+    # queries ("open X", "open X and Y") â€” those belong to the app launcher /
+    # agent loop, and a fuzzy OCR match on the app name would click the wrong
+    # thing (e.g. matching "search youtube.com" to the word "search").
+    locator_result = None
+    if not is_open_action_question(question):
+        locator_result = resolve_locator_fast_path(question, screenshot, target_pid, warnings, started)
+    if locator_result is not None:
+        return locator_result
+
+    if locator_target:
+        LOGGER.info("Locator deferred to screen AI for '%s'", locator_target)
+
+    observation = observe_app_state(screenshot, target_pid)
+    active_app = observation["active_app"]
+    visible_items = observation["visible_items"]
+
+    if not visible_items:
+        warnings.append("No OCR text was detected. Try zooming in or opening a supported app.")
+
+    if agent_mode:
+        agent_result = try_run_agent_action(question, observation)
+        if agent_result is not None:
+            return build_agent_tool_result(agent_result.to_dict(), started, warnings, observation)
+
+    # Check for procedural step plan first to avoid vision token consumption on standard multi-step tasks
+    from computer_use.step_planner import generate_procedural_plan
+    from computer_use.text_grounder import ground_step_to_screen
+
+    procedural_plan = None
+    if (
+        not is_screen_explanation_question(effective_question)
+        and not is_control_locator_question(effective_question)
+        and not extract_locator_target(effective_question)
+        and not extract_click_target(effective_question)
+        and not is_click_target_question(effective_question)
+    ):
+        procedural_plan = generate_procedural_plan(effective_question, active_app=active_app, conversation_history=conversation_history)
+    if procedural_plan and procedural_plan.get("steps") and procedural_plan.get("source") != "fallback":
+        completed_targets = {str(t).lower().strip() for t in progress.get("completed_targets", [])} if progress else set()
+        completed_instructions = {str(i).lower().strip() for i in progress.get("completed_instructions", [])} if progress else set()
+        failed_targets = {str(t).lower().strip() for t in progress.get("failed_targets", [])} if progress else set()
+        failed_refs = {str(r).strip() for r in progress.get("failed_refs", [])} if progress else set()
+
+        uncompleted_steps = [s for s in procedural_plan["steps"] if not is_procedural_step_completed(s, completed_targets, completed_instructions)]
+
+        if not uncompleted_steps:
+            # All steps in procedural plan have been completed!
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            return {
+                "summary": f"Autopilot successfully completed: {effective_question}!",
+                "steps": [],
+                "active_app": active_app or {"title": "", "process": "", "supported": True},
+                "ocr": {"count": 0, "items": []},
+                "elapsed_ms": elapsed_ms,
+                "provider": get_provider_label(),
+                "warnings": warnings,
+                "is_continuation": False,
+                "computer_use": True,
+            }
+
+        next_step = uncompleted_steps[0]
+        grounded = None
+        selected_step = next_step
+
+        for candidate_step in reversed(uncompleted_steps):
+            cand_grounded = ground_step_to_screen(
+                candidate_step,
+                visible_items,
+                active_app,
+                failed_refs=failed_refs,
+                failed_targets=failed_targets,
+                user_task=effective_question,
+            )
+            if cand_grounded and cand_grounded.get("match", {}).get("score", 0) >= 0.80:
+                grounded = cand_grounded
+                selected_step = candidate_step
+                break
+
+        if not grounded and uncompleted_steps:
+            first_step = uncompleted_steps[0]
+            grounded = ground_step_to_screen(
+                first_step,
+                visible_items,
+                active_app,
+                failed_refs=failed_refs,
+                failed_targets=failed_targets,
+                user_task=effective_question,
+            )
+            selected_step = first_step
+
+        if grounded:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            return {
+                "summary": procedural_plan.get("summary") or f"Step {selected_step.get('step')}: {selected_step.get('instruction')}",
+                "steps": [grounded],
+                "active_app": active_app,
+                "app_context": observation.get("app_context", ""),
+                "ocr": {"count": len(visible_items), "items": visible_items[:200]},
+                "screenshot": {
+                    "path": str(screenshot.path),
+                    "width": screenshot.width,
+                    "height": screenshot.height,
+                    "screen_width": screenshot.screen_width,
+                    "screen_height": screenshot.screen_height,
+                },
+                "elapsed_ms": elapsed_ms,
+                "provider": get_provider_label(),
+                "warnings": warnings,
+                "is_continuation": is_continuation,
+            }
+
+    prompt_started = time.perf_counter()
+    prompt, ref_items = build_prompt(
+        question=effective_question,
+        active_app=active_app,
+        ocr_items=visible_items,
+        app_context=observation.get("app_context", ""),
+        progress=progress,
+        latest_update=latest_update,
+        conversation_history=conversation_history,
+        return_ref_items=True,
+    )
+    log_stage_timing("prompt_build", prompt_started)
+    model_started = time.perf_counter()
+    ai_result = ask_model(prompt=prompt, screenshot_path=screenshot.path)
+    log_stage_timing("model", model_started)
+    LOGGER.info("AI Result: %s", json.dumps(ai_result, ensure_ascii=True))
+    steps = attach_matches(ai_result.get("steps", []), ref_items)
+    steps = skip_completed_navigation_steps(steps)
+
+    # Fallback: if the AI returned a type/search instruction with empty target_text,
+    # auto-match to the first visible search/filter/find input control on screen.
+    steps = _fill_empty_search_targets(steps, visible_items)
+
+    if steps:
+        steps = steps[:1]
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": ai_result.get("summary", "I found a short path using the visible controls."),
+        "steps": steps,
+        "active_app": active_app,
+        "app_context": observation.get("app_context", ""),
+        "ocr": {"count": len(visible_items), "items": visible_items[:200]},
+        "screenshot": {
+            "path": str(screenshot.path),
+            "width": screenshot.width,
+            "height": screenshot.height,
+            "screen_width": screenshot.screen_width,
+            "screen_height": screenshot.screen_height,
+        },
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings + ai_result.get("warnings", []),
+        "is_continuation": is_continuation,
+    }
+
+
+def observe_app_state(screenshot, target_pid: int | None = None) -> dict:
+    active_started = time.perf_counter()
+    active_app = get_active_window(target_pid=target_pid)
+    log_stage_timing("active_window", active_started)
+    visible_items = get_or_build_visible_ui_map(active_app, screenshot, target_pid)
+    app_context = get_app_context(active_app)
+    return {
+        "active_app": active_app,
+        "visible_items": visible_items,
+        "app_context": app_context,
+        "screenshot": screenshot,
+    }
+
+
+def build_agent_tool_result(
+    agent_action: dict,
+    started: float,
+    warnings: list[str],
+    observation: dict | None = None,
+) -> dict:
+    active_app = {"title": "", "process": "", "supported": False}
+    visible_items: list[dict] = []
+    screenshot_payload = None
+    app_context = ""
+
+    if observation:
+        active_app = observation.get("active_app", active_app)
+        visible_items = observation.get("visible_items", [])
+        app_context = observation.get("app_context", "")
+        screenshot = observation.get("screenshot")
+        if screenshot:
+            screenshot_payload = {
+                "path": str(screenshot.path),
+                "width": screenshot.width,
+                "height": screenshot.height,
+                "screen_width": screenshot.screen_width,
+                "screen_height": screenshot.screen_height,
+            }
+    else:
+        try:
+            time.sleep(0.5)
+            active_app = get_active_window()
+            app_context = get_app_context(active_app)
+        except Exception:
+            pass
+
+    summary = str(agent_action.get("message") or "Agent action completed.").strip()
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    result = {
+        "summary": summary,
+        "steps": [],
+        "active_app": active_app,
+        "app_context": app_context,
+        "ocr": {"count": len(visible_items), "items": visible_items[:200]},
+        "elapsed_ms": elapsed_ms,
+        "provider": "local",
+        "warnings": warnings,
+        "is_continuation": False,
+        "agent_action": agent_action,
+    }
+    if screenshot_payload:
+        result["screenshot"] = screenshot_payload
+    return result
+
+
+def get_or_build_visible_ui_map(active_app: dict, screenshot, target_pid: int | None = None) -> list[dict]:
+    signature = window_signature(active_app, screenshot, target_pid=target_pid)
+
+    def build_items() -> list[dict]:
+        ocr_started = time.perf_counter()
+        ocr_items = extract_visible_text(screenshot.path)
+        ocr_items = filter_ignored_overlay_items(ocr_items, screenshot)
+        log_stage_timing("ocr", ocr_started)
+        uia_started = time.perf_counter()
+        uia_items = get_visible_ui_text(target_pid=target_pid)
+        log_stage_timing("uia", uia_started)
+
+        if os.name != "nt":
+            # On Linux (GNOME/Wayland), the system status bar is at the very top (y < 35 in optimized screenshot pixels).
+            # We filter out these elements to prevent accidental matching of system tray clocks, status indicators, or active app labels.
+            ocr_items_filtered = [item for item in ocr_items if item.get("y", 0) >= 35]
+            uia_items_filtered = [item for item in uia_items if item.get("y", 0) >= 35]
+        else:
+            ocr_items_filtered = ocr_items
+            uia_items_filtered = uia_items
+
+        # UIA returns coordinates in screen-absolute space (physical pixel dimensions).
+        # The screenshot is scaled down to fit within 1920x1080 (thumbnail).
+        # The overlay then scales everything back up by (window.innerWidth / screenshot.width).
+        # To make both scales cancel correctly, we must first convert UIA coords
+        # from screen space -> screenshot space before the overlay sees them.
+        if screenshot.screen_width != screenshot.width or screenshot.screen_height != screenshot.height:
+            uia_items_filtered = scale_uia_items_to_screenshot(uia_items_filtered, screenshot)
+
+        merged = assign_screen_element_refs(merge_visible_items(ocr_items_filtered, uia_items_filtered))
+        merged.sort(key=lambda item: (int(item.get("y", 0) / 10), item.get("x", 0)))
+        return merged
+
+    visible_items = UI_MAP_CACHE.get_or_build(signature, build_items)
+    visible_items.sort(key=lambda item: (int(item.get("y", 0) / 10), item.get("x", 0)))
+    try:
+        from utils.screen_annotator import save_parsed_ui_screenshot
+        save_parsed_ui_screenshot(screenshot.path, visible_items)
+    except Exception:
+        pass
+    return visible_items
+
+
+# All query resolution is handled automatically by the AI model.
+
+
+def is_in_app_action(app_name: str) -> bool:
+    app_lower = app_name.lower().strip()
+    in_app_keywords = {
+        "tab", "tabs", "settings", "menu", "sidebar", "extensions", "status", "profile",
+        "chat", "chats", "bookmark", "bookmarks", "download", "downloads", "folder", "folders",
+        "file", "files", "history", "recent", "preferences", "terminal", "console"
+    }
+    return any(re.search(rf"\b{re.escape(word)}\b", app_lower) for word in in_app_keywords)
+
+
+def classify_request(
+    question: str,
+    previous_question: str | None,
+    warnings: list[str],
+    conversation_history: list[dict] | None = None,
+    agent_mode: bool = False,
+) -> dict | None:
+    try:
+        from tools.aicut_tool import resolve_aicut_request
+        aicut_match = resolve_aicut_request(question)
+        if aicut_match and aicut_match.get("action") != "explorer_context":
+            return {
+                "intent": "VIDEO_EDIT",
+                "needs_screen": False,
+                "is_continuation": False,
+                "extracted_params": aicut_match,
+            }
+    except Exception as exc:
+        LOGGER.debug("Fast-path AiCut resolution failed: %s", exc)
+    try:
+        from tools.whatsapp_tool import resolve_whatsapp_request
+        wa_match = resolve_whatsapp_request(question)
+        if wa_match:
+            action, chat_name = wa_match
+            return {
+                "intent": "WHATSAPP",
+                "needs_screen": False,
+                "is_continuation": False,
+                "extracted_params": {
+                    "wa_action": action,
+                    "wa_chat_name": chat_name,
+                }
+            }
+    except Exception as exc:
+        LOGGER.debug("Fast-path WhatsApp resolution failed: %s", exc)
+    try:
+        from tools.esp32_light_tool import resolve_light_request
+        light_match = resolve_light_request(question)
+        if light_match:
+            return {
+                "intent": "ESP32_LIGHT",
+                "needs_screen": False,
+                "is_continuation": False,
+                "extracted_params": light_match,
+            }
+    except Exception as exc:
+        LOGGER.debug("Fast-path ESP32 light resolution failed: %s", exc)
+
+
+    try:
+        payload = ask_text_model(build_preflight_prompt(question, previous_question, conversation_history))
+    except Exception as exc:
+        LOGGER.warning("Preflight classification failed; falling back to screen mode: %s", exc)
+        warnings.append(f"Preflight classification failed: {exc}")
+        return None
+
+    intent = payload.get("intent")
+    extracted_params = payload.get("extracted_params", {}) or {}
+    
+    # Safety check: if intent is OPEN_APP but targets web UI, an in-app
+    # feature/action, or a query, override to DESKTOP_AUTOMATION (only if not in agent_mode).
+    # But if it's a known app (has app protocol or is in app name aliases), don't override!
+    if intent == "OPEN_APP" and not agent_mode:
+        app_name = extracted_params.get("app_name", "")
+        if app_name:
+            normalized = normalize_app_name(app_name)
+            # Check if it's a known desktop app first
+            is_known_app = normalized in APP_PROTOCOLS or normalized in APP_NAME_ALIASES
+            if not is_known_app and (is_web_destination(app_name) or is_in_app_action(app_name) or not looks_like_app_name(app_name)):
+                LOGGER.info("Overriding OPEN_APP intent with app_name '%s' to DESKTOP_AUTOMATION", app_name)
+                intent = "DESKTOP_AUTOMATION"
+
+    if intent:
+        needs_screen = intent == "DESKTOP_AUTOMATION"
+    else:
+        needs_screen = bool(payload.get("needs_screen", True))
+        intent = "DESKTOP_AUTOMATION" if needs_screen else "INFORMATIONAL_CHAT"
+    is_continuation = bool(payload.get("is_continuation", False))
+    return {
+        "intent": intent,
+        "needs_screen": needs_screen,
+        "is_continuation": is_continuation,
+        "extracted_params": extracted_params
+    }
+
+
+def answer_without_screen(question: str, conversation_history: list[dict] | None = None) -> dict:
+    payload = ask_text_model(build_chat_prompt(question, conversation_history))
+    summary = str(payload.get("summary", "")).strip()
+    if not summary:
+        raise RuntimeError("The chat model returned an empty reply.")
+    return {"summary": summary, "steps": []}
+
+
+def run_aicut_tool(
+    params: dict,
+    question: str,
+    started: float,
+    warnings: list[str],
+) -> dict:
+    """Call AiCut video editor and return a Blinky-formatted result."""
+    from tools.aicut_tool import run_aicut, format_aicut_summary
+    action = params.get("action", "video edit")
+    _emit_status("aicut", f"Editing video with AiCut ({action})...")
+    res = run_aicut(params)
+    summary = format_aicut_summary(res, question)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": summary,
+        "steps": [],
+        "active_app": {"title": "AiCut Video Editor", "process": "AIVideoEditor.exe", "supported": True},
+        "ocr": {"count": 0, "items": []},
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+        "is_continuation": False,
+        "aicut": res,
+    }
+
+
+def run_whatsapp_tool(
+    action: str,
+    chat_name: str | None,
+    started: float,
+    warnings: list[str],
+) -> dict:
+    """Call whatsapp_tool.py as a subprocess and return a Blinky-formatted result."""
+    import subprocess
+    import sys as _sys
+
+    tool_path = Path(__file__).resolve().parent / "tools" / "whatsapp_tool.py"
+    args_dict: dict = {"action": action}
+    if chat_name:
+        args_dict["chat_name"] = chat_name
+
+    LOGGER.info("Running WhatsApp tool: action=%s chat_name=%s", action, chat_name)
+    _emit_status("whatsapp", f"Connecting to WhatsApp backend ({action})...")
+
+    try:
+        proc = subprocess.run(
+            [_sys.executable, str(tool_path), json.dumps(args_dict)],
+            capture_output=True,
+            text=True,
+            timeout=130,
+            cwd=str(tool_path.parent),
+        )
+        stdout = proc.stdout.strip()
+        LOGGER.debug("whatsapp_tool stdout: %s", stdout)
+        LOGGER.debug("whatsapp_tool stderr: %s", proc.stderr.strip())
+
+        if not stdout:
+            error_detail = proc.stderr.strip() or "No output from WhatsApp tool."
+            summary = f"WhatsApp tool returned no output. {error_detail}"
+        else:
+            try:
+                result_data = json.loads(stdout)
+                if "error" in result_data:
+                    summary = f"WhatsApp error: {result_data['error']}"
+                elif action == "summarize" or action == "summarise":
+                    raw_summary = result_data.get("summary", "")
+                    if raw_summary:
+                        summary = raw_summary
+                    else:
+                        summary = json.dumps(result_data, indent=2)
+                elif action == "chats":
+                    chats = result_data.get("chats", [])
+                    if chats:
+                        chat_lines = "\n".join(
+                            f"- {c.get('name', c.get('id', '?'))}" for c in chats[:20]
+                        )
+                        summary = f"Found {len(chats)} WhatsApp chats:\n{chat_lines}"
+                    else:
+                        summary = "No WhatsApp chats found. Make sure you are connected."
+                elif action == "status":
+                    status_val = result_data.get("status", "")
+                    if status_val == "connected":
+                        summary = "WhatsApp is connected and ready."
+                    elif status_val == "qr":
+                        summary = "WhatsApp is waiting for QR code scan. Open the WhatsApp Connection window in Blinky to scan."
+                    elif status_val == "disconnected":
+                        summary = "WhatsApp is not connected. Use the WhatsApp button in Blinky settings to connect."
+                    else:
+                        summary = f"WhatsApp status: {status_val or json.dumps(result_data)}"
+                else:
+                    summary = json.dumps(result_data, indent=2)
+            except json.JSONDecodeError:
+                summary = stdout
+    except subprocess.TimeoutExpired:
+        summary = "WhatsApp tool timed out. The backend may be busy or not running."
+    except Exception as exc:
+        summary = f"Failed to run WhatsApp tool: {exc}"
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": summary,
+        "steps": [],
+        "active_app": {"title": "", "process": "", "supported": False},
+        "ocr": {"count": 0, "items": []},
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+        "is_continuation": False,
+    }
+
+
+def run_esp32_light_tool(
+    params: dict,
+    started: float,
+    warnings: list[str],
+) -> dict:
+    """Execute ESP32 Light command and return a Blinky-formatted result."""
+    from tools.esp32_light_tool import handle_request
+    _emit_status("esp32_light", "Controlling ESP32 physical light...")
+    res = handle_request(params)
+    if res.get("success"):
+        summary = res.get("message", "Light updated successfully.")
+    else:
+        summary = f"Failed to control light: {res.get('error', 'ESP32 unreachable')}"
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": summary,
+        "steps": [],
+        "active_app": {"title": "", "process": "", "supported": False},
+        "ocr": {"count": 0, "items": []},
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+        "is_continuation": False,
+    }
+
+
+def run_web_intelligence(
+    question: str,
+    conversation_history: list[dict] | None,
+    started: float,
+    warnings: list[str],
+) -> dict:
+    import asyncio
+    from wil.pipeline import WILPipeline
+
+    def on_status(phase: str, data: dict) -> None:
+        message = data.get("message", f"Web search stage: {phase}")
+        print(json.dumps({"type": "status", "phase": phase, "message": message}), flush=True)
+        LOGGER.info("WIL pipeline status [%s]: %s", phase, message)
+
+    def on_chunk(chunk: str) -> None:
+        if chunk.strip().startswith("[Synthesis Error"):
+            return
+        print(json.dumps({"type": "chunk", "message": chunk}), flush=True)
+
+    result = asyncio.run(
+        WILPipeline().run(
+            query=question,
+            conversation_history=conversation_history,
+            on_status=on_status,
+            on_chunk=on_chunk,
+        )
+    )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": str(result.get("synthesized_response", "")).strip(),
+        "steps": [],
+        "active_app": {"title": "", "process": "", "supported": False},
+        "ocr": {"count": 0, "items": []},
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+        "is_continuation": False,
+        "web": {
+            "needs_web_search": result.get("needs_web_search", True),
+            "searxng_offline": result.get("searxng_offline", False),
+            "sources": result.get("sources", []),
+        },
+    }
+
+
+def resolve_locator_fast_path(question: str, screenshot, target_pid: int | None, warnings: list[str], started: float) -> dict | None:
+    target = extract_locator_target(question) or extract_click_target(question)
+    if not target:
+        return None
+
+    active_started = time.perf_counter()
+    active_app = get_active_window(target_pid=target_pid)
+    log_stage_timing("locator.active_window", active_started)
+    uia_started = time.perf_counter()
+    wants_control = is_control_locator_question(question)
+    uia_items = get_visible_ui_text(target_pid=target_pid, include_unlabeled=True)
+    log_stage_timing("locator.uia", uia_started)
+
+    if screenshot.screen_width != screenshot.width or screenshot.screen_height != screenshot.height:
+        uia_items = scale_uia_items_to_screenshot(uia_items, screenshot)
+
+    uia_items.sort(key=lambda item: (int(item.get("y", 0) / 10), item.get("x", 0)))
+    match_items = locator_match_items(question, uia_items)
+    instruction = f"Locate the {target} control."
+    if match_items:
+        match_result = find_best_match_with_score(target, match_items, instruction)
+        if match_result:
+            if should_accept_locator_match(question, match_result):
+                return build_locator_result(
+                    question,
+                    target,
+                    match_result["item"],
+                    uia_items,
+                    active_app,
+                    screenshot,
+                    warnings,
+                    started,
+                    match_result,
+                )
+            LOGGER.info(
+                "Locator deferred to AI for '%s' reason=low_control_confidence score=%.3f text_similarity=%.3f candidate_count=%d",
+                target,
+                match_result["score"],
+                match_result["text_similarity"],
+                match_result["candidate_count"],
+            )
+            return None
+
+    ocr_started = time.perf_counter()
+    ocr_items = extract_visible_text(screenshot.path)
+    ocr_items = filter_ignored_overlay_items(ocr_items, screenshot)
+    log_stage_timing("locator.ocr", ocr_started)
+    if os.name != "nt":
+        ocr_items = [item for item in ocr_items if item.get("y", 0) >= 35]
+        uia_items = [item for item in uia_items if item.get("y", 0) >= 35]
+
+    visible_items = assign_screen_element_refs(merge_visible_items(ocr_items, uia_items))
+    visible_items.sort(key=lambda item: (int(item.get("y", 0) / 10), item.get("x", 0)))
+    try:
+        from utils.screen_annotator import save_parsed_ui_screenshot
+        save_parsed_ui_screenshot(screenshot.path, visible_items)
+    except Exception:
+        pass
+    match_result = find_best_match_with_score(target, locator_match_items(question, visible_items), instruction)
+    if match_result:
+        if should_accept_locator_match(question, match_result):
+            return build_locator_result(
+                question,
+                target,
+                match_result["item"],
+                visible_items,
+                active_app,
+                screenshot,
+                warnings,
+                started,
+                match_result,
+            )
+        LOGGER.info(
+            "Locator deferred to AI for '%s' reason=low_control_confidence score=%.3f text_similarity=%.3f candidate_count=%d",
+            target,
+            match_result["score"],
+            match_result["text_similarity"],
+            match_result["candidate_count"],
+        )
+        return None
+
+    if wants_control or icon_like_control_candidates(locator_match_items(question, uia_items)):
+        LOGGER.info("Locator deferred to AI for '%s' reason=icon_or_control_needs_ai", target)
+        return None
+
+    if is_open_action_question(question):
+        return None
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    LOGGER.info("Locator local path did not find '%s' after checking %d visible items", target, len(visible_items))
+    return {
+        "summary": f"I could not find {target} on the current screen.",
+        "steps": [],
+        "active_app": active_app,
+        "ocr": {"count": len(visible_items), "items": visible_items[:80]},
+        "screenshot": {
+            "path": str(screenshot.path),
+            "width": screenshot.width,
+            "height": screenshot.height,
+            "screen_width": screenshot.screen_width,
+            "screen_height": screenshot.screen_height,
+        },
+        "elapsed_ms": elapsed_ms,
+        "provider": "local",
+        "warnings": warnings,
+        "is_continuation": False,
+    }
+
+
+def locator_match_items(question: str, items: list[dict]) -> list[dict]:
+    return items if "blinky" in question.lower() else [item for item in items if item.get("source") != "blinky"]
+
+
+def is_control_locator_question(question: str) -> bool:
+    normalized = question.lower()
+    return any(
+        hint in normalized
+        for hint in {
+            "button",
+            "icon",
+            "control",
+            "tab",
+            "menu",
+            "sidebar",
+            "side bar",
+            "activity bar",
+            "search bar",
+            "input",
+            "text field",
+            "field",
+        }
+    )
+
+
+def should_accept_locator_match(question: str, match_result: dict) -> bool:
+    if not is_control_locator_question(question):
+        return bool(match_result["is_exact_text"] or match_result["text_similarity"] >= 0.82 or match_result["score"] >= 0.78)
+
+    control_type = str(match_result.get("control_type", "")).lower()
+    source = str(match_result.get("source", "")).lower()
+    is_interactive = (
+        (source == "uia" and control_type in {"button", "image", "tabitem", "menuitem", "edit", "textbox", "combobox", "listitem", "custom"})
+        or (source == "omniparser")
+        or (source in {"ocr", "winrt"} and match_result.get("is_exact_text"))
+    )
+    if not is_interactive:
+        return False
+    if int(match_result.get("ambiguous_candidate_count") or match_result.get("candidate_count") or 0) > 1:
+        return False
+    if bool(match_result.get("is_exact_text")):
+        return float(match_result.get("score") or 0) >= 0.8
+    return float(match_result.get("score") or 0) >= 0.82 and float(match_result.get("text_similarity") or 0) >= 0.78
+
+
+def icon_like_control_candidates(items: list[dict]) -> list[dict]:
+    candidates = []
+    for item in items:
+        if item.get("source") == "blinky":
+            continue
+        control_type = str(item.get("control_type", "")).lower()
+        if control_type not in {"button", "image", "hyperlink"}:
+            continue
+        width = float(item.get("width") or 0)
+        height = float(item.get("height") or 0)
+        if width < 12 or height < 12 or width > 120 or height > 120:
+            continue
+        candidates.append(item)
+    return candidates
+
+
+def build_locator_result(
+    question: str,
+    target: str,
+    match: dict,
+    visible_items: list[dict],
+    active_app: dict,
+    screenshot,
+    warnings: list[str],
+    started: float,
+    match_result: dict | None = None,
+) -> dict:
+    match_with_metadata = {**match}
+    if match_result:
+        match_with_metadata.update({
+            "score": match_result.get("score", 1.0),
+            "text_similarity": match_result.get("text_similarity", 1.0),
+            "is_exact_text": match_result.get("is_exact_text", True),
+            "match_method": "text" if match_result.get("match_method") != "ref" else "ref",
+            "candidate_count": match_result.get("candidate_count", 1),
+            "ambiguous_candidate_count": match_result.get("ambiguous_candidate_count", 1),
+        })
+    else:
+        match_with_metadata.update({
+            "score": 1.0,
+            "text_similarity": 1.0,
+            "is_exact_text": True,
+            "match_method": "ref" if match.get("ref") else "text",
+            "candidate_count": 1,
+            "ambiguous_candidate_count": 1,
+        })
+
+    step = {
+        "step": 1,
+        "instruction": local_target_instruction(question, target),
+        "target_text": str(match.get("text") or target),
+        "target_ref": str(match.get("ref", "")),
+        "match": match_with_metadata,
+    }
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    if match_result:
+        LOGGER.info(
+            "Locator accepted local match '%s' to '%s' score=%.3f text_similarity=%.3f candidate_count=%d",
+            target,
+            match.get("text"),
+            match_result["score"],
+            match_result["text_similarity"],
+            match_result["candidate_count"],
+        )
+    else:
+        LOGGER.info("Locator fast path matched '%s' to '%s'", target, match.get("text"))
+    return {
+        "summary": f"I found the {target} in the active app.",
+        "steps": [step],
+        "active_app": active_app,
+        "ocr": {"count": len(visible_items), "items": visible_items[:80]},
+        "screenshot": {
+            "path": str(screenshot.path),
+            "width": screenshot.width,
+            "height": screenshot.height,
+            "screen_width": screenshot.screen_width,
+            "screen_height": screenshot.screen_height,
+        },
+        "elapsed_ms": elapsed_ms,
+        "provider": "local",
+        "warnings": warnings,
+        "is_continuation": False,
+    }
+
+
+def extract_locator_target(question: str) -> str | None:
+    text = " ".join(question.strip().split())
+    if not text:
+        return None
+
+    patterns = [
+        r"^where\s+(?:is|are)\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^where\s+can\s+i\s+find\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^where\s+do\s+i\s+find\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^show\s+me\s+where\s+(?:the\s+)?(.+?)\s+(?:is|are)(?:\?|$)",
+        r"^show\s+me\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^point\s+to\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^locate\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^highlight\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^find\s+(?:me\s+)?(?:the\s+)?(.+?)(?:\?|$)",
+        r"^search\s+(?:for\s+)?(?:the\s+)?(.+?)(?:\?|$)",
+        r"^look\s+for\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^spot\s+(?:the\s+)?(.+?)(?:\?|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return clean_locator_target(match.group(1))
+    return None
+
+
+def extract_click_target(question: str) -> str | None:
+    text = " ".join(question.strip().split())
+    if not text:
+        return None
+
+    patterns = [
+        r"^(?:click|select|choose|press|tap|hit|push)\s+(?:on\s+)?(?:the\s+)?(.+?)(?:\?|$)",
+        r"^(?:change|switch|set|turn)\s+(?:(?:dark|light|custom|theme|mode)\s+)?to\s+(?:the\s+)?(.+?)(?:\?|$)",
+        r"^(?:change|switch|set)\s+(?:from\s+\w+\s+)?to\s+(?:the\s+)?(.+?)(?:\?|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            return clean_locator_target(match.group(1))
+    return None
+
+
+
+def is_open_action_question(question: str) -> bool:
+    normalized = " ".join(question.lower().strip().split())
+    return normalized.startswith(("open ", "launch ", "start "))
+
+
+def is_click_target_question(question: str) -> bool:
+    return extract_click_target(question) is not None
+
+
+def local_target_instruction(question: str, target: str) -> str:
+    if is_click_target_question(question):
+        return f"Click {target}."
+    return f"Here is the {target}."
+
+
+def should_force_screen_context(question: str, previous_question: str | None = None) -> bool:
+    normalized = " ".join(question.lower().strip().split())
+    if not normalized:
+        return False
+
+    if is_general_chat_question(normalized):
+        return False
+    if extract_locator_target(normalized):
+        return True
+    if previous_question and is_followup_continuation_question(normalized):
+        return True
+
+    screen_action_words = {
+        "click",
+        "open",
+        "select",
+        "choose",
+        "install",
+        "download",
+        "enable",
+        "disable",
+        "configure",
+        "setup",
+        "set up",
+        "run",
+        "launch",
+        "navigate",
+        "find",
+        "search",
+        "locate",
+        "highlight",
+        "show",
+        "where",
+        "button",
+        "icon",
+        "menu",
+        "tab",
+        "sidebar",
+        "side bar",
+        "control",
+        "settings",
+        "extension",
+        "folder",
+        "file",
+        "screen",
+        "window",
+        "app",
+    }
+    return any(word in normalized for word in screen_action_words)
+
+
+def is_followup_continuation_question(question: str) -> bool:
+    normalized = normalize_question_text(question)
+    return normalized in {
+        "next",
+        "what next",
+        "what now",
+        "now what",
+        "continue",
+        "go on",
+        "done",
+        "finished",
+        "show next step",
+        "what to do",
+        "what do i do",
+        "how do i proceed",
+        "how to proceed",
+    }
+
+
+def is_general_chat_question(question: str) -> bool:
+    normalized = normalize_question_text(question)
+    greetings = {
+        "hi",
+        "hello",
+        "hey",
+        "yo",
+        "how are you",
+        "how r u",
+        "how are u",
+        "how are you doing",
+        "what can you do",
+        "what do you do",
+        "who are you",
+        "who r u",
+        "thanks",
+        "thank you",
+    }
+    return normalized in greetings
+
+
+def normalize_question_text(question: str) -> str:
+    return " ".join(re.sub(r"[?!.]+$", "", question.lower().strip()).split())
+
+
+def normalize_conversation_history(value) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    history: list[dict] = []
+    for item in value[-10:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).strip().lower()
+        content = " ".join(str(item.get("content", "")).split())
+        if role not in {"student", "blinky"} or not content:
+            continue
+        history.append({"role": role, "content": content[:1000]})
+    return history
+
+
+def clean_locator_target(value: str) -> str | None:
+    cleaned = value.strip(" .,!?:;\"'`()[]")
+    cleaned = re.sub(r"\s+(?:in|on|from)\s+the\s+.*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+(?:button|icon|tab|menu|control|panel|view|folder)$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip(" .,!?:;\"'`()[]")
+    return cleaned or None
+
+
+def scale_uia_items_to_screenshot(uia_items: list[dict], screenshot) -> list[dict]:
+    sx = screenshot.width / screenshot.screen_width
+    sy = screenshot.height / screenshot.screen_height
+    LOGGER.info(
+        "Scaling UIA coords from screen (%dx%d) -> screenshot (%dx%d)  sx=%.4f sy=%.4f",
+        screenshot.screen_width,
+        screenshot.screen_height,
+        screenshot.width,
+        screenshot.height,
+        sx,
+        sy,
+    )
+    return [
+        {
+            **item,
+            "x": int(item["x"] * sx),
+            "y": int(item["y"] * sy),
+            "width": max(1, int(item["width"] * sx)),
+            "height": max(1, int(item["height"] * sy)),
+        }
+        for item in uia_items
+    ]
+
+
+def log_stage_timing(stage: str, started: float) -> None:
+    LOGGER.info("Timing: %s took %dms", stage, int((time.perf_counter() - started) * 1000))
+
+
+def filter_ignored_overlay_items(items: list[dict], screenshot) -> list[dict]:
+    rects = get_ignored_overlay_rects()
+    if not rects:
+        return items
+
+    sx = screenshot.width / screenshot.screen_width
+    sy = screenshot.height / screenshot.screen_height
+    scaled_rects = [
+        {
+            "x": rect["x"] * sx,
+            "y": rect["y"] * sy,
+            "width": rect["width"] * sx,
+            "height": rect["height"] * sy,
+        }
+        for rect in rects
+    ]
+    filtered = [item for item in items if not _item_center_in_any_rect(item, scaled_rects)]
+    removed = len(items) - len(filtered)
+    if removed:
+        LOGGER.info("Filtered %d OCR items inside ignored overlay windows", removed)
+    return filtered
+
+
+def _item_center_in_any_rect(item: dict, rects: list[dict]) -> bool:
+    cx = float(item.get("x") or 0) + float(item.get("width") or 0) / 2
+    cy = float(item.get("y") or 0) + float(item.get("height") or 0) / 2
+    return any(
+        cx >= rect["x"] and
+        cy >= rect["y"] and
+        cx <= rect["x"] + rect["width"] and
+        cy <= rect["y"] + rect["height"]
+        for rect in rects
+    )
+
+
+
+def merge_visible_items(ocr_items: list[dict], uia_items: list[dict]) -> list[dict]:
+    # Extract all UIA input/edit controls first
+    uia_inputs = [
+        item for item in uia_items 
+        if str(item.get("control_type", "")).lower() in {"edit", "textbox", "combobox"}
+    ]
+    
+    # Index OCR items by text and approximate Y coordinate to search them quickly
+    ocr_by_key = {}
+    for ocr in ocr_items:
+        text_lower = str(ocr.get("text", "")).lower().strip()
+        y_bucket = int(ocr.get("y", 0) / 12)
+        ocr_by_key[(text_lower, y_bucket)] = ocr
+        ocr_by_key[(text_lower, y_bucket - 1)] = ocr
+        ocr_by_key[(text_lower, y_bucket + 1)] = ocr
+
+    merged: list[dict] = []
+    seen: set[tuple] = set()
+    
+    # 1. Add all UIA items. If a UIA item matches a precise OCR item on the same line,
+    # we override the coordinates with the pixel-perfect OCR coordinates!
+    for item in uia_items:
+        text_lower = str(item.get("text", "")).lower().strip()
+        y_bucket = int(item.get("y", 0) / 12)
+        
+        # Don't calibrate input/edit controls to OCR text, because we want to highlight the full input box.
+        is_input = str(item.get("control_type", "")).lower() in {"edit", "textbox", "combobox"}
+        ocr_match = ocr_by_key.get((text_lower, y_bucket)) if not is_input else None
+        if ocr_match:
+            LOGGER.info("Precise Calibration: UIA '%s' bound mapped to OCR: x=%d -> x=%d", item.get("text"), item["x"], ocr_match["x"])
+            item["x"] = ocr_match["x"]
+            item["y"] = ocr_match["y"]
+            item["width"] = ocr_match["width"]
+            item["height"] = ocr_match["height"]
+            item["source"] = "ocr"  # Promote source to ocr to bypass UIA wide-capping layouts
+            
+        key = (text_lower, int(item.get("x", 0) / 8), int(item.get("y", 0) / 8))
+        if key not in seen:
+            seen.add(key)
+            merged.append(item)
+            
+    # 2. Add remaining standalone OCR items.
+    # If an OCR item falls inside a UIA input/edit control, expand it to the full input control's bounds
+    # and mark it as an input control type, so that highlights cover the entire search/input bar.
+    for item in ocr_items:
+        text_lower = str(item.get("text", "")).lower().strip()
+        
+        ox, oy = item.get("x", 0), item.get("y", 0)
+        ow, oh = item.get("width", 0), item.get("height", 0)
+        
+        for u_input in uia_inputs:
+            ux, uy = u_input.get("x", 0), u_input.get("y", 0)
+            uw, uh = u_input.get("width", 0), u_input.get("height", 0)
+            
+            # Check containment with 8px padding
+            if (ox >= ux - 8 and oy >= uy - 8 and 
+                ox + ow <= ux + uw + 8 and oy + oh <= uy + uh + 8):
+                LOGGER.info("Calibrating OCR text '%s' inside UIA input control to full bounds", item.get("text"))
+                item["x"] = ux
+                item["y"] = uy
+                item["width"] = uw
+                item["height"] = uh
+                item["control_type"] = u_input.get("control_type")
+                break
+                
+        key = (text_lower, int(item.get("x", 0) / 8), int(item.get("y", 0) / 8))
+        if key not in seen:
+            seen.add(key)
+            merged.append(item)
+            
+    return merged
+
+
+def main() -> None:
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+        question = str(payload.get("question", "")).strip()
+        previous_question = payload.get("previous_question")
+        if previous_question is not None:
+            previous_question = str(previous_question).strip()
+        progress = payload.get("progress")
+        if not isinstance(progress, dict):
+            progress = {}
+        conversation_history = normalize_conversation_history(payload.get("conversation_history"))
+        web_search_enabled = bool(payload.get("web_search_enabled", False))
+        agent_mode = bool(payload.get("agent_mode", False))
+        ignored_rects = payload.get("ignored_rects")
+        if not question:
+            raise ValueError("Question is required.")
+
+        result = run(question, previous_question, progress, conversation_history, web_search_enabled, agent_mode, ignored_rects)
+        print(json.dumps(result, ensure_ascii=True))
+    except Exception as exc:
+        LOGGER.exception("Worker failed")
+        print(json.dumps({"error": str(exc), "steps": [], "warnings": [str(exc)]}))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+

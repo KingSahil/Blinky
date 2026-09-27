@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "aicut": {
+      "command": "python",
+      "args": [
+        "C:\\Projects\\AiCut\\aicut_mcp.py"
+      ]
+    }
+  }
+}

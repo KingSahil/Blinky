@@ -1,0 +1,182 @@
+# Describes the dependency the backend has over frontend, the connecting functions nd classes, so that they can be taken care of if frontend or backend has to be changed drastically
+
+Listed directory Blinky
+Viewed package.json:1-55
+Listed directory frontend
+Listed directory src
+Listed directory lib
+Listed directory python
+Listed directory worker
+Listed directory src-tauri
+Listed directory common
+Listed directory src
+Viewed tauri.ts:1-95
+Viewed adaptiveTransport.ts:1-147
+Searched for "listen"
+Searched for "blinky://"
+
+Here is a highly descriptive, comprehensive architectural breakdown of exactly how the Blinky frontend depends on the backend, how the two connect, and the precise contract of functions and event listeners required if you completely rebuild the frontend.
+
+---
+
+# 1. How the Frontend Depends Upon the Backend
+
+In Blinky, the frontend ([common/frontend](file:///c:/Users/khann/Projects/Blinky/common/frontend)) acts strictly as a **presentation and user-interaction layer**. Because Blinky is a desktop AI tutor and assistant, a standard web frontend operating inside a webview sandbox is completely incapable of performing native operating system tasks or heavy AI computation on its own.
+
+### The Division of Labor
+* **The Frontend (`React / Vite`)**: Responsible only for rendering the visual interface—such as the floating [CommandBar.tsx](file:///c:/Users/khann/Projects/Blinky/common/frontend/src/CommandBar.tsx), the chat interface ([App.tsx](file:///c:/Users/khann/Projects/Blinky/common/frontend/src/App.tsx)), and the transparent screen annotation layer ([Overlay.tsx](file:///c:/Users/khann/Projects/Blinky/common/frontend/src/Overlay.tsx)).
+* **The Backend (`Tauri / Rust Core` + `Python AI Services`)**: The frontend depends entirely on the backend for:
+  1. **Native OS Window Management**: Making the overlay transparent, resizing windows dynamically, and managing click-through vs. interactive states.
+  2. **System Global Shortcuts**: Listening for key combinations when Blinky is in the background to summon the Command Bar.
+  3. **Always-On Wake Word Detection**: The Python backend continuously polls the microphone for "Hey Blinky" using an ONNX model ([wake_word.py](file:///c:/Users/khann/Projects/Blinky/python/wake_word.py)) and notifies the frontend when detected.
+  4. **Screen Capture & OCR**: Capturing desktop screenshots and running OCR ([ocr](file:///c:/Users/khann/Projects/Blinky/python/ocr)) to give the AI visual context of the user's desktop.
+  5. **Computer Use Execution**: Simulating native OS mouse clicks, scrolling, and keyboard typing ([computer_use](file:///c:/Users/khann/Projects/Blinky/python/computer_use)).
+  6. **Heavy AI Inference & Streaming**: Calling local (Ollama) or cloud LLMs (Sarvam, Groq, DeepSeek) and streaming the resulting text and progress phases back to the UI.
+
+---
+
+# 2. How the Frontend and Backend Connect
+
+The frontend and backend communicate via **three distinct communication protocols**, creating a bridge between the JavaScript webview, the Rust host process, and the Python workers.
+
+```mermaid
+graph TD
+    subgraph Frontend [New / Existing Frontend]
+        UI[UI Components: CommandBar / Overlay]
+        TauriLib[tauri.ts / Tauri API]
+        AT[adaptiveTransport.ts]
+    end
+
+    subgraph RustBackend [Tauri Rust Core]
+        IPC[lib.rs: IPC Command Handlers]
+        Events[Tauri Event Broadcast]
+        WS_Rust[websocket.rs]
+    end
+
+    subgraph PythonBackend [Python Services & Workers]
+        WakeWord[wake_word.py]
+        AI[Python AI / OCR / Computer Use]
+    end
+
+    UI -->|1. invoke RPC| TauriLib
+    TauriLib -->|IPC JSON| IPC
+    IPC -->|Native OS / Spawn| AI
+    WakeWord -->|2. Tauri emit| Events
+    AI -->|2. Tauri emit| Events
+    Events -->|blinky:// Events| UI
+    AT <-->|3. WebTransport / WebSockets| WS_Rust
+```
+
+### 1. Tauri IPC (Inter-Process Communication) - Request / Response
+Whenever the frontend needs the backend to perform an action (e.g., click a button, run the AI tutor, resize a window), it executes an asynchronous remote procedure call (RPC) using Tauri's `invoke` API.
+* **Frontend Implementation**: Packaged in [tauri.ts](file:///c:/Users/khann/Projects/Blinky/common/frontend/src/lib/tauri.ts).
+* **Backend Receiver**: Handled by Rust functions annotated with `#[tauri::command]` in [lib.rs](file:///c:/Users/khann/Projects/Blinky/common/src-tauri/src/lib.rs).
+* **Mechanism**: JavaScript passes a JSON payload across the native OS IPC bridge to Rust. Rust either handles it directly (like window resizing) or forwards it to the Python backend services, returning a `Promise` back to JavaScript.
+
+### 2. Tauri Event System (Pub / Sub Broadcasts)
+Because many backend operations happen asynchronously (e.g., the user speaking "Hey Blinky", or an LLM streaming tokens over several seconds), the backend needs a way to push data to the frontend without waiting for a request.
+* **Mechanism**: The Rust/Python backends use Tauri's event emitter (`emit`) to broadcast messages to specific event topics (e.g., `blinky://wake-word-detected`).
+* **Frontend Receiver**: The frontend subscribes to these topics using `listen('topic_name', callback)` from `@tauri-apps/api/event`.
+
+### 3. Adaptive Transport (WebTransport / WebSockets)
+For high-throughput, real-time streaming (such as live audio streaming for voice transcription or real-time gateway metrics), the app establishes direct full-duplex connections.
+* **Frontend Implementation**: [adaptiveTransport.ts](file:///c:/Users/khann/Projects/Blinky/common/frontend/src/lib/adaptiveTransport.ts).
+* **Backend Implementation**: [websocket.rs](file:///c:/Users/khann/Projects/Blinky/common/src-tauri/src/websocket.rs).
+* **Mechanism**: `AdaptiveTransportManager` monitors network metrics (RTT, downlink). It attempts to establish a low-latency HTTP/3 WebTransport connection (`wt://`) and automatically falls back to standard WebSockets (`ws://`) if WebTransport is unavailable or unstable.
+
+---
+
+# 3. Requirements for a Completely New Frontend
+
+If you throw away the existing React frontend and build a brand new one (whether in Svelte, Vue, Next.js, or a new React architecture), your new frontend **must implement the following exact contract of functions, invokes, and event listeners** to interact properly with the backend.
+
+## A. Mandatory Outgoing IPC Invokes (`invoke`)
+Your new frontend wrapper (replacing [tauri.ts](file:///c:/Users/khann/Projects/Blinky/common/frontend/src/lib/tauri.ts)) must invoke the following exact command string names and payload structures:
+
+| Function Purpose | Exact Tauri Invoke Command | Expected Payload Arguments | Description |
+| :--- | :--- | :--- | :--- |
+| **Run AI Tutor** | `run_tutor` | `{ request: { question: string, previous_question?: string, progress?: object, conversation_history?: array, web_search_enabled?: boolean, agent_mode?: boolean } }` | Triggers the main backend AI tutor execution pipeline. Returns a `Promise<TutorResult>`. |
+| **Run Agent Query** | `run_agent_query` | `{ request: { query: string } }` | Triggers autonomous agent workflows. Returns a `Promise<TutorResult>`. |
+| **Show Overlay** | `show_overlay` | None (`{}`) | Tells Rust to make the full-screen transparent overlay window visible. |
+| **Hide Overlay** | `hide_overlay` | None (`{}`) | Tells Rust to hide the full-screen transparent overlay window. |
+| **Show Command Bar** | `show_command_bar` | None (`{}`) | Tells Rust to display the floating Command Bar window. |
+| **Resize Window** | `resize_command_window` | `{ height: number }` | Essential for dynamic UI growth (e.g., expanding a single input bar into a tall chat window). |
+| **Move & Resize Window** | `resize_and_move_command_window` | `{ x: number, y: number, width: number, height: number }` | Moves and resizes the command window to exact desktop coordinates. |
+| **Get Settings** | `get_settings` | None (`{}`) | Retrieves user configuration (`BlinkySettings` with API keys, provider, and shortcut). |
+| **Save Settings** | `save_settings` | `{ provider: string, shortcut: string, sarvamApiKey: string, groqApiKey: string, deepseekApiKey: string }` | Persists API keys and global shortcut settings to the backend. |
+| **Simulate Click** | `click_screen_point` | `{ x: number, y: number }` | Asks the OS to execute a physical mouse click at `(x, y)`. |
+| **Simulate Scroll** | `scroll_at_point` | `{ x: number, y: number, direction: 'down' \| 'up', amount: number }` | Asks the OS to execute a mouse wheel scroll at `(x, y)`. |
+| **Simulate Typing** | `type_text` | `{ text: string, pressEnter: boolean }` | Asks the OS to type characters via virtual keyboard. |
+| **Open Browser URL**| `open_url` | `{ url: string }` | Opens a web link in the user's default external browser. |
+| **Pause Wake Word** | `pause_wake_word` | None (`{}`) | Temporarily pauses microphone wake word detection (crucial when recording user voice prompts). |
+| **Resume Wake Word**| `resume_wake_word` | None (`{}`) | Resumes background microphone listening for "Hey Blinky". |
+| **Debug Logging** | `log_debug_message` | `{ message: string }` | Sends frontend logs to the native backend logging facility. |
+
+---
+
+## B. Mandatory Incoming Event Listeners (`listen`)
+Your new frontend must subscribe to the following exact event topics using `listen('topic', callback)`. Without these, the frontend will be completely blind to background activity, voice triggers, and AI streaming.
+
+```markdown
+1. `blinky://wake-word-detected`
+```
+* **Triggered When**: The Python wake word engine detects the user saying "Hey Blinky".
+* **Required Frontend Action**: The UI must immediately wake up, display the Command Bar, focus the input box, or initiate voice recording/listening mode.
+
+```markdown
+2. `blinky://open-command`
+```
+* **Triggered When**: The user presses the global system keyboard shortcut (e.g., `Alt + Space`) anywhere in the OS.
+* **Required Frontend Action**: The UI must bring the Command Bar into view and focus the text input.
+
+```markdown
+3. `blinky://tutor-status`
+```
+* **Payload**: `{ phase: string, message: string }`
+* **Triggered When**: The backend progresses through multi-step tasks (e.g., `phase: "screenshot"`, `message: "Taking screenshot..."` -> `phase: "ocr"`, `message: "Analyzing screen text..."`).
+* **Required Frontend Action**: Update the visual status indicator in the Command Bar so the user knows what the AI is doing before the final response arrives.
+
+```markdown
+4. `blinky://tutor-chunk`
+```
+* **Payload**: `{ message: string }`
+* **Triggered When**: The LLM generates the next token/word in real-time.
+* **Required Frontend Action**: Append the incoming text string to the active message block in the chat UI for smooth real-time streaming.
+
+```markdown
+5. `blinky://global-click`
+```
+* **Payload**: `{ x: number, y: number }` (Global Click Coordinates)
+* **Triggered When**: The user clicks on the screen while the overlay is active.
+* **Required Frontend Action**: Look up UI bounding boxes or target elements at `(x, y)` to determine what desktop element the user interacted with.
+
+```markdown
+6. `blinky://global-enter`
+```
+* **Triggered When**: The user hits the `Enter` key globally.
+* **Required Frontend Action**: Auto-advance the active tutor/guidance step if the user was on a text-entry step.
+
+```markdown
+7. `blinky://guidance` & `blinky://target-clicked`
+```
+* **Triggered When**: Passed between frontend windows/components (e.g., the Command Bar receives a tutor result and emits `blinky://guidance` to populate the transparent Overlay with bounding boxes and step arrows).
+
+---
+
+## C. Mandatory Structural & Transport Mechanics
+Beyond simple invokes and events, a fully functional replacement frontend must replicate three core architectural behaviors:
+
+1. **Window Blur and Focus Handlers**:
+   * Your main window components must actively manage `window.addEventListener('blur', handleBlur)` and Tauri's native focus listener `getCurrentWindow().onFocusChanged(...)`. 
+   * When the window loses focus, the frontend must clean up active states or instruct the backend to make the overlay click-through so the user can interact with their normal Windows desktop applications.
+2. **WebTransport / WebSocket Management**:
+   * If your app relies on streaming audio to Sarvam or communicating with an external gateway, you must port over `AdaptiveTransportManager` from [adaptiveTransport.ts](file:///c:/Users/khann/Projects/Blinky/common/frontend/src/lib/adaptiveTransport.ts) to manage the automatic negotiation between HTTP/3 WebTransport and WebSockets.
+3. **Voice Recording & TTS**:
+   * Ensure your new frontend replicates the browser media recording hooks ([sarvamStream.ts](file:///c:/Users/khann/Projects/Blinky/common/frontend/src/lib/sarvamStream.ts)) to capture microphone input for voice prompts, as well as handling Text-to-Speech playback ([tts.ts](file:///c:/Users/khann/Projects/Blinky/common/frontend/src/lib/tts.ts)).
+
+---
+
+### Summary of Work
+- Analyzed the full Blinky project structure across the frontend, Tauri/Rust backend, and Python AI services.
+- Detailed the precise architectural dependency between the webview presentation layer and the native backend execution layer.
+- Outlined the exact contract of Tauri IPC invokes (`invoke`), event listeners (`listen`), and transport mechanics required to fully rebuild the frontend in any modern framework.

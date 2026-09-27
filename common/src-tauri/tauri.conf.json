@@ -1,0 +1,72 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Blinky",
+  "version": "0.1.0",
+  "identifier": "app.blinky.tutor",
+  "build": {
+    "beforeDevCommand": "vite --config common/frontend/vite.config.ts",
+    "beforeBuildCommand": "bun common/scripts/prepare-python-runtime.mjs && bun common/scripts/prepare-whatsapp-backend.mjs && vite build --config common/frontend/vite.config.ts",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "command",
+        "title": "Recording Toolbar",
+        "url": "/command",
+        "width": 760,
+        "height": 720,
+        "minWidth": 560,
+        "minHeight": 120,
+        "resizable": false,
+        "center": true,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "alwaysOnTop": true,
+        "shadow": false
+      },
+      {
+        "label": "overlay",
+        "title": "Blinky Highlight Overlay",
+        "url": "/overlay",
+        "fullscreen": false,
+        "alwaysOnTop": true,
+        "decorations": false,
+        "transparent": true,
+        "visible": false,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:9001 wss://127.0.0.1:9001 wss://api.sarvam.ai wss://agents.assemblyai.com wss://streaming.assemblyai.com wss://api.assemblyai.com https://api.assemblyai.com ws://localhost:5173 http://localhost:5173"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "resources": {
+      "../../common/python_runtime/Python313/": "python_runtime/Python313/",
+      "../../common/python/": "common/python/",
+      "../../common/aicut/": "common/aicut/",
+      "../../python/": "python/",
+      "../../windows/python/": "windows/python/",
+      "../../common/whatsapp_backend/": "common/whatsapp_backend/",
+      "../../windows/requirements.txt": "windows/requirements.txt",
+      "../../common/docker-compose.yml": "common/docker-compose.yml",
+      "../../common/searxng/": "common/searxng/"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "hooks.nsi"
+      }
+    }
+  }
+}

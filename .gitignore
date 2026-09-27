@@ -1,0 +1,72 @@
+# Root-level ignore patterns (common/.gitignore handles per-directory patterns)
+/searxng/
+.brain
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+/.venv/
+/env/
+/venv/
+/Lib/
+/Scripts/
+/Include/
+/pyvenv.cfg
+node_modules/
+__pycache__/
+*.pyc
+tmp/
+.agent/
+.agents/
+!.agents/hooks.json
+src-tauri/target/
+common/src-tauri/target/
+screenshots/
+python/cache/
+# Runtime-generated artifacts (regenerated on demand; never commit)
+common/python/python/cache/
+common/python/tools/temp_candidate*
+common/whatsapp_backend/data/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+bun-debug.log*
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+.wwebjs_auth
+data/users/blinky-default-session/summary-memory.json
+data
+data/users/blinky-default-session/summary-memory.json
+.wwebjs_cache
+screenshots_parsed
+landing
+# npm lockfiles — bun is the package manager
+package-lock.json
+log.txt
+log[0-9]*.txt
+
+# Whitelist root-level scripts folder
+!/scripts/
+# Whisper/STT model caches (downloaded on demand)
+.huggingface/
+cache/huggingface/
+models/
+*.bin
+# Hardware firmware credentials & build configs
+config.h
+esp32_firmware/**/config.h
+scratch/
+

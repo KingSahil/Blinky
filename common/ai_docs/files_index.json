@@ -1,0 +1,189 @@
+{
+  "files": [
+    {
+      "path": "common/ai/00_repo_summary.md",
+      "desc": "Documentation hub, reading order, repository map, product modes, and common commands"
+    },
+    {
+      "path": "common/ai/01_architecture.md",
+      "desc": "Current architecture for desktop screen tutor, bounded autopilot, browser agent, remote WebSocket agent, Tauri windows/events, settings, and platform behavior"
+    },
+    {
+      "path": "common/ai/02_coordinate_scaling.md",
+      "desc": "Coordinate mapping between physical screens, downsampled screenshots, UIA bounds, overlay CSS pixels, and autopilot native clicks"
+    },
+    {
+      "path": "common/ai/03_matching_heuristics.md",
+      "desc": "Fuzzy target matching, UIA/OCR merge rules, bonuses, penalties, ambiguity handling, single-step post-processing, and autopilot safety gating"
+    },
+    {
+      "path": "common/ai/04_ai_inference.md",
+      "desc": "Screen tutor preflight, continuation state, locator fast path, prompt construction, Ollama/Groq clients, post-inference enforcement, and autopilot continuation"
+    },
+    {
+      "path": "common/ai/05_sarvam.md",
+      "desc": "Sarvam text-to-speech and speech-to-text integration for the desktop command bar, including voice behavior with web/autopilot mode"
+    },
+    {
+      "path": "common/ai/06_detailed_summaries.md",
+      "desc": "Per-file implementation reference for Rust, React, Python, remote agent, and mobile modules"
+    },
+    {
+      "path": "common/ai/07_agent_router.md",
+      "desc": "Browser-agent sidecar, Edge Playwright controller, WebSocket query protocol, registered/generated tools, safety audit, and streaming synthesis"
+    },
+    {
+      "path": "common/ai/08_mobile_remote.md",
+      "desc": "Expo mobile remote controller, WebSocket lifecycle, query UI, streamed results, and power commands"
+    },
+    {
+      "path": "common/ai/09_computer_use_and_spotify.md",
+      "desc": "Human and AI reference for desktop agent-mode computer-use actions, Spotify playback, and routing boundaries with mobile/router flows"
+    },
+    {
+      "path": "common/frontend/src/main.tsx",
+      "desc": "React route switch for command bar, overlay, and fallback app"
+    },
+    {
+      "path": "common/frontend/src/CommandBar.tsx",
+      "desc": "Primary desktop command bar with tutor execution, web guidance, bounded autopilot, continuation progress, voice input/readback, settings, and overlay coordination"
+    },
+    {
+      "path": "common/frontend/src/App.tsx",
+      "desc": "Fallback/default command UI with basic prompt, settings, and result display"
+    },
+    {
+      "path": "common/frontend/src/Overlay.tsx",
+      "desc": "Transparent highlight renderer that maps matched screenshot-space bounds to overlay CSS frames and emits target-clicked events"
+    },
+    {
+      "path": "common/frontend/src/lib/guidance.ts",
+      "desc": "Pure helpers for visible steps, current pending step, highlightable step, completion decisions, guide history, and summary visibility"
+    },
+    {
+      "path": "common/frontend/src/lib/autopilot.ts",
+      "desc": "Bounded observe-act loop for safe matched clicks, physical coordinate scaling, retry limits, and stop reasons"
+    },
+    {
+      "path": "common/frontend/src/lib/webGuidance.ts",
+      "desc": "Runs browser-agent actions before screen guidance for command-bar globe/web mode"
+    },
+    {
+      "path": "common/frontend/src/lib/tauri.ts",
+      "desc": "Typed frontend wrappers for Tauri commands including run_tutor, native click_screen_point, overlay visibility, command sizing, and settings"
+    },
+    {
+      "path": "common/frontend/src/lib/tts.ts",
+      "desc": "Sarvam TTS payload builder, speech content formatter, audio data URL builder, and error parser"
+    },
+    {
+      "path": "common/src-tauri/src/lib.rs",
+      "desc": "Tauri app core: commands, native SendInput clicking, tray, shortcuts, capture exclusion, Python screen worker spawning, overlay events, settings, and global click/Enter polling"
+    },
+    {
+      "path": "common/src-tauri/src/websocket.rs",
+      "desc": "WebSocket server on port 9001 for mobile remote commands and streamed agent-router queries"
+    },
+    {
+      "path": "common/src-tauri/tauri.conf.json",
+      "desc": "Tauri window definitions for command and overlay plus bundle resources"
+    },
+    {
+      "path": "common/python/main.py",
+      "desc": "Screen tutor worker: routing, capture marker, locator fast path, OCR/UIA merge, AI prompt call, matching, search fallback, physical screenshot metadata, and single-step result"
+    },
+    {
+      "path": "common/python/agent_router.py",
+      "desc": "Agent sidecar: safe browser planner, direct open/search commands, LLM tool routing, tool execution, repaired generated Playwright tools, and streamed synthesis"
+    },
+    {
+      "path": "common/python/browser_agent.py",
+      "desc": "Safe JSON browser planner for open_url, web_search, and site_search actions"
+    },
+    {
+      "path": "common/python/browser_controller.py",
+      "desc": "Persistent Playwright controller that opens visible Microsoft Edge by default"
+    },
+    {
+      "path": "common/python/wil/pipeline.py",
+      "desc": "Web Intelligence Layer orchestration for planning, SearXNG retrieval, source acquisition, processing, and synthesis"
+    },
+    {
+      "path": "common/python/wil/searxng_client.py",
+      "desc": "Async SearXNG JSON search client for the local http://localhost:8888 service"
+    },
+    {
+      "path": "common/docker-compose.yml",
+      "desc": "Starts the local SearXNG service exposed on host port 8888"
+    },
+    {
+      "path": "common/searxng/settings.yml",
+      "desc": "SearXNG settings enabling HTML and JSON search formats"
+    },
+    {
+      "path": "common/python/ai/prompt.py",
+      "desc": "Preflight, chat, and visual prompt builders with continuation history, Blinky UI filtering, compact visible-item format, and single-step rules"
+    },
+    {
+      "path": "common/python/ai/client.py",
+      "desc": "Provider router for Ollama and Groq text/vision calls"
+    },
+    {
+      "path": "common/python/ai/ollama_client.py",
+      "desc": "Local Ollama JSON client using gemma4:e4b defaults, retry logic, and configurable timeout"
+    },
+    {
+      "path": "common/python/ai/groq_client.py",
+      "desc": "Groq OpenAI-compatible text and vision client with JSON response format and decommissioned-model fallback"
+    },
+    {
+      "path": "common/python/capture/screen.py",
+      "desc": "Cross-platform capture strategies, screenshots directory output, and Screenshot dataclass with physical and optimized dimensions"
+    },
+    {
+      "path": "common/python/ocr/extract.py",
+      "desc": "OCR provider registry for WinRT OCR, pytesseract fallback, and mock empty fallback"
+    },
+    {
+      "path": "common/python/utils/matching.py",
+      "desc": "Fuzzy matcher with exact/partial/fuzzy scoring, control/source/context bonuses, ambiguity diagnostics, and match attachment"
+    },
+    {
+      "path": "common/python/utils/uia.py",
+      "desc": "Windows UIA extraction with target_pid support and optional unlabeled controls"
+    },
+    {
+      "path": "common/python/utils/window.py",
+      "desc": "Active-window resolution, target PID locking, Blinky exclusion, and ignored overlay rectangles"
+    },
+    {
+      "path": "common/python/tools/registry.json",
+      "desc": "Registered remote-agent tools and argument schemas"
+    },
+    {
+      "path": "common/mobile/App.tsx",
+      "desc": "Expo remote controller UI for PC connection, browser-agent queries, streamed responses, and power commands"
+    },
+    {
+      "path": "common/mobile/usePCWebSocket.ts",
+      "desc": "React hook for ws://host:9001 connection lifecycle, JSON response parsing, commands, and queries"
+    },
+    {
+      "path": "common/mobile/package.json",
+      "desc": "Expo 54 app dependencies and start/android/ios/web scripts"
+    },
+    {
+      "path": "package.json",
+      "desc": "Root Bun/Tauri scripts and frontend dependencies"
+    },
+    {
+      "path": "windows/requirements.txt",
+      "desc": "Python dependencies for capture, OCR, UIA, requests, and platform-specific tooling"
+    }
+  ],
+  "common/aicut/aicut_mcp.py": "Model Context Protocol server for AiCut video editing operations.",
+  "common/aicut/build/AIVideoEditor.exe": "Compiled C++ high-performance video editor executable.",
+  "common/python/tools/aicut_tool.py": "Blinky tool integrating AiCut with chat drag-and-drop file attachments and Explorer context.",
+  "common/python/utils/explorer.py": "Windows COM Shell.Application inspector for active File Explorer paths and media selection.",
+  "common/ai_docs/10_aicut_video_editor.md": "AiCut video editor and Model Context Protocol architecture documentation."
+}

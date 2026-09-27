@@ -1,0 +1,76 @@
+# FRONTEND FEATURES
+
+Viewed styles.css:1-800
+Viewed styles.css:801-1600
+Viewed styles.css:1601-2107
+
+Here is the exact, AI-friendly specification for Blinky’s frontend typography, color palette, and interactive feature components. You can copy/paste this directly into any AI prompt to ensure the redesign stays consistent with the core design system.
+
+---
+
+# 🤖 AI-Friendly Frontend Specification: Blinky UI
+
+```markdown
+## 1. Typography & Font System
+The frontend uses exactly **2 font families** loaded via Google Fonts:
+- **Primary Body Font**: `Space Grotesk` (Weights: 400, 500, 600, 700) — Used for inputs, labels, buttons, and general chat text.
+- **Header & Title Font**: `Unbounded` (Weights: 500, 700) — Used for headings (`h1`, `h2`, `h3`), brand marks, and title elements.
+
+```css
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Unbounded:wght@500;700&display=swap');
+```
+
+---
+
+## 2. Color Palette & Tokens
+The application follows a premium dark-mode aesthetic with vibrant coral/pink gradients and glassmorphic translucent panels.
+
+### Core CSS Variables (`:root`)
+- `--bg-0`: `#0b0a0d` (Deep background base)
+- `--bg-1`: `#140f13` (Elevated window base / Command popup background)
+- `--panel`: `rgba(16, 12, 15, 0.78)` (Primary glassmorphic panel backdrop)
+- `--panel-strong`: `rgba(23, 16, 20, 0.92)` (Settings dropdown & modal backdrop)
+- `--panel-border`: `rgba(255, 255, 255, 0.08)` (Subtle border definition)
+- `--text-strong`: `#f8f1f2` (Primary high-contrast text)
+- `--text-muted`: `#b9aeb4` (Secondary labels, placeholders, and hints)
+- `--accent`: `#ff6e5f` (Primary brand coral)
+- `--accent-strong`: `#ff8b6a` (Vibrant accent for active elements)
+- `--accent-dim`: `rgba(255, 110, 95, 0.18)` (Faded accent for button backgrounds)
+- `--accent-glow`: `rgba(255, 110, 95, 0.45)` (Outer shadows and glowing borders)
+
+### Functional Utility Colors & Gradients
+- **Brand Gradient**: `linear-gradient(145deg, #ff8a6a, #ff5f7a)` (Action buttons, brand marks, toggle ON state)
+- **Web Search Active**: `#3b82f6` / `rgba(59, 130, 246, 0.2)` (Blue glow for Web Intelligence)
+- **Agent Mode Active**: `#ff8b5c` / `rgba(255, 139, 92, 0.2)` (Orange glow for Autopilot Automation)
+- **Success / Overlay Targets**: `#a7ff7a` / `#4ade80` (Bright green for active highlights and WhatsApp connection indicator)
+- **Error / Recording State**: `#ff5370` / `#f87171` (Vibrant red for mic recording beacon and error strips)
+
+---
+
+## 3. Frontend Component Features & Interactive States
+
+When redesigning the UI layout, ensure the following interactive features and their specific CSS state classes are styled appropriately:
+
+### A. The Typing Placebar (`.command-input`)
+- **Structure**: A floating, rounded container (`#2a2128`) housing an auto-expanding `<textarea>`, a left action bar, and a right action bar.
+- **Behavior**: On `:focus-within`, the wrapper border lights up with `rgba(255, 120, 105, 0.8)` and casts an outer glowing box-shadow (`0 0 20px rgba(255, 120, 105, 0.25)`).
+- **Textarea**: Must be borderless, background-transparent, and use `resize: none` with `overflow: hidden`.
+
+### B. The Microphone & Voice Controls (`.command-mic-btn`)
+- **Idle State**: Circular button with muted text icon (`var(--text-muted)`) and translucent background (`rgba(255, 255, 255, 0.05)`).
+- **`.recording` State**: Button switches to a vibrant red/pink (`#ffb7c5`) with a pulsing border animation (`@keyframes micPulse`). Displays an inner red beacon dot (`.mic-record-indicator`).
+- **`.loading` State**: Replaces mic icon with a spinning `<Loader2>` while transcribing voice.
+
+### C. Mode Toggles (`.command-websearch-btn` & `.command-agent-btn`)
+- **`.active` State**: When activated by the user, the buttons light up with specific colored borders and box-shadow glows (Blue for Web Search, Orange for Agent Automation).
+
+### D. Real-Time Karaoke Word Highlighting (`.word-node`)
+The chat summary bubble displays live Text-to-Speech readbacks by switching class names on individual word spans:
+- **`.unspoken-word`**: Faded opacity (`0.45`), `var(--text-muted)`.
+- **`.active-speaking-word`**: High contrast (`var(--accent-strong)`), highlighted background (`rgba(255, 110, 95, 0.18)`), coral bottom border, and glowing shadow.
+- **`.spoken-word`**: Returns to standard solid text (`var(--text-strong)`, opacity `1`).
+
+### E. WhatsApp Connection Modal (`.wa-modal-card`)
+- **Backdrop & Card**: Centered dark-mode overlay (`var(--panel-strong)`) with a coral outer glow border.
+- **States**: Houses custom containers for `.wa-loader` (spinner), `.wa-disconnected` (connect button), `.wa-connected` (green status badge), and `.wa-qr-container` (white canvas wrapper `#ffffff` for high-contrast QR code scanning).
+```

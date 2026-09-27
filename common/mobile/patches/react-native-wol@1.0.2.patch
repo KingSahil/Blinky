@@ -1,0 +1,84 @@
+diff --git a/android/build/.transforms/11c07525c099ede59f111a17acd37fe7.bin b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/.transforms/11c07525c099ede59f111a17acd37fe7.bin
+deleted file mode 100644
+index 1ed65e03c3fbb1c0597b9d2cd7d82a493aceca5e..0000000000000000000000000000000000000000
+diff --git a/android/build/.transforms/3fe170a3ed7b39ce74f6475ddb979d56/full/classes.dex b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/.transforms/3fe170a3ed7b39ce74f6475ddb979d56/full/classes.dex
+deleted file mode 100644
+index 0fc68900b05af556f998e69f773fe221db8323d5..0000000000000000000000000000000000000000
+diff --git a/android/build/.transforms/3fe170a3ed7b39ce74f6475ddb979d56.bin b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/.transforms/3fe170a3ed7b39ce74f6475ddb979d56.bin
+deleted file mode 100644
+index 849b2a63b74bbe601880ed82e6c999f8daa2afdf..0000000000000000000000000000000000000000
+diff --git a/android/build/generated/source/buildConfig/debug/com/reactlibrary/BuildConfig.java b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/generated/source/buildConfig/debug/com/reactlibrary/BuildConfig.java
+deleted file mode 100644
+index a3c6d8c0c9eaa82ee9b7be9fb7bb77794b538590..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/aapt_friendly_merged_manifests/debug/aapt/AndroidManifest.xml b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/aapt_friendly_merged_manifests/debug/aapt/AndroidManifest.xml
+deleted file mode 100644
+index 0c71e277a87a65323cc9e85e31525d668e238d9c..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/aapt_friendly_merged_manifests/debug/aapt/output.json b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/aapt_friendly_merged_manifests/debug/aapt/output.json
+deleted file mode 100644
+index 1e9e0c92536bda9c051c06de35e76cbf264c0c40..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/annotation_processor_list/debug/annotationProcessors.json b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/annotation_processor_list/debug/annotationProcessors.json
+deleted file mode 100644
+index 9e26dfeeb6e641a33dae4961196235bdb965b21b..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/compile_library_classes/debug/classes.jar b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/compile_library_classes/debug/classes.jar
+deleted file mode 100644
+index cf7623137d3ca4e368bfa4c5c4a728a0e5bc7979..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/compile_only_not_namespaced_r_class_jar/debug/R.jar b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/compile_only_not_namespaced_r_class_jar/debug/R.jar
+deleted file mode 100644
+index f9bb6f04b80a00434b3a63b33e40e75636a24d13..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/full_jar/debug/createFullJarDebug/full.jar b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/full_jar/debug/createFullJarDebug/full.jar
+deleted file mode 100644
+index cf7623137d3ca4e368bfa4c5c4a728a0e5bc7979..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/incremental/debug-mergeNativeLibs/merge-state b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/incremental/debug-mergeNativeLibs/merge-state
+deleted file mode 100644
+index 893838bc1a25e39e30edad8cbf34aea8626a8236..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/incremental/mergeDebugJniLibFolders/merger.xml b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/incremental/mergeDebugJniLibFolders/merger.xml
+deleted file mode 100644
+index a7da896fbe44e62dd40ee3b97b03710b933594d6..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/incremental/mergeDebugShaders/merger.xml b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/incremental/mergeDebugShaders/merger.xml
+deleted file mode 100644
+index 12b917ecf6bcb0ef7fc76596eb25f001be85e913..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/incremental/packageDebugAssets/merger.xml b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/incremental/packageDebugAssets/merger.xml
+deleted file mode 100644
+index 2232bc564fdca6951bcd33497a4ec790a2e5d964..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/incremental/packageDebugResources/compile-file-map.properties b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/incremental/packageDebugResources/compile-file-map.properties
+deleted file mode 100644
+index eb816dc727903969fa8761d971c5c0bf0a81f89e..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/incremental/packageDebugResources/merger.xml b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/incremental/packageDebugResources/merger.xml
+deleted file mode 100644
+index 6020fe6c30df87d362add87a453c6c232761eae8..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/javac/debug/classes/com/reactlibrary/BuildConfig.class b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/javac/debug/classes/com/reactlibrary/BuildConfig.class
+deleted file mode 100644
+index 3bff10309fdfeff553295531e2cb1df2f43dcd92..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/javac/debug/classes/com/reactlibrary/WolModule.class b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/javac/debug/classes/com/reactlibrary/WolModule.class
+deleted file mode 100644
+index 96cb5e5c91bcea4feea5783de37c334bae2021f8..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/javac/debug/classes/com/reactlibrary/WolPackage.class b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/javac/debug/classes/com/reactlibrary/WolPackage.class
+deleted file mode 100644
+index 8533e2d8b9848a1886fe54bf44f3b45c84b02d77..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/library_java_res/debug/res.jar b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/library_java_res/debug/res.jar
+deleted file mode 100644
+index 15cb0ecb3e219d1701294bfdf0fe3f5cb5d208e7..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/library_manifest/debug/AndroidManifest.xml b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/library_manifest/debug/AndroidManifest.xml
+deleted file mode 100644
+index 0c71e277a87a65323cc9e85e31525d668e238d9c..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/local_only_symbol_list/debug/parseDebugLibraryResources/R-def.txt b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/local_only_symbol_list/debug/parseDebugLibraryResources/R-def.txt
+deleted file mode 100644
+index 78ac5b8befe332ed81b26e325fdd18037d83cac5..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/manifest_merge_blame_file/debug/manifest-merger-blame-debug-report.txt b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/manifest_merge_blame_file/debug/manifest-merger-blame-debug-report.txt
+deleted file mode 100644
+index 8077649a9df2a17fcb684324caa457553a0585dd..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/merged_manifests/debug/output.json b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/merged_manifests/debug/output.json
+deleted file mode 100644
+index 98625033563f626c9dc32376f451d721d384474e..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/res/symbol-table-with-package/debug/package-aware-r.txt b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/res/symbol-table-with-package/debug/package-aware-r.txt
+deleted file mode 100644
+index 5c35cc3a256157332a7a2bed2592a025db2fa3e8..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/runtime_library_classes/debug/classes.jar b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/runtime_library_classes/debug/classes.jar
+deleted file mode 100644
+index cf7623137d3ca4e368bfa4c5c4a728a0e5bc7979..0000000000000000000000000000000000000000
+diff --git a/android/build/intermediates/symbols/debug/R.txt b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/intermediates/symbols/debug/R.txt
+deleted file mode 100644
+index 96651c0ad5e7505451a5d9a644722e027672c51e..0000000000000000000000000000000000000000
+diff --git a/android/build/outputs/logs/manifest-merger-debug-report.txt b/C:/Users/sahil/.bun/install/cache/react-native-wol@1.0.2@@@1/android/build/outputs/logs/manifest-merger-debug-report.txt
+deleted file mode 100644
+index bd14eb92a32e298d5b1423c60b657a23cca50abc..0000000000000000000000000000000000000000

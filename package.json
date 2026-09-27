@@ -1,0 +1,60 @@
+{
+  "name": "blinky",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "bun@1.3.14",
+  "description": "Blinky is an offline-first AI desktop tutor for Windows.",
+  "scripts": {
+    "dev": "bun scripts/dev.ts",
+    "dev:no-docker": "bun scripts/dev.ts --no-docker",
+    "dev:app": "bun run tauri:dev",
+    "mobile:dev": "cd common/mobile && bun run start",
+    "tauri:dev": "bun tauri dev",
+    "build": "bun run typecheck && vite build --config common/frontend/vite.config.ts",
+    "build:release": "bun run typecheck && bun scripts/build-release.ts",
+    "tauri:build": "bun tauri build",
+    "preview": "vite preview --config common/frontend/vite.config.ts",
+    "typecheck": "tsc -p common/frontend/tsconfig.json --noEmit",
+    "setup:win": "powershell -ExecutionPolicy Bypass -File setup.ps1",
+    "setup:linux": "chmod +x setup.sh && ./setup.sh",
+    "setup:python": "powershell -ExecutionPolicy Bypass -File windows/scripts/setup-python.ps1",
+    "check:ollama": "powershell -ExecutionPolicy Bypass -File windows/scripts/check-ollama.ps1",
+    "linux:setup:python": "chmod +x ./linux/scripts/setup-python.sh && ./linux/scripts/setup-python.sh",
+    "linux:check:ollama": "chmod +x ./linux/scripts/check-ollama.sh && ./linux/scripts/check-ollama.sh",
+    "linux:check:groq": "chmod +x ./linux/scripts/groq-check.sh && ./linux/scripts/groq-check.sh",
+    "linux:check:computer-use": "computer-use-linux doctor"
+  },
+  "dependencies": {
+    "@agent-sh/computer-use-linux": "^0.2.9",
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-global-shortcut": "^2.2.0",
+    "assemblyai": "^4.41.5",
+    "axios": "^1.7.9",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "groq-sdk": "^0.37.0",
+    "lucide-react": "^1.17.0",
+    "ollama": "^0.5.12",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "socket.io": "^4.8.3",
+    "whatsapp-web.js": "^1.26.0"
+  },
+  "overrides": {
+    "yauzl": "3.2.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^6.0.2",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.14"
+  }
+}

@@ -1,0 +1,4 @@
+ FRONTEND BACKEND DEPENDENCY PROMPT
+
+"I want to redesign the UI inCommandBar.tsx and  styles.css
+ to [describe your new aesthetic, e.g., look like a sleek, glassmorphic dark-mode floating bar]. CRITICAL CONSTRAINT: You are only changing the JSX structure and CSS styles. Do NOT touch, remove, or modify any of the existing Tauri invoke calls, event listeners (blinky://...), audio VAD/mic recording logic, or the word-by-word TTS highlighting spans."

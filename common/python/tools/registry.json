@@ -1,0 +1,100 @@
+{
+  "lookup_youtube_stats": {
+    "name": "lookup_youtube_stats",
+    "description": "Lookup subscriber counts, views, and growth from a YouTube channel by handle or name",
+    "filepath": "python/tools/lookup_youtube_stats.py",
+    "arguments": [
+      "channel_name"
+    ]
+  },
+  "find_crypto_price": {
+    "name": "find_crypto_price",
+    "description": "Find the current price of a specified cryptocurrency on CoinMarketCap.",
+    "filepath": "python/tools/find_crypto_price.py",
+    "arguments": [
+      "crypto_name"
+    ]
+  },
+  "lookup_wikipedia_entity": {
+    "name": "lookup_wikipedia_entity",
+    "description": "Searches Wikipedia for a given entity (person, concept, product, etc.) and returns the search results and page information.",
+    "filepath": "python/tools/lookup_wikipedia_entity.py",
+    "arguments": [
+      "entity_name"
+    ],
+    "status": "generalized",
+    "verification_args": {
+      "entity_name": "Quantum Computing"
+    }
+  },
+  "search_product_info": {
+    "name": "search_product_info",
+    "description": "Performs a general search on Google for a specified product or item and extracts structured information from the search results.",
+    "filepath": "python/tools/search_product_info.py",
+    "arguments": [
+      "product_query"
+    ],
+    "status": "generalized",
+    "verification_args": {
+      "product_query": "best noise cancelling headphones"
+    }
+  },
+  "whatsapp_tool": {
+    "name": "whatsapp_tool",
+    "description": "Interact with WhatsApp to check connection status, list chats, or generate summaries of group or direct chats. Actions: 'status' (checks connection/QR code state), 'chats' (lists recent chats), 'summarize' (summarizes the chat matching 'chat_name' or 'chat_id').",
+    "filepath": "python/tools/whatsapp_tool.py",
+    "arguments": [
+      "action",
+      "chat_name",
+      "chat_id",
+      "limit"
+    ],
+    "status": "generalized",
+    "verification_args": {
+      "action": "status"
+    }
+  },
+  "aicut_tool": {
+    "name": "aicut_tool",
+    "description": "AI Video Editor (AiCut) for trimming videos, adding background music/songs, merging video clips, burning styled subtitles (Instagram Reels / TikTok word-by-word pop, hormozi, neon-blur, glassmorphism, etc.), transcribing audio to SRT via faster-whisper, inspecting media, and querying active Windows File Explorer context.",
+    "filepath": "python/tools/aicut_tool.py",
+    "arguments": [
+      "action",
+      "video_path",
+      "song_path",
+      "srt_path",
+      "preset",
+      "transcribe",
+      "model_size",
+      "language",
+      "input_paths",
+      "inputs",
+      "output_path",
+      "start_seconds",
+      "end_seconds",
+      "music_volume"
+    ],
+    "status": "generalized",
+    "verification_args": {
+      "action": "explorer_context"
+    }
+  },
+  "esp32_light": {
+    "name": "esp32_light",
+    "description": "Control the physical ESP32 RGB light (turn on, turn off, change colors like red, green, blue, yellow, cyan, purple, orange, warm white, etc. or set RGB values).",
+    "filepath": "python/tools/esp32_light_tool.py",
+    "arguments": [
+      "color",
+      "action",
+      "r",
+      "g",
+      "b",
+      "brightness"
+    ],
+    "status": "generalized",
+    "verification_args": {
+      "color": "red"
+    }
+  }
+}
+
