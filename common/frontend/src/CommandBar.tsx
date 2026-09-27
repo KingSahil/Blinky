@@ -566,13 +566,13 @@ export function CommandBar() {
     if (assemblyaiAudioSourceRef.current) {
       try {
         assemblyaiAudioSourceRef.current.stop();
-      } catch {}
+      } catch { }
       assemblyaiAudioSourceRef.current = null;
     }
     activeSourcesRef.current.forEach((source) => {
       try {
         source.stop();
-      } catch {}
+      } catch { }
     });
     activeSourcesRef.current = [];
     if (ttsStreamRef.current) {
@@ -602,7 +602,7 @@ export function CommandBar() {
     if (sarvamApiKey) {
       const wtUrl = import.meta.env.VITE_SARVAM_GATEWAY_WT_URL || 'wt://gateway.blinky.internal/sarvam-stream';
       const wsUrl = `wss://api.sarvam.ai/speech-to-text-stream?api-subscription-key=${encodeURIComponent(sarvamApiKey)}`;
-      
+
       transportManagerRef.current = new AdaptiveTransportManager(
         wtUrl,
         wsUrl,
@@ -625,7 +625,7 @@ export function CommandBar() {
       activeSourcesRef.current.forEach((source) => {
         try {
           source.stop();
-        } catch {}
+        } catch { }
       });
       if (ttsStreamRef.current) {
         ttsStreamRef.current.disconnect();
@@ -637,7 +637,7 @@ export function CommandBar() {
   }, []);
 
   // Use a ref to avoid stale closure for the fetch queue function
-  const processTtsFetchQueueRef = useRef<() => void>(() => {});
+  const processTtsFetchQueueRef = useRef<() => void>(() => { });
 
   // Listen for real-time status and streaming chunks from python worker
   useEffect(() => {
@@ -682,8 +682,8 @@ export function CommandBar() {
   }, []);
 
   // Callbacks refs to avoid stale closures in WebSockets
-  const onTranscriptRef = useRef<(transcript: string, isFinal: boolean) => void>(() => {});
-  const onAudioChunkRef = useRef<(base64Audio: string) => void>(() => {});
+  const onTranscriptRef = useRef<(transcript: string, isFinal: boolean) => void>(() => { });
+  const onAudioChunkRef = useRef<(base64Audio: string) => void>(() => { });
 
   // Update refs on every render
   onTranscriptRef.current = (transcript, isFinal) => {
@@ -706,7 +706,7 @@ export function CommandBar() {
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    
+
     try {
       let audioBuffer: AudioBuffer;
       try {
@@ -783,7 +783,7 @@ export function CommandBar() {
         const normalizedVolume = Math.min(1, rms * 8); // Multiplier tunes glow sensitivity to TTS
 
         void emit('blinky://vad-update', { volume: normalizedVolume });
-        
+
         rafId = requestAnimationFrame(loop);
       } else if (!isSpeaking && !isRecording) {
         void emit('blinky://vad-update', { volume: 0 });
@@ -813,7 +813,7 @@ export function CommandBar() {
             setAssemblyaiApiKey(s.assemblyai_api_key);
             assemblyaiApiKeyRef.current = s.assemblyai_api_key;
           }
-        } catch {}
+        } catch { }
       }
 
       if (!aaiKey) {
@@ -848,7 +848,7 @@ export function CommandBar() {
       void resumeWakeWord();
       return;
     }
-    
+
     setStatus('Transcribing with Sarvam AI...');
     try {
       const formData = new FormData();
@@ -866,7 +866,7 @@ export function CommandBar() {
 
       if (!res.ok) {
         let payload: any = {};
-        try { payload = await res.json(); } catch {}
+        try { payload = await res.json(); } catch { }
         throw new Error(getSarvamErrorMessage(payload, res.status));
       }
 
@@ -907,7 +907,7 @@ export function CommandBar() {
             assemblyaiApiKeyRef.current = s.assemblyai_api_key;
             aaiKey = s.assemblyai_api_key;
           }
-        } catch {}
+        } catch { }
       }
       if (!aaiKey) {
         setStatus('Please set your AssemblyAI API Key in settings first.');
@@ -923,7 +923,7 @@ export function CommandBar() {
             sarvamApiKeyRef.current = s.sarvam_api_key;
             key = s.sarvam_api_key;
           }
-        } catch {}
+        } catch { }
       }
       if (!key) {
         setStatus('Please set your Sarvam AI API Key in settings first.');
@@ -952,15 +952,15 @@ export function CommandBar() {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       (mediaRecorderRef as any).current = mediaRecorder;
-      
+
       const audioChunks: BlobPart[] = [];
-      
+
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunks.push(event.data);
         }
       };
-      
+
       // Setup VAD using AudioContext
       if (!audioCtxRef.current) {
         audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -978,7 +978,7 @@ export function CommandBar() {
           apiKey: aaiKey,
           onAgentAudio: (base64Audio) => {
             if (assemblyaiAudioSourceRef.current) {
-              try { assemblyaiAudioSourceRef.current.stop(); } catch {}
+              try { assemblyaiAudioSourceRef.current.stop(); } catch { }
             }
             setIsSpeaking(true);
             if (audioCtxRef.current) {
@@ -1019,7 +1019,7 @@ export function CommandBar() {
           onTurnChange: (turn) => {
             if (turn === 'user') {
               if (assemblyaiAudioSourceRef.current) {
-                try { assemblyaiAudioSourceRef.current.stop(); } catch {}
+                try { assemblyaiAudioSourceRef.current.stop(); } catch { }
                 assemblyaiAudioSourceRef.current = null;
               }
               setIsSpeaking(false);
@@ -1049,7 +1049,7 @@ export function CommandBar() {
         stt.connect();
         assemblyaiSttRef.current = stt;
       }
-      
+
       let hasSpoken = false;
       let silenceStartTime = 0;
       let silenceTimeoutTriggered = false;
@@ -1090,7 +1090,7 @@ export function CommandBar() {
             if (!silenceTimeoutTriggered) {
               silenceTimeoutTriggered = true;
               console.log("VAD: Local silence timeout reached. Stopping recording and submitting query.");
-              
+
               if ((mediaRecorderRef as any).current?.state === 'recording') {
                 stopRecording();
               }
@@ -1106,14 +1106,14 @@ export function CommandBar() {
         if (stream) {
           stream.getTracks().forEach((track) => track.stop());
         }
-        try { processor.disconnect(); source.disconnect(); } catch {}
+        try { processor.disconnect(); source.disconnect(); } catch { }
         // If real-time stream did not execute, run audio transcription
         if (!assemblyaiAgentRef.current?.isConnected && !assemblyaiSttRef.current?.isConnected) {
           const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
           void handleAudioTranscription(audioBlob);
         }
       };
-      
+
       mediaRecorder.start();
       setIsRecording(true);
       setStatus(
@@ -1123,14 +1123,14 @@ export function CommandBar() {
             : '🎙️ AssemblyAI Realtime STT Listening...'
           : '🎙️ Sarvam AI Listening... Click mic to stop.'
       );
-      
+
       // Auto-stop after 12 seconds as a fallback
       setTimeout(() => {
         if (mediaRecorder.state === 'recording') {
           stopRecording();
         }
       }, 12000);
-      
+
     } catch (err) {
       console.error('Error starting audio recording:', err);
       setStatus('Microphone access failed or was denied.');
@@ -1155,7 +1155,7 @@ export function CommandBar() {
     if (mediaRecorderRef.current) {
       try {
         mediaRecorderRef.current.stop();
-      } catch {}
+      } catch { }
       mediaRecorderRef.current = null;
       setIsRecording(false);
 
@@ -1236,7 +1236,7 @@ export function CommandBar() {
     }
     stopSpeaking();
     void pauseWakeWord();
-    
+
     const currentWindow = getCurrentWindow();
     let isPointing = false;
     try {
@@ -2529,8 +2529,8 @@ export function CommandBar() {
             <div className="recipe-prompt-preview">
               {recipePrompt.preview.length > 0
                 ? recipePrompt.preview.slice(0, 6).map((step, i) => (
-                    <span key={i} className="recipe-prompt-step">{step}</span>
-                  ))
+                  <span key={i} className="recipe-prompt-step">{step}</span>
+                ))
                 : <span className="recipe-prompt-step">No reusable steps</span>}
             </div>
             <div className="recipe-prompt-actions">
@@ -2625,10 +2625,10 @@ export function CommandBar() {
                       : "🎙️ AssemblyAI Realtime STT listening... (Win+Space)"
                     : "Listening... click mic to stop (Win+Space)"
                   : isTranscribing
-                  ? "Transcribing voice with Universal-3 Pro..."
-                  : assemblyaiApiKey || assemblyaiApiKeyRef.current
-                  ? `Ask anything or speak (Win+Space) • AssemblyAI ${assemblyaiVoiceMode === 'agent' ? 'Voice Agent' : 'Realtime STT'}`
-                  : "Ask anything... (Win+Space to speak)"
+                    ? "Transcribing voice with Universal-3 Pro..."
+                    : assemblyaiApiKey || assemblyaiApiKeyRef.current
+                      ? `Ask anything or speak (Win+Space) • AssemblyAI ${assemblyaiVoiceMode === 'agent' ? 'Voice Agent' : 'Realtime STT'}`
+                      : "Ask anything... (Win+Space to speak)"
               }
               disabled={isTranscribing}
               autoFocus
