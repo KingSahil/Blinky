@@ -1,5 +1,18 @@
-import React from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import React, { useRef, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Modal,
+  TouchableOpacity,
+  TextInput,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Animated,
+  PanResponder,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -32,17 +45,74 @@ export interface SettingsModalProps {
 }
 
 export function SettingsModal(props: SettingsModalProps) {
+  const panY = useRef(new Animated.Value(0)).current;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) => gestureState.dy > 5,
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dy > 0) {
+          panY.setValue(gestureState.dy);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dy > 80 || gestureState.vy > 0.4) {
+          Animated.timing(panY, {
+            toValue: 600,
+            duration: 200,
+            useNativeDriver: true,
+          }).start(() => {
+            props.onClose();
+          });
+        } else {
+          Animated.spring(panY, {
+            toValue: 0,
+            bounciness: 4,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+    })
+  ).current;
+
+  const handleDismiss = () => {
+    Animated.timing(panY, {
+      toValue: 600,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      props.onClose();
+    });
+  };
+
+  useEffect(() => {
+    if (props.visible) {
+      panY.setValue(0);
+    }
+  }, [props.visible]);
+
   if (!props.visible) return null;
 
   return (
-    <Modal visible={props.visible} animationType="slide" transparent={true} onRequestClose={props.onClose}>
+    <Modal visible={props.visible} animationType="fade" transparent={true} onRequestClose={handleDismiss}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
-          <View style={styles.handleBar} />
+        <Animated.View
+          style={[
+            styles.modalContent,
+            {
+              transform: [{ translateY: panY }],
+            },
+          ]}
+        >
+          {/* Slide Down Drag Handle */}
+          <View {...panResponder.panHandlers} style={styles.sheetHandleContainer}>
+            <View style={styles.handleBar} />
+          </View>
           
           <View style={styles.connectionHeaderRow}>
             <Text style={styles.connectionTitle}>Local Wi-Fi Link Setup</Text>
-            <TouchableOpacity onPress={props.onClose} style={styles.closeBtn}>
+            <TouchableOpacity onPress={handleDismiss} style={styles.closeBtn}>
               <Ionicons name="close" size={24} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
@@ -104,7 +174,7 @@ export function SettingsModal(props: SettingsModalProps) {
               <Ionicons name="lock-open-outline" size={20} color={colors.textSecondary} style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
-                placeholder="Windows Account Password"
+                placeholder="Windows Lockscreen Password or PIN"
                 placeholderTextColor={colors.textMuted}
                 value={props.workstationPin}
                 onChangeText={(val) => {
@@ -114,10 +184,13 @@ export function SettingsModal(props: SettingsModalProps) {
                 secureTextEntry
                 autoCapitalize="none"
                 autoCorrect={false}
+                autoComplete="off"
+                textContentType="none"
+                importantForAutofill="no"
               />
             </View>
             <Text style={styles.helperText}>
-              Enter your Windows password (not Windows Hello PIN) to unlock remotely via the Unlock Provider.
+              Enter your Windows password or PIN (e.g. 1750) to automatically unlock when waking PC.
             </Text>
             
             <View style={styles.actionRow}>
@@ -182,7 +255,7 @@ export function SettingsModal(props: SettingsModalProps) {
               </View>
             </View>
           </ScrollView>
-        </View>
+        </Animated.View>
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -191,27 +264,36 @@ export function SettingsModal(props: SettingsModalProps) {
 const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: colors.background,
+    backgroundColor: '#121216', // 100% OPAQUE SOLID DARK, NO TRANSPARENCY
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.xs,
     paddingBottom: spacing.xl,
     maxHeight: '90%',
     borderTopWidth: 1,
-    borderColor: colors.borderLight,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.6,
+    shadowRadius: 20,
+    elevation: 24,
+  },
+  sheetHandleContainer: {
+    paddingVertical: 10,
+    alignItems: 'center',
+    width: '100%',
   },
   handleBar: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.surfacePressed,
+    width: 44,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: 'rgba(255, 255, 255, 0.35)',
     alignSelf: 'center',
-    marginBottom: spacing.md,
   },
   connectionHeaderRow: {
     flexDirection: 'row',

@@ -24,9 +24,10 @@ const QUICK_ACTIONS: ActionItem[] = [
 interface ActionsScreenProps {
   onExecuteAction: (command: string) => void;
   isConnected: boolean;
+  isLightOn?: boolean;
 }
 
-export function ActionsScreen({ onExecuteAction, isConnected }: ActionsScreenProps) {
+export function ActionsScreen({ onExecuteAction, isConnected, isLightOn }: ActionsScreenProps) {
   const handleAction = (command: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     onExecuteAction(command);
@@ -38,20 +39,36 @@ export function ActionsScreen({ onExecuteAction, isConnected }: ActionsScreenPro
       <Text style={styles.headerSubtitle}>Tap to execute commands instantly on your PC.</Text>
       
       <View style={styles.grid}>
-        {QUICK_ACTIONS.map((action) => (
-          <TouchableOpacity 
-            key={action.id} 
-            style={[styles.card, !isConnected && styles.cardDisabled]}
-            disabled={!isConnected}
-            activeOpacity={0.7}
-            onPress={() => handleAction(action.command)}
-          >
-            <View style={[styles.iconBox, { backgroundColor: `${action.color}15`, borderColor: `${action.color}30` }]}>
-              <Ionicons name={action.icon} size={28} color={action.color} />
-            </View>
-            <Text style={styles.cardTitle}>{action.title}</Text>
-          </TouchableOpacity>
-        ))}
+        {QUICK_ACTIONS.map((action) => {
+          const isLightsCard = action.id === 'lights';
+          const cardTitle = isLightsCard
+            ? (isLightOn ? 'Turn Off Light' : 'Toggle Lights')
+            : action.title;
+          const iconColor = isLightsCard && isLightOn ? '#FBBF24' : action.color;
+          const iconBg = isLightsCard && isLightOn ? '#FBBF2435' : `${action.color}15`;
+          const iconBorder = isLightsCard && isLightOn ? '#FBBF2480' : `${action.color}30`;
+
+          return (
+            <TouchableOpacity 
+              key={action.id} 
+              style={[
+                styles.card,
+                isLightsCard && isLightOn && styles.cardActiveLight,
+                !isConnected && styles.cardDisabled
+              ]}
+              disabled={!isConnected}
+              activeOpacity={0.7}
+              onPress={() => handleAction(action.command)}
+            >
+              <View style={[styles.iconBox, { backgroundColor: iconBg, borderColor: iconBorder }]}>
+                <Ionicons name={action.icon} size={28} color={iconColor} />
+              </View>
+              <Text style={[styles.cardTitle, isLightsCard && isLightOn && styles.cardTitleActive]}>
+                {cardTitle}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
     </ScrollView>
   );
@@ -110,5 +127,12 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontWeight: '600',
     textAlign: 'center',
-  }
+  },
+  cardActiveLight: {
+    borderColor: '#FBBF2460',
+    backgroundColor: '#1E1B13',
+  },
+  cardTitleActive: {
+    color: '#FDE68A',
+  },
 });

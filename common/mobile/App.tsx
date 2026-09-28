@@ -120,7 +120,7 @@ const getExpoHostIp = (): string | null => {
   return host || null;
 };
 
-const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 1500, certificatePin?: string): Promise<string> => {
+const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 3000, certificatePin?: string): Promise<string> => {
   const clean = rawIp.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/+$/, '');
   const [ipOnly, customPort] = clean.includes(':') ? clean.split(':') : [clean, undefined];
   const targetPort = customPort ? parseInt(customPort, 10) : port;
@@ -282,7 +282,7 @@ const probeCandidateIps = async (certificatePin?: string): Promise<string | null
   if (!candidates.includes('127.0.0.1')) candidates.push('127.0.0.1');
 
   const probePromises = candidates.map((ip) =>
-    checkIpAddress(ip, 9001, 1500, certificatePin)
+    checkIpAddress(ip, 9001, 3000, certificatePin)
       .then((found) => found)
       .catch(() => null)
   );
@@ -589,11 +589,15 @@ export default function App() {
     fsSearchResults,
     fsLoading,
     fsError,
+    fsFileData,
     fetchQuickAccess,
     listDirectory,
     fetchRecentFiles,
     searchFiles,
     openFileOnPC,
+    readFileForMobile,
+    clearFsFileData,
+    resetDirectory,
     fileTransferMessage,
     connect,
     disconnect,
@@ -605,6 +609,7 @@ export default function App() {
     dismissAntigravityComplete,
     sendFileTransferMessage,
     getFileTransferModule,
+    latestLightEvent,
   } = usePCWebSocket();
   const [macAddress, setMacAddress] = useState('');
   const [wolBroadcastIp, setWolBroadcastIp] = useState('255.255.255.255');
@@ -612,8 +617,13 @@ export default function App() {
   const [wolFeedback, setWolFeedback] = useState<string | null>(null);
   const [isWorkstationLocked, setIsWorkstationLocked] = useState(false);
   const [workstationPin, setWorkstationPin] = useState('');
+  const [showPinPromptModal, setShowPinPromptModal] = useState(false);
+  const [inputPin, setInputPin] = useState('');
+  const [rememberPin, setRememberPin] = useState(true);
+  const [pendingUnlockAfterWake, setPendingUnlockAfterWake] = useState(false);
   const isConnected = status === 'connected';
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [isLightOn, setIsLightOn] = useState<boolean>(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [discoveryProgress, setDiscoveryProgress] = useState<string | null>(null);
   const [showFileTransfer, setShowFileTransfer] = useState(false);
@@ -647,6 +657,15 @@ export default function App() {
       fetchRecentFiles();
     }
   }, [isConnected, activeTab, fetchQuickAccess, fetchRecentFiles]);
+
+  // Handle light status event updates from PC Desktop
+  useEffect(() => {
+    if (latestLightEvent?.data) {
+      const data = latestLightEvent.data;
+      const on = (data.r ?? 0) > 0 || (data.g ?? 0) > 0 || (data.b ?? 0) > 0;
+      setIsLightOn(on);
+    }
+  }, [latestLightEvent]);
 
   // Haptic feedback for Antigravity events
   useEffect(() => {
@@ -1405,6 +1424,26 @@ export default function App() {
     }
   }, [systemInfo?.is_locked]);
 
+  // Auto-unlock workstation if Wake PC was triggered while host was offline
+  useEffect(() => {
+    if (isConnected && pendingUnlockAfterWake) {
+      setPendingUnlockAfterWake(false);
+      const timer = setTimeout(() => {
+        handleUnlockWorkstation();
+      }, 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [isConnected, pendingUnlockAfterWake]);
+
+  // Periodically query telemetry to keep workstation lock state synchronized
+  useEffect(() => {
+    if (!isConnected) return;
+    const interval = setInterval(() => {
+      sendCommand('get_system_info');
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [isConnected]);
+
   // When connection succeeds, auto-close the settings card
   useEffect(() => {
     if (isConnected) {
@@ -1588,11 +1627,16 @@ export default function App() {
     );
   };
 
-  /** Unlocks the host workstation by waking displays, dismissing lock screen, and typing optional PIN. */
+  /** Unlocks the host workstation by waking displays, dismissing lock screen, and entering PIN or password. */
   const handleUnlockWorkstation = (pin?: string) => {
     triggerHaptic('heavy');
     const targetPin = (pin !== undefined ? pin : workstationPin).trim();
-    const cmd = targetPin ? `unlock:${targetPin}` : 'unlock';
+    if (!targetPin) {
+      // Prompt user to enter their Windows password/PIN if not yet configured
+      setShowPinPromptModal(true);
+      return;
+    }
+    const cmd = `unlock:${targetPin}`;
     const success = sendCommand(cmd as any);
     if (success) {
       setIsWorkstationLocked(false);
@@ -1603,28 +1647,33 @@ export default function App() {
     }
   };
 
-  /** Handles Wake PC button tap, offering unlock if host workstation is locked. */
-  const onWakePcPressed = () => {
-    triggerHaptic('heavy');
-    if (isWorkstationLocked && isConnected) {
-      Alert.alert(
-        'Workstation Locked',
-        'Your host PC is currently connected and locked. Would you like to unlock it or dispatch a Wake-on-LAN packet?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Unlock Workstation',
-            onPress: () => handleUnlockWorkstation(),
-          },
-          {
-            text: 'Send WoL Packet',
-            onPress: () => handleSendWakeOnLan(),
-          },
-        ]
-      );
+  /** Submits PIN from prompt modal, persists it if requested, and dispatches unlock. */
+  const submitPinAndUnlock = () => {
+    const trimmed = inputPin.trim();
+    if (!trimmed) {
+      Alert.alert('Required', 'Please enter your Windows password or PIN.');
       return;
     }
+    if (rememberPin) {
+      setWorkstationPin(trimmed);
+      AsyncStorage.setItem(WORKSTATION_PIN_STORAGE_KEY, trimmed).catch(() => {});
+    }
+    setShowPinPromptModal(false);
+    setInputPin('');
+    handleUnlockWorkstation(trimmed);
+  };
+
+  /** Handles Wake PC button tap: wakes display, sends WoL, and unlocks host workstation automatically. */
+  const onWakePcPressed = () => {
+    triggerHaptic('heavy');
+    if (isConnected) {
+      handleUnlockWorkstation();
+      return;
+    }
+    // If offline / PC asleep, broadcast WoL packet and auto-unlock once online
+    setPendingUnlockAfterWake(true);
     handleSendWakeOnLan();
+    setActionFeedback('⚡ Waking PC... Will auto-unlock once online.');
   };
 
   /** Sends a Wake-on-LAN request using the currently configured host settings. */
@@ -1860,6 +1909,7 @@ export default function App() {
           {activeTab === 'Actions' && (
             <ActionsScreen 
               isConnected={isConnected}
+              isLightOn={isLightOn}
               onExecuteAction={(cmd) => {
                 if (cmd === 'screenshot') {
                   setActiveTab('Chat');
@@ -1867,8 +1917,9 @@ export default function App() {
                   return;
                 }
                 sendCommand(cmd);
-                setActionFeedback(`Action dispatched: ${cmd}`);
-                setTimeout(() => setActionFeedback(null), 2500);
+                if (cmd === 'toggle_lights') {
+                  setIsLightOn(prev => !prev);
+                }
               }}
             />
           )}
@@ -1898,11 +1949,16 @@ export default function App() {
               searchResults={fsSearchResults}
               isLoading={fsLoading}
               fsError={fsError}
+              fsFileData={fsFileData}
               onFetchQuickAccess={fetchQuickAccess}
               onListDirectory={listDirectory}
               onFetchRecentFiles={fetchRecentFiles}
               onSearch={searchFiles}
               onOpenFileOnPC={openFileOnPC}
+              onOpenFileOnMobile={readFileForMobile}
+              onClearFsFileData={clearFsFileData}
+              onResetDirectory={resetDirectory}
+              onPreviewImage={setPreviewImageUri}
               onAskBlinky={(file) => {
                 setActiveTab('Chat');
                 setQueryText(`Can you examine this file on my PC: "${file.path}"?`);
@@ -1936,6 +1992,149 @@ export default function App() {
             WORKSTATION_PIN_STORAGE_KEY={WORKSTATION_PIN_STORAGE_KEY}
           />
 
+          {/* Windows PIN / Password Entry Modal */}
+          <Modal
+            visible={showPinPromptModal}
+            transparent={true}
+            animationType="fade"
+            onRequestClose={() => {
+              setShowPinPromptModal(false);
+              setInputPin('');
+            }}
+          >
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.75)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
+            >
+              <View
+                style={{
+                  width: '100%',
+                  maxWidth: 380,
+                  backgroundColor: '#161426',
+                  borderRadius: 24,
+                  padding: 24,
+                  borderWidth: 1,
+                  borderColor: 'rgba(255, 90, 54, 0.3)',
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 12 },
+                  shadowOpacity: 0.5,
+                  shadowRadius: 24,
+                  elevation: 10,
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                  <View
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 14,
+                      backgroundColor: 'rgba(255, 90, 54, 0.15)',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      marginRight: 14,
+                    }}
+                  >
+                    <Ionicons name="key" size={22} color="#FF5A36" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 17, fontWeight: '800', color: '#FFFFFF' }}>
+                      Unlock Workstation
+                    </Text>
+                    <Text style={{ fontSize: 12, color: 'rgba(255, 255, 255, 0.5)' }}>
+                      Windows Password or PIN
+                    </Text>
+                  </View>
+                </View>
+
+                <Text style={{ fontSize: 13, color: 'rgba(255, 255, 255, 0.7)', marginBottom: 16, lineHeight: 18 }}>
+                  Enter your Windows lockscreen PIN or password to unlock your host workstation automatically.
+                </Text>
+
+                <View
+                  style={{
+                    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+                    borderRadius: 16,
+                    borderWidth: 1,
+                    borderColor: 'rgba(255, 255, 255, 0.1)',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingHorizontal: 16,
+                    marginBottom: 16,
+                  }}
+                >
+                  <Ionicons name="lock-closed" size={18} color="#FF5A36" style={{ marginRight: 10 }} />
+                  <TextInput
+                    style={{ height: 48, flex: 1, color: '#FFFFFF', fontSize: 15 }}
+                    placeholder="Enter Windows PIN or password"
+                    placeholderTextColor="rgba(255, 255, 255, 0.35)"
+                    value={inputPin}
+                    onChangeText={setInputPin}
+                    secureTextEntry
+                    autoFocus
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    onSubmitEditing={submitPinAndUnlock}
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}
+                  onPress={() => setRememberPin(!rememberPin)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={rememberPin ? 'checkbox' : 'square-outline'}
+                    size={20}
+                    color={rememberPin ? '#FF5A36' : 'rgba(255, 255, 255, 0.4)'}
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={{ fontSize: 13, color: 'rgba(255, 255, 255, 0.8)', fontWeight: '500' }}>
+                    Remember for future Wake PC taps
+                  </Text>
+                </TouchableOpacity>
+
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      height: 46,
+                      borderRadius: 14,
+                      backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
+                    onPress={() => {
+                      setShowPinPromptModal(false);
+                      setInputPin('');
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ color: 'rgba(255, 255, 255, 0.7)', fontSize: 14, fontWeight: '700' }}>
+                      Cancel
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      height: 46,
+                      borderRadius: 14,
+                      backgroundColor: '#FF5A36',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
+                    onPress={submitPinAndUnlock}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: '800' }}>
+                      Unlock PC
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </KeyboardAvoidingView>
+          </Modal>
+
           {/* Fullscreen Image Preview Modal with Pinch to Zoom */}
           <Modal
             visible={!!previewImageUri}
@@ -1962,7 +2161,15 @@ export default function App() {
             onClose={() => setShowFileTransfer(false)}
           />
         </KeyboardAvoidingView>
-        <BottomNavigation activeTab={activeTab} onTabChange={setActiveTab} />
+        <BottomNavigation
+          activeTab={activeTab}
+          onTabChange={(tab) => {
+            if (tab === 'Files') {
+              resetDirectory();
+            }
+            setActiveTab(tab);
+          }}
+        />
       </View>
       {showSplash && <SplashScreen onDismiss={() => setShowSplash(false)} />}
       </View>

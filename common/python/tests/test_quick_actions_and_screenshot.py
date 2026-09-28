@@ -81,6 +81,25 @@ def test_esp32_light_tool_execution_zero_ocr():
     assert res["is_continuation"] is False
 
 
+def test_esp32_light_toggle_on_and_off():
+    from tools.esp32_light_tool import handle_request, get_saved_state, save_state
+
+    # Ensure baseline state off
+    save_state(on=False, r=0, g=0, b=0)
+    
+    # First toggle: should turn on
+    res1 = handle_request({"action": "toggle"})
+    assert res1.get("r", 0) > 0 or res1.get("g", 0) > 0 or res1.get("b", 0)
+    assert "on" in res1["message"].lower()
+    assert get_saved_state()["on"] is True
+
+    # Second toggle (pressing again): must turn off!
+    res2 = handle_request({"action": "toggle"})
+    assert res2.get("r", 0) == 0 and res2.get("g", 0) == 0 and res2.get("b", 0) == 0
+    assert "off" in res2["message"].lower()
+    assert get_saved_state()["on"] is False
+
+
 def test_attached_image_gemini_vision_fast_path():
     import io
     import base64

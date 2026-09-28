@@ -53,10 +53,20 @@ void ensurePwm(int pin, int freq = 5000, int res = 8) {
   ledcAttach(pin, freq, res);
 }
 
+int currentRed = 0;
+int currentGreen = 0;
+int currentBlue = 0;
+
 // ---------------------------------------------------------------------------
 // 1. RGB Light Controller (/rgb?r=255&g=0&b=0[&rp=25&gp=26&bp=27])
 // ---------------------------------------------------------------------------
 void handleRgb() {
+  if (!server.hasArg("r") && !server.hasArg("g") && !server.hasArg("b")) {
+    bool isOn = (currentRed > 0 || currentGreen > 0 || currentBlue > 0);
+    server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"rgb_status\",\"r\":" + String(currentRed) + ",\"g\":" + String(currentGreen) + ",\"b\":" + String(currentBlue) + ",\"on\":" + (isOn ? "true" : "false") + "}");
+    return;
+  }
+
   int r = server.hasArg("r") ? server.arg("r").toInt() : 0;
   int g = server.hasArg("g") ? server.arg("g").toInt() : 0;
   int b = server.hasArg("b") ? server.arg("b").toInt() : 0;
@@ -69,11 +79,15 @@ void handleRgb() {
   ensurePwm(gp, pwmFreq, pwmResolution);
   ensurePwm(bp, pwmFreq, pwmResolution);
 
-  ledcWrite(rp, constrain(r, 0, 255));
-  ledcWrite(gp, constrain(g, 0, 255));
-  ledcWrite(bp, constrain(b, 0, 255));
+  currentRed = constrain(r, 0, 255);
+  currentGreen = constrain(g, 0, 255);
+  currentBlue = constrain(b, 0, 255);
 
-  server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"rgb\",\"r\":" + String(r) + ",\"g\":" + String(g) + ",\"b\":" + String(b) + "}");
+  ledcWrite(rp, currentRed);
+  ledcWrite(gp, currentGreen);
+  ledcWrite(bp, currentBlue);
+
+  server.send(200, "application/json", "{\"status\":\"ok\",\"action\":\"rgb\",\"r\":" + String(currentRed) + ",\"g\":" + String(currentGreen) + ",\"b\":" + String(currentBlue) + "}");
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +198,7 @@ void handleStatus() {
   json += "  \"free_heap\": " + String(ESP.getFreeHeap()) + ",\n";
   json += "  \"ip\": \"" + WiFi.localIP().toString() + "\",\n";
   json += "  \"rssi\": " + String(WiFi.RSSI()) + ",\n";
+  json += "  \"rgb\": {\"r\": " + String(currentRed) + ", \"g\": " + String(currentGreen) + ", \"b\": " + String(currentBlue) + ", \"on\": " + String((currentRed > 0 || currentGreen > 0 || currentBlue > 0) ? "true" : "false") + "},\n";
   json += "  \"capabilities\": [\"rgb\", \"digital_io\", \"pwm\", \"servo\", \"tone\", \"analog\"]\n";
   json += "}";
   server.send(200, "application/json", json);

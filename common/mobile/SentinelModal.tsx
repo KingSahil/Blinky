@@ -258,22 +258,8 @@ export const SentinelModal: React.FC<SentinelModalProps> = ({
                   style={[styles.actionTile, styles.tileWake]}
                   onPress={() => {
                     triggerHaptic('heavy');
-                    if (isLocked && isConnected) {
-                      Alert.alert(
-                        'Workstation Locked',
-                        'Your host PC is locked. Would you like to unlock it or dispatch a Wake-on-LAN packet?',
-                        [
-                          { text: 'Cancel', style: 'cancel' },
-                          {
-                            text: 'Unlock Workstation',
-                            onPress: () => onTriggerPowerCommand('unlock', 'Unlock Workstation'),
-                          },
-                          {
-                            text: 'Send WoL Burst',
-                            onPress: () => onSendWakeOnLan(),
-                          },
-                        ]
-                      );
+                    if (isConnected) {
+                      onTriggerPowerCommand('unlock', 'Unlock Workstation');
                     } else {
                       onSendWakeOnLan();
                     }

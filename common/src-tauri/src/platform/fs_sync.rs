@@ -362,3 +362,33 @@ pub fn open_file_on_pc(raw_path: &str) -> Result<(), String> {
             .map_err(|e| format!("Failed to open file: {}", e))
     }
 }
+
+pub fn read_file_base64(raw_path: &str, max_bytes: usize) -> Result<(String, String, u64), String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    let path = Path::new(raw_path.trim());
+    if !path.exists() {
+        return Err(format!("File does not exist: {}", path.display()));
+    }
+    if path.is_dir() {
+        return Err("Cannot open a folder as a file".to_string());
+    }
+    let metadata = fs::metadata(path).map_err(|e| format!("Cannot read file metadata: {}", e))?;
+    let size = metadata.len();
+    if size > max_bytes as u64 {
+        return Err(format!(
+            "File size ({} MB) exceeds mobile transfer limit of {} MB",
+            size / (1024 * 1024),
+            max_bytes / (1024 * 1024)
+        ));
+    }
+    let bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let b64 = STANDARD.encode(&bytes);
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file")
+        .to_string();
+    Ok((name, b64, size))
+}
+

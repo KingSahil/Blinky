@@ -410,6 +410,31 @@ pub async fn start_websocket_server(app: AppHandle) {
         });
     });
 
+    // Background watcher: synchronize workstation lock/unlock state to connected clients in real time
+    let app_lock_watcher = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut last_locked = crate::platform::is_workstation_locked();
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+            let current_locked = crate::platform::is_workstation_locked();
+            if current_locked != last_locked {
+                last_locked = current_locked;
+                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                let action = if current_locked { "lock" } else { "unlock" };
+                let evt = serde_json::json!({
+                    "type": "power_event",
+                    "action": action,
+                    "status": "triggered",
+                    "message": format!("Workstation {} detected.", if current_locked { "locked" } else { "unlocked" }),
+                    "timestamp": now,
+                    "is_locked": current_locked
+                });
+                let _ = app_lock_watcher.emit("blinky://power-event", evt.clone());
+                broadcast_to_all_clients(&evt.to_string()).await;
+            }
+        }
+    });
+
     while let Ok((stream, peer_addr)) = listener.accept().await {
         println!("New peer connection: {}", peer_addr);
         let app_clone = app.clone();
@@ -953,18 +978,40 @@ where
                 crate::platform::execute_open_browser();
             } else if trimmed == "open_terminal" || trimmed == "terminal" {
                 crate::platform::execute_open_terminal();
-            } else if trimmed == "toggle_lights" || trimmed == "lights" {
+            } else if trimmed == "toggle_lights" || trimmed == "lights" || trimmed == "turn_off_lights" || trimmed == "lights_off" || trimmed == "turn_on_lights" || trimmed == "lights_on" {
                 let root = project_root();
                 let python = python_executable(&root);
                 let script = root.join("common").join("python").join("tools").join("esp32_light_tool.py");
+                let action_arg = if trimmed == "turn_off_lights" || trimmed == "lights_off" {
+                    "off"
+                } else if trimmed == "turn_on_lights" || trimmed == "lights_on" {
+                    "on"
+                } else {
+                    "toggle"
+                };
+                let app_handle = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    let _ = TokioCommand::new(python)
+                    let out = TokioCommand::new(python)
                         .arg("-u")
                         .arg(&script)
-                        .arg("toggle")
+                        .arg(action_arg)
                         .current_dir(&root)
                         .output()
                         .await;
+                    if let Ok(output) = out {
+                        let stdout_str = String::from_utf8_lossy(&output.stdout);
+                        let trimmed_out = stdout_str.trim();
+                        println!("blinky: esp32 light action ({}) output: {}", action_arg, trimmed_out);
+                        let json_val = serde_json::from_str::<serde_json::Value>(trimmed_out)
+                            .unwrap_or_else(|_| serde_json::json!({ "raw": trimmed_out }));
+                        let evt = serde_json::json!({
+                            "type": "light_event",
+                            "action": action_arg,
+                            "data": json_val
+                        });
+                        let _ = app_handle.emit("blinky://light-event", evt.clone());
+                        broadcast_to_all_clients(&evt.to_string()).await;
+                    }
                 });
             } else if trimmed == "get_sarvam_key" {
                 let key = get_sarvam_api_key();
@@ -1145,6 +1192,41 @@ where
                                 resp.to_string().into(),
                             ))
                             .await;
+                        continue;
+                    } else if msg_type == "fs_read_file" {
+                        let path = parsed.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                        match crate::platform::fs_sync::read_file_base64(path, 30 * 1024 * 1024) {
+                            Ok((name, b64, size)) => {
+                                let resp = serde_json::json!({
+                                    "type": "fs_file_data",
+                                    "path": path,
+                                    "name": name,
+                                    "size": size,
+                                    "base64": b64,
+                                    "success": true
+                                });
+                                let _ = ws_sender
+                                    .lock()
+                                    .await
+                                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                                        resp.to_string().into(),
+                                    ))
+                                    .await;
+                            }
+                            Err(err) => {
+                                let resp = serde_json::json!({
+                                    "type": "fs_error",
+                                    "message": err
+                                });
+                                let _ = ws_sender
+                                    .lock()
+                                    .await
+                                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                                        resp.to_string().into(),
+                                    ))
+                                    .await;
+                            }
+                        }
                         continue;
                     }
                 }

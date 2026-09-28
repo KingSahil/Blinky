@@ -1,5 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+  RefreshControl,
+  Modal,
+  Animated,
+  PanResponder,
+  Platform,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { colors, typography, radius, spacing } from '../theme/theme';
@@ -24,15 +36,61 @@ export function SystemScreen({
   onRefresh,
 }: SystemScreenProps) {
   const [refreshing, setRefreshing] = useState(false);
+  const [pendingAction, setPendingAction] = useState<'restart' | 'sleep' | 'lock' | 'hibernate' | null>(null);
+
+  const panY = useRef(new Animated.Value(0)).current;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) => gestureState.dy > 5,
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dy > 0) {
+          panY.setValue(gestureState.dy);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dy > 80 || gestureState.vy > 0.4) {
+          Animated.timing(panY, {
+            toValue: 600,
+            duration: 200,
+            useNativeDriver: true,
+          }).start(() => {
+            setPendingAction(null);
+          });
+        } else {
+          Animated.spring(panY, {
+            toValue: 0,
+            bounciness: 4,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+    })
+  ).current;
+
+  const handleDismiss = () => {
+    Animated.timing(panY, {
+      toValue: 600,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      setPendingAction(null);
+    });
+  };
+
+  useEffect(() => {
+    if (pendingAction) {
+      panY.setValue(0);
+    }
+  }, [pendingAction]);
 
   // Poll live metrics periodically while viewing the System Monitor tab
   useEffect(() => {
     if (!isConnected || !onRefresh) return;
 
-    // Immediately request telemetry snapshot
     onRefresh();
 
-    // Live update telemetry every 2.5 seconds
     const interval = setInterval(() => {
       onRefresh();
     }, 2500);
@@ -48,9 +106,16 @@ export function SystemScreen({
     setTimeout(() => setRefreshing(false), 800);
   }, [onRefresh]);
 
-  const handlePowerAction = (action: 'restart' | 'sleep' | 'lock' | 'hibernate') => {
+  const handlePromptPowerAction = (action: 'restart' | 'sleep' | 'lock' | 'hibernate') => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setPendingAction(action);
+  };
+
+  const handleConfirmPowerAction = () => {
+    if (!pendingAction) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    onPowerAction(action);
+    onPowerAction(pendingAction);
+    setPendingAction(null);
   };
 
   const handleWakePc = () => {
@@ -174,11 +239,128 @@ export function SystemScreen({
       )}
 
       <View style={styles.powerGrid}>
-        <PowerButton icon="moon" label="Sleep" color="#8B5CF6" onPress={() => handlePowerAction('sleep')} disabled={!isConnected} />
-        <PowerButton icon="lock-closed" label="Lock" color="#F59E0B" onPress={() => handlePowerAction('lock')} disabled={!isConnected} />
-        <PowerButton icon="refresh" label="Restart" color="#06B6D4" onPress={() => handlePowerAction('restart')} disabled={!isConnected} />
-        <PowerButton icon="power" label="Hibernate" color={colors.danger} onPress={() => handlePowerAction('hibernate')} disabled={!isConnected} />
+        <PowerButton icon="moon" label="Sleep" color="#8B5CF6" onPress={() => handlePromptPowerAction('sleep')} disabled={!isConnected} />
+        <PowerButton icon="lock-closed" label="Lock" color="#F59E0B" onPress={() => handlePromptPowerAction('lock')} disabled={!isConnected} />
+        <PowerButton icon="refresh" label="Restart" color="#06B6D4" onPress={() => handlePromptPowerAction('restart')} disabled={!isConnected} />
+        <PowerButton icon="power" label="Hibernate" color={colors.danger} onPress={() => handlePromptPowerAction('hibernate')} disabled={!isConnected} />
       </View>
+
+      {/* Confirmation Bottom Toastbar with Slide-down to Close */}
+      <Modal
+        visible={Boolean(pendingAction)}
+        transparent
+        animationType="fade"
+        onRequestClose={handleDismiss}
+      >
+        <TouchableOpacity
+          style={styles.modalBackdrop}
+          activeOpacity={1}
+          onPress={handleDismiss}
+        >
+          <Animated.View
+            style={[
+              styles.modalContent,
+              {
+                transform: [{ translateY: panY }],
+              },
+            ]}
+            onStartShouldSetResponder={() => true}
+          >
+            {/* Drag Handle */}
+            <View {...panResponder.panHandlers} style={styles.sheetHandleContainer}>
+              <View style={styles.sheetHandleBar} />
+            </View>
+
+            <View style={styles.modalHeader}>
+              <View
+                style={[
+                  styles.modalIconBox,
+                  {
+                    backgroundColor:
+                      pendingAction === 'restart'
+                        ? 'rgba(6, 182, 212, 0.15)'
+                        : pendingAction === 'hibernate'
+                        ? 'rgba(239, 68, 68, 0.15)'
+                        : pendingAction === 'lock'
+                        ? 'rgba(245, 158, 11, 0.15)'
+                        : 'rgba(139, 92, 246, 0.15)',
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={
+                    pendingAction === 'restart'
+                      ? 'refresh'
+                      : pendingAction === 'hibernate'
+                      ? 'power'
+                      : pendingAction === 'lock'
+                      ? 'lock-closed'
+                      : 'moon'
+                  }
+                  size={26}
+                  color={
+                    pendingAction === 'restart'
+                      ? '#06B6D4'
+                      : pendingAction === 'hibernate'
+                      ? colors.danger
+                      : pendingAction === 'lock'
+                      ? '#F59E0B'
+                      : '#8B5CF6'
+                  }
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalTitle}>
+                  {pendingAction === 'restart'
+                    ? 'Restart Workstation'
+                    : pendingAction === 'hibernate'
+                    ? 'Hibernate Workstation'
+                    : pendingAction === 'lock'
+                    ? 'Lock Workstation'
+                    : 'Sleep Workstation'}
+                </Text>
+                <Text style={styles.modalSubtitle}>
+                  {pendingAction === 'restart'
+                    ? 'Your PC will immediately reboot. Save any active work.'
+                    : pendingAction === 'hibernate'
+                    ? 'Saves state to disk and powers down completely.'
+                    : pendingAction === 'lock'
+                    ? 'Locks the Windows desktop session.'
+                    : 'Puts your computer into low-power sleep mode.'}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={[
+                  styles.confirmActionBtn,
+                  {
+                    backgroundColor:
+                      pendingAction === 'hibernate' || pendingAction === 'restart'
+                        ? colors.danger
+                        : colors.accent,
+                  },
+                ]}
+                onPress={handleConfirmPowerAction}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.confirmActionBtnText}>
+                  Confirm {pendingAction ? pendingAction.toUpperCase() : ''}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.cancelActionBtn}
+                onPress={() => setPendingAction(null)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.cancelActionBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        </TouchableOpacity>
+      </Modal>
     </ScrollView>
   );
 }
@@ -385,5 +567,82 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     color: colors.textSecondary,
     fontSize: 12,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#121216', // 100% OPAQUE SOLID DARK, NO TRANSPARENCY
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: Platform.OS === 'ios' ? spacing.xxl : spacing.xl,
+    borderTopWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.6,
+    shadowRadius: 20,
+    elevation: 24,
+  },
+  sheetHandleContainer: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    width: '100%',
+  },
+  sheetHandleBar: {
+    width: 44,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: 'rgba(255, 255, 255, 0.35)',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+    marginTop: spacing.xs,
+  },
+  modalIconBox: {
+    width: 50,
+    height: 50,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.md,
+  },
+  modalTitle: {
+    ...typography.heading3,
+    color: colors.textPrimary,
+    marginBottom: 4,
+  },
+  modalSubtitle: {
+    ...typography.bodySmall,
+    color: colors.textMuted,
+  },
+  modalActions: {
+    gap: spacing.sm,
+  },
+  confirmActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    paddingVertical: 14,
+  },
+  confirmActionBtnText: {
+    ...typography.bodyMedium,
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  cancelActionBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  cancelActionBtnText: {
+    ...typography.bodyMedium,
+    color: colors.textMuted,
   },
 });

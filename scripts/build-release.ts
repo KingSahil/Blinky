@@ -9,3 +9,5 @@ const child = Bun.spawn([process.execPath, 'tauri', 'build', ...process.argv.sli
 });
 
 process.exit(await child.exited);
+
+export {};

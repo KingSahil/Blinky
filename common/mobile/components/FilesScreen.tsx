@@ -9,11 +9,18 @@ import {
   RefreshControl,
   ActivityIndicator,
   Modal,
+  Animated,
+  PanResponder,
+  Platform,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import * as IntentLauncher from 'expo-intent-launcher';
 import { colors, typography, radius, spacing } from '../theme/theme';
-import { QuickAccessFolder, FsEntry, FsDirContents } from '../usePCWebSocket';
+import { QuickAccessFolder, FsEntry, FsDirContents, FsFileData } from '../usePCWebSocket';
 
 interface FilesScreenProps {
   isConnected: boolean;
@@ -23,12 +30,71 @@ interface FilesScreenProps {
   searchResults?: FsEntry[];
   isLoading?: boolean;
   fsError?: string | null;
+  fsFileData?: FsFileData | null;
   onFetchQuickAccess?: () => void;
   onListDirectory?: (path?: string) => void;
   onFetchRecentFiles?: () => void;
   onSearch?: (query: string, path?: string) => void;
   onOpenFileOnPC?: (path: string) => void;
+  onOpenFileOnMobile?: (path: string) => void;
+  onClearFsFileData?: () => void;
+  onResetDirectory?: () => void;
+  onPreviewImage?: (uri: string) => void;
   onAskBlinky?: (file: FsEntry) => void;
+}
+
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'];
+const TEXT_EXTENSIONS = [
+  'txt', 'md', 'json', 'py', 'js', 'ts', 'jsx', 'tsx', 'html', 'css',
+  'scss', 'rs', 'sh', 'bat', 'ps1', 'xml', 'yaml', 'yml', 'toml',
+  'ini', 'cfg', 'log', 'sql', 'c', 'cpp', 'h', 'java', 'kt'
+];
+
+function isImageFile(ext: string): boolean {
+  return IMAGE_EXTENSIONS.includes((ext || '').toLowerCase());
+}
+
+function isTextFile(ext: string): boolean {
+  return TEXT_EXTENSIONS.includes((ext || '').toLowerCase());
+}
+
+function isViewableFile(ext: string): boolean {
+  const clean = (ext || '').toLowerCase();
+  return isImageFile(clean) || isTextFile(clean) || clean === 'pdf';
+}
+
+function getMimeType(ext: string): string {
+  const clean = (ext || '').toLowerCase();
+  switch (clean) {
+    case 'pdf': return 'application/pdf';
+    case 'png': return 'image/png';
+    case 'jpg':
+    case 'jpeg': return 'image/jpeg';
+    case 'gif': return 'image/gif';
+    case 'webp': return 'image/webp';
+    case 'svg': return 'image/svg+xml';
+    case 'bmp': return 'image/bmp';
+    case 'txt':
+    case 'log': return 'text/plain';
+    case 'json': return 'application/json';
+    case 'html': return 'text/html';
+    case 'css': return 'text/css';
+    case 'js': return 'application/javascript';
+    case 'ts': return 'application/typescript';
+    case 'mp4': return 'video/mp4';
+    case 'mkv': return 'video/x-matroska';
+    case 'mov': return 'video/quicktime';
+    case 'mp3': return 'audio/mpeg';
+    case 'wav': return 'audio/wav';
+    case 'doc': return 'application/msword';
+    case 'docx': return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    case 'xls': return 'application/vnd.ms-excel';
+    case 'xlsx': return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    case 'ppt': return 'application/vnd.ms-powerpoint';
+    case 'pptx': return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+    case 'zip': return 'application/zip';
+    default: return '*/*';
+  }
 }
 
 const FALLBACK_FOLDERS: QuickAccessFolder[] = [
@@ -136,11 +202,16 @@ export function FilesScreen({
   searchResults = [],
   isLoading = false,
   fsError = null,
+  fsFileData = null,
   onFetchQuickAccess,
   onListDirectory,
   onFetchRecentFiles,
   onSearch,
   onOpenFileOnPC,
+  onOpenFileOnMobile,
+  onClearFsFileData,
+  onResetDirectory,
+  onPreviewImage,
   onAskBlinky,
 }: FilesScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -148,7 +219,58 @@ export function FilesScreen({
   const [selectedFile, setSelectedFile] = useState<FsEntry | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [mobileActionMode, setMobileActionMode] = useState<'open' | 'send' | 'save_device'>('open');
+  const [textPreview, setTextPreview] = useState<{ name: string; content: string } | null>(null);
   const searchTimeoutRef = useRef<any>(null);
+
+  // Pan gesture for sliding down bottom sheet toastbar
+  const panY = useRef(new Animated.Value(0)).current;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) => gestureState.dy > 5,
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dy > 0) {
+          panY.setValue(gestureState.dy);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dy > 80 || gestureState.vy > 0.4) {
+          Animated.timing(panY, {
+            toValue: 600,
+            duration: 200,
+            useNativeDriver: true,
+          }).start(() => {
+            setSelectedFile(null);
+          });
+        } else {
+          Animated.spring(panY, {
+            toValue: 0,
+            bounciness: 4,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+    })
+  ).current;
+
+  const handleDismissFileModal = () => {
+    Animated.timing(panY, {
+      toValue: 600,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      setSelectedFile(null);
+    });
+  };
+
+  useEffect(() => {
+    if (selectedFile) {
+      panY.setValue(0);
+    }
+  }, [selectedFile]);
 
   // Sync initial directories on load
   useEffect(() => {
@@ -157,6 +279,148 @@ export function FilesScreen({
       onFetchRecentFiles?.();
     }
   }, [isConnected]);
+
+  // Handle incoming mobile file data and execute requested action
+  useEffect(() => {
+    if (fsFileData && isDownloading) {
+      setIsDownloading(false);
+      (async () => {
+        try {
+          const localUri = `${FileSystem.cacheDirectory}${fsFileData.name}`;
+          await FileSystem.writeAsStringAsync(localUri, fsFileData.base64, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+
+          const ext = (fsFileData.name.includes('.') ? fsFileData.name.split('.').pop() || '' : '').toLowerCase();
+          const targetMode = mobileActionMode;
+          setSelectedFile(null);
+          onClearFsFileData?.();
+
+          // 1. Send / Share file mode (available for all files)
+          if (targetMode === 'send') {
+            if (await Sharing.isAvailableAsync()) {
+              await Sharing.shareAsync(localUri, {
+                dialogTitle: `Send ${fsFileData.name}`,
+              });
+              setActionFeedback(`Shared: ${fsFileData.name}`);
+            }
+            return;
+          }
+
+          // 2. Save to Device / Downloads
+          if (targetMode === 'save_device') {
+            try {
+              if (Platform.OS === 'android' && FileSystem.StorageAccessFramework) {
+                const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
+                if (permissions.granted) {
+                  const newFileUri = await FileSystem.StorageAccessFramework.createFileAsync(
+                    permissions.directoryUri,
+                    fsFileData.name,
+                    getMimeType(ext)
+                  );
+                  await FileSystem.writeAsStringAsync(newFileUri, fsFileData.base64, {
+                    encoding: FileSystem.EncodingType.Base64,
+                  });
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  setActionFeedback(`Saved: ${fsFileData.name}`);
+                  return;
+                }
+              }
+              // Fallback for iOS or if directory picker is dismissed
+              if (await Sharing.isAvailableAsync()) {
+                await Sharing.shareAsync(localUri, {
+                  dialogTitle: `Save ${fsFileData.name}`,
+                });
+                setActionFeedback(`Saved: ${fsFileData.name}`);
+              }
+            } catch (saveErr: any) {
+              Alert.alert('Save Failed', saveErr?.message || 'Could not save file to device.');
+            }
+            return;
+          }
+
+          // 3. Open Mode:
+          // A. Images -> default image viewer via ACTION_VIEW
+          if (isImageFile(ext)) {
+            if (Platform.OS === 'android') {
+              try {
+                const contentUri = await FileSystem.getContentUriAsync(localUri);
+                await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+                  data: contentUri,
+                  flags: 1, // Intent.FLAG_GRANT_READ_URI_PERMISSION
+                  type: getMimeType(ext),
+                });
+                setActionFeedback(`Opened in image viewer: ${fsFileData.name}`);
+                return;
+              } catch (launcherErr) {
+                console.warn('[FilesScreen] IntentLauncher image viewer fallback:', launcherErr);
+              }
+            }
+            if (onPreviewImage) {
+              onPreviewImage(localUri);
+              setActionFeedback(`Viewing image: ${fsFileData.name}`);
+              return;
+            }
+          }
+
+          // B. PDFs -> default PDF viewer via ACTION_VIEW
+          if (ext === 'pdf') {
+            if (Platform.OS === 'android') {
+              try {
+                const contentUri = await FileSystem.getContentUriAsync(localUri);
+                await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+                  data: contentUri,
+                  flags: 1,
+                  type: 'application/pdf',
+                });
+                setActionFeedback(`Opened PDF: ${fsFileData.name}`);
+                return;
+              } catch (launcherErr) {
+                console.warn('[FilesScreen] IntentLauncher ACTION_VIEW fallback:', launcherErr);
+              }
+            }
+          }
+
+          // C. Text / Code -> in-app reader modal
+          if (isTextFile(ext)) {
+            setActionFeedback(`Opening reader: ${fsFileData.name}`);
+            const textContent = await FileSystem.readAsStringAsync(localUri, {
+              encoding: FileSystem.EncodingType.UTF8,
+            });
+            setTextPreview({ name: fsFileData.name, content: textContent });
+            return;
+          }
+
+          // D. Other files (exe, zip, etc.) -> open with external app via ACTION_VIEW or Sharing
+          if (Platform.OS === 'android') {
+            try {
+              const contentUri = await FileSystem.getContentUriAsync(localUri);
+              await IntentLauncher.startActivityAsync('android.intent.action.VIEW', {
+                data: contentUri,
+                flags: 1,
+                type: getMimeType(ext),
+              });
+              setActionFeedback(`Opened: ${fsFileData.name}`);
+              return;
+            } catch (launcherErr) {
+              console.warn('[FilesScreen] IntentLauncher open fallback:', launcherErr);
+            }
+          }
+
+          if (await Sharing.isAvailableAsync()) {
+            await Sharing.shareAsync(localUri, {
+              dialogTitle: `Open ${fsFileData.name}`,
+            });
+            setActionFeedback(`Opened: ${fsFileData.name}`);
+          }
+        } catch (err: any) {
+          setActionFeedback(`Error: ${err?.message || err}`);
+        } finally {
+          setTimeout(() => setActionFeedback(null), 2500);
+        }
+      })();
+    }
+  }, [fsFileData, isDownloading, mobileActionMode, onPreviewImage, onClearFsFileData]);
 
   // Handle live search debounce
   const handleSearchChange = (text: string) => {
@@ -181,7 +445,7 @@ export function FilesScreen({
   const handleOpenFolder = (path: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (currentDirectory?.currentPath) {
-      setNavHistory((prev) => [...prev, currentDirectory.currentPath]);
+      setNavHistory((prev: string[]) => [...prev, currentDirectory.currentPath]);
     }
     onListDirectory?.(path);
   };
@@ -190,20 +454,19 @@ export function FilesScreen({
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (navHistory.length > 0) {
       const prevPath = navHistory[navHistory.length - 1];
-      setNavHistory((prev) => prev.slice(0, prev.length - 1));
+      setNavHistory((prev: string[]) => prev.slice(0, prev.length - 1));
       onListDirectory?.(prevPath);
-    } else if (currentDirectory?.parentPath) {
-      onListDirectory?.(currentDirectory.parentPath);
     } else {
-      // Exit directory back to quick access
-      onListDirectory?.(undefined);
+      // Exit directory back to default quick access / recent screen
+      handleExitDirectory();
     }
   };
 
   const handleExitDirectory = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setNavHistory([]);
-    onListDirectory?.(undefined);
+    setSearchQuery('');
+    onResetDirectory?.();
   };
 
   const handlePressFile = (file: FsEntry) => {
@@ -219,6 +482,17 @@ export function FilesScreen({
       setActionFeedback(null);
       setSelectedFile(null);
     }, 1800);
+  };
+
+  const handleAction = (file: FsEntry, mode: 'open' | 'send' | 'save_device') => {
+    if (!isConnected) {
+      Alert.alert('Offline', 'Please connect to your PC to access this file.');
+      return;
+    }
+    setMobileActionMode(mode);
+    setIsDownloading(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    onOpenFileOnMobile?.(file.path);
   };
 
   const handleAskAboutFile = (file: FsEntry) => {
@@ -548,19 +822,32 @@ export function FilesScreen({
         </ScrollView>
       )}
 
-      {/* File Action Modal */}
+      {/* File Action Toastbar with Slide-down to Close */}
       <Modal
         visible={Boolean(selectedFile)}
         transparent
         animationType="fade"
-        onRequestClose={() => setSelectedFile(null)}
+        onRequestClose={handleDismissFileModal}
       >
         <TouchableOpacity
           style={styles.modalBackdrop}
           activeOpacity={1}
-          onPress={() => setSelectedFile(null)}
+          onPress={handleDismissFileModal}
         >
-          <View style={styles.modalContent} onStartShouldSetResponder={() => true}>
+          <Animated.View
+            style={[
+              styles.modalContent,
+              {
+                transform: [{ translateY: panY }],
+              },
+            ]}
+            onStartShouldSetResponder={() => true}
+          >
+            {/* Slide Down Drag Handle */}
+            <View {...panResponder.panHandlers} style={styles.sheetHandleContainer}>
+              <View style={styles.sheetHandleBar} />
+            </View>
+
             {selectedFile && (
               <>
                 <View style={styles.modalHeader}>
@@ -594,15 +881,95 @@ export function FilesScreen({
                 </View>
 
                 <View style={styles.modalActions}>
+                  {/* 1. Open Button (Available for all files) */}
+                  {!selectedFile.is_dir && (
+                    <TouchableOpacity
+                      style={styles.mobileActionBtn}
+                      onPress={() => handleAction(selectedFile, 'open')}
+                      activeOpacity={0.8}
+                      disabled={isDownloading}
+                    >
+                      {isDownloading && mobileActionMode === 'open' ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 8 }} />
+                      ) : (
+                        <Ionicons
+                          name={
+                            isImageFile(selectedFile.ext)
+                              ? 'image-outline'
+                              : selectedFile.ext.toLowerCase() === 'pdf'
+                              ? 'document-text-outline'
+                              : isTextFile(selectedFile.ext)
+                              ? 'reader-outline'
+                              : 'open-outline'
+                          }
+                          size={18}
+                          color="#FFFFFF"
+                          style={{ marginRight: 8 }}
+                        />
+                      )}
+                      <Text style={styles.mobileActionBtnText}>
+                        {isDownloading && mobileActionMode === 'open'
+                          ? 'Opening...'
+                          : isImageFile(selectedFile.ext)
+                          ? 'Open in Image Viewer'
+                          : selectedFile.ext.toLowerCase() === 'pdf'
+                          ? 'Open PDF Directly'
+                          : isTextFile(selectedFile.ext)
+                          ? 'Read File Directly'
+                          : 'Open File with...'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* 2. Send / Share File Button (Available for all files) */}
+                  {!selectedFile.is_dir && (
+                    <TouchableOpacity
+                      style={styles.sendActionBtn}
+                      onPress={() => handleAction(selectedFile, 'send')}
+                      activeOpacity={0.8}
+                      disabled={isDownloading}
+                    >
+                      {isDownloading && mobileActionMode === 'send' ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 8 }} />
+                      ) : (
+                        <Ionicons name="share-social-outline" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+                      )}
+                      <Text style={styles.sendActionBtnText}>
+                        {isDownloading && mobileActionMode === 'send' ? 'Preparing to send...' : 'Send / Share File'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* 3. Save to Device option for images */}
+                  {!selectedFile.is_dir && isImageFile(selectedFile.ext) && (
+                    <TouchableOpacity
+                      style={styles.saveGalleryActionBtn}
+                      onPress={() => handleAction(selectedFile, 'save_device')}
+                      activeOpacity={0.8}
+                      disabled={isDownloading}
+                    >
+                      {isDownloading && mobileActionMode === 'save_device' ? (
+                        <ActivityIndicator size="small" color="#10B981" style={{ marginRight: 8 }} />
+                      ) : (
+                        <Ionicons name="download-outline" size={18} color="#10B981" style={{ marginRight: 8 }} />
+                      )}
+                      <Text style={styles.saveGalleryActionBtnText}>
+                        {isDownloading && mobileActionMode === 'save_device' ? 'Saving to Device...' : 'Save to Device'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Open on PC button */}
                   <TouchableOpacity
                     style={styles.primaryActionBtn}
                     onPress={() => handleOpenOnPC(selectedFile)}
                     activeOpacity={0.8}
                   >
-                    <Ionicons name="open-outline" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+                    <Ionicons name="open-outline" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
                     <Text style={styles.primaryActionBtnText}>Open on PC</Text>
                   </TouchableOpacity>
 
+                  {/* Ask Blinky button */}
                   <TouchableOpacity
                     style={styles.secondaryActionBtn}
                     onPress={() => handleAskAboutFile(selectedFile)}
@@ -612,6 +979,7 @@ export function FilesScreen({
                     <Text style={styles.secondaryActionBtnText}>Ask Blinky about this file</Text>
                   </TouchableOpacity>
 
+                  {/* Cancel button */}
                   <TouchableOpacity
                     style={styles.cancelActionBtn}
                     onPress={() => setSelectedFile(null)}
@@ -622,8 +990,36 @@ export function FilesScreen({
                 </View>
               </>
             )}
-          </View>
+          </Animated.View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* In-app Text / Code Reader Modal */}
+      <Modal
+        visible={!!textPreview}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setTextPreview(null)}
+      >
+        <View style={styles.textPreviewContainer}>
+          <View style={styles.textPreviewHeader}>
+            <View style={{ flex: 1, marginRight: spacing.sm }}>
+              <Text style={styles.textPreviewTitle} numberOfLines={1}>{textPreview?.name}</Text>
+              <Text style={styles.textPreviewSub}>In-app Reader</Text>
+            </View>
+            <TouchableOpacity 
+              style={styles.textPreviewCloseBtn}
+              onPress={() => setTextPreview(null)}
+            >
+              <Ionicons name="close" size={24} color={colors.textPrimary} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.textPreviewScroll} contentContainerStyle={{ padding: spacing.md, paddingBottom: 60 }}>
+            <Text style={styles.textPreviewBody} selectable={true}>
+              {textPreview?.content}
+            </Text>
+          </ScrollView>
+        </View>
       </Modal>
     </View>
   );
@@ -910,16 +1306,33 @@ const styles = StyleSheet.create({
   },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: colors.surface,
+    backgroundColor: '#121216', // Solid 100% opaque dark background
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: Platform.OS === 'ios' ? spacing.xxl : spacing.xl,
     borderTopWidth: 1,
-    borderColor: colors.borderLight,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.6,
+    shadowRadius: 20,
+    elevation: 24,
+  },
+  sheetHandleContainer: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    width: '100%',
+  },
+  sheetHandleBar: {
+    width: 44,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: 'rgba(255, 255, 255, 0.35)',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -946,12 +1359,12 @@ const styles = StyleSheet.create({
   pathBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surfaceElevated,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderRadius: radius.md,
     padding: spacing.sm,
     marginBottom: spacing.lg,
     borderWidth: 1,
-    borderColor: colors.borderLight,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   pathBadgeText: {
     ...typography.bodySmall,
@@ -961,6 +1374,47 @@ const styles = StyleSheet.create({
   },
   modalActions: {
     gap: spacing.sm,
+  },
+  mobileActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#059669',
+    borderRadius: radius.md,
+    paddingVertical: 14,
+  },
+  mobileActionBtnText: {
+    ...typography.bodyMedium,
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  saveGalleryActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    borderRadius: radius.md,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.35)',
+  },
+  saveGalleryActionBtnText: {
+    ...typography.bodyMedium,
+    color: '#10B981',
+    fontWeight: '700',
+  },
+  sendActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#3B82F6',
+    borderRadius: radius.md,
+    paddingVertical: 14,
+  },
+  sendActionBtnText: {
+    ...typography.bodyMedium,
+    color: '#FFFFFF',
+    fontWeight: '700',
   },
   primaryActionBtn: {
     flexDirection: 'row',
@@ -998,5 +1452,46 @@ const styles = StyleSheet.create({
   cancelActionBtnText: {
     ...typography.bodyMedium,
     color: colors.textMuted,
+  },
+  textPreviewContainer: {
+    flex: 1,
+    backgroundColor: colors.background,
+    paddingTop: Platform.OS === 'android' ? 40 : 50,
+  },
+  textPreviewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+    backgroundColor: colors.surface,
+  },
+  textPreviewTitle: {
+    ...typography.heading3,
+    color: colors.textPrimary,
+  },
+  textPreviewSub: {
+    ...typography.bodySmall,
+    color: colors.textMuted,
+  },
+  textPreviewCloseBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  textPreviewScroll: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  textPreviewBody: {
+    ...typography.bodyMedium,
+    color: colors.textPrimary,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    lineHeight: 22,
   },
 });

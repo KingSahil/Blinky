@@ -91,6 +91,20 @@ export interface PowerEvent {
   timestamp: number;
 }
 
+export interface LightEvent {
+  type: 'light_event';
+  action: string;
+  data: {
+    success?: boolean;
+    status?: string;
+    r?: number;
+    g?: number;
+    b?: number;
+    message?: string;
+    [key: string]: any;
+  };
+}
+
 export interface AntigravityApproval {
   type: 'antigravity_approval';
   actionId: string;
@@ -138,6 +152,13 @@ export interface FsDirContents {
   entries: FsEntry[];
 }
 
+export interface FsFileData {
+  path: string;
+  name: string;
+  size: number;
+  base64: string;
+}
+
 export type PowerCommand =
   | 'power_off'
   | 'restart'
@@ -159,6 +180,7 @@ export function usePCWebSocket() {
   const [latestResponse, setLatestResponse] = useState<any>(null);
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [latestPowerEvent, setLatestPowerEvent] = useState<PowerEvent | null>(null);
+  const [latestLightEvent, setLatestLightEvent] = useState<LightEvent | null>(null);
   const [antigravityApproval, setAntigravityApproval] = useState<AntigravityApproval | null>(null);
   const [antigravityComplete, setAntigravityComplete] = useState<AntigravityComplete | null>(null);
   const [antigravityProgress, setAntigravityProgress] = useState<AntigravityProgress | null>(null);
@@ -169,6 +191,7 @@ export function usePCWebSocket() {
   const [fsSearchResults, setFsSearchResults] = useState<FsEntry[]>([]);
   const [fsLoading, setFsLoading] = useState<boolean>(false);
   const [fsError, setFsError] = useState<string | null>(null);
+  const [fsFileData, setFsFileData] = useState<FsFileData | null>(null);
   const [fileTransferMessage, setFileTransferMessage] = useState<FileTransferMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const nativeRef = useRef<NativeSecureSocket | null>(null);
@@ -188,6 +211,7 @@ export function usePCWebSocket() {
     setStatus(nextState.status);
     setErrorMsg(nextState.errorMsg);
     setLatestResponse(nextState.latestResponse);
+    setLatestLightEvent(null);
     setQuickAccessFolders([]);
     setCurrentDirectory(null);
     setRecentFiles([]);
@@ -306,9 +330,19 @@ export function usePCWebSocket() {
                 setFsSearchResults(parsed.results);
               }
               setFsLoading(false);
+            } else if (parsed.type === 'fs_file_data') {
+              setFsFileData({
+                path: parsed.path || '',
+                name: parsed.name || '',
+                size: parsed.size || 0,
+                base64: parsed.base64 || '',
+              });
+              setFsLoading(false);
             } else if (parsed.type === 'fs_error') {
               setFsError(parsed.message || 'Filesystem error');
               setFsLoading(false);
+            } else if (parsed.type === 'light_event') {
+              setLatestLightEvent(parsed as LightEvent);
             } else {
               setLatestResponse(parsed);
             }
@@ -356,19 +390,23 @@ export function usePCWebSocket() {
     let connectTimeout: any = null;
 
     try {
+      console.log(`[WS] Connecting to ${wsUrl}`);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       connectTimeout = setTimeout(() => {
+        const stateStr = ws.readyState === WebSocket.CONNECTING ? 'CONNECTING' : ws.readyState === WebSocket.OPEN ? 'OPEN' : ws.readyState === WebSocket.CLOSING ? 'CLOSING' : 'CLOSED';
+        console.log(`[WS] Timeout triggered. readyState=${stateStr}, isCurrent=${wsRef.current === ws}`);
         if (wsRef.current === ws && ws.readyState !== WebSocket.OPEN) {
           try { ws.close(); } catch (e) {}
           wsRef.current = null;
           setStatus('error');
-          setErrorMsg(`Connection timed out (${formattedIp}). Ensure Blinky desktop app is running and port 9001 is open.`);
+          setErrorMsg(`Connection timed out (${formattedIp}, state=${stateStr}). Ensure Blinky desktop app is running and port 9001 is open.`);
         }
-      }, 5000);
+      }, 10000);
 
       ws.onopen = () => {
+        console.log(`[WS] ws.onopen successfully fired for ${wsUrl}`);
         if (connectTimeout) clearTimeout(connectTimeout);
         if (wsRef.current === ws) {
           // Authenticate the remote connection before any commands are sent.
@@ -401,6 +439,8 @@ export function usePCWebSocket() {
               setFileTransferMessage(parsed as FileTransferMessage);
             } else if (parsed.type === 'power_event') {
               setLatestPowerEvent(parsed as PowerEvent);
+            } else if (parsed.type === 'light_event') {
+              setLatestLightEvent(parsed as LightEvent);
             } else if (parsed.type === 'antigravity_approval') {
               setAntigravityApproval(parsed as AntigravityApproval);
             } else if (parsed.type === 'antigravity_complete') {
@@ -428,6 +468,14 @@ export function usePCWebSocket() {
                 setFsSearchResults(parsed.results);
               }
               setFsLoading(false);
+            } else if (parsed.type === 'fs_file_data') {
+              setFsFileData({
+                path: parsed.path || '',
+                name: parsed.name || '',
+                size: parsed.size || 0,
+                base64: parsed.base64 || '',
+              });
+              setFsLoading(false);
             } else if (parsed.type === 'fs_error') {
               setFsError(parsed.message || 'Filesystem error');
               setFsLoading(false);
@@ -441,6 +489,7 @@ export function usePCWebSocket() {
       };
 
       ws.onclose = (e) => {
+        console.log(`[WS] ws.onclose fired: code=${e?.code}, reason=${e?.reason}`);
         if (connectTimeout) clearTimeout(connectTimeout);
         if (wsRef.current === ws) {
           setStatus('disconnected');
@@ -448,11 +497,12 @@ export function usePCWebSocket() {
         }
       };
 
-      ws.onerror = (e) => {
+      ws.onerror = (e: any) => {
+        console.log(`[WS] ws.onerror fired:`, e?.message || e);
         if (connectTimeout) clearTimeout(connectTimeout);
         if (wsRef.current === ws) {
           setStatus('error');
-          setErrorMsg(`Failed to connect to ${formattedIp}. Check Wi-Fi & PC firewall.`);
+          setErrorMsg(`Failed to connect to ${formattedIp}. ${e?.message || 'Check Wi-Fi & PC firewall.'}`);
           wsRef.current = null;
         }
       };
@@ -578,12 +628,32 @@ export function usePCWebSocket() {
     sendCommand(JSON.stringify({ type: 'fs_open_file', path }));
   }, [sendCommand]);
 
+  const readFileForMobile = useCallback((path: string) => {
+    setFsLoading(true);
+    setFsError(null);
+    setFsFileData(null);
+    sendCommand(JSON.stringify({ type: 'fs_read_file', path }));
+  }, [sendCommand]);
+
+  const clearFsFileData = useCallback(() => {
+    setFsFileData(null);
+  }, []);
+
+  const resetDirectory = useCallback(() => {
+    setCurrentDirectory(null);
+    setFsSearchResults([]);
+    setFsError(null);
+    fetchQuickAccess();
+    fetchRecentFiles();
+  }, [fetchQuickAccess, fetchRecentFiles]);
+
   return {
     status,
     errorMsg,
     latestResponse,
     systemInfo,
     latestPowerEvent,
+    latestLightEvent,
     antigravityApproval,
     antigravityComplete,
     antigravityProgress,
@@ -594,11 +664,15 @@ export function usePCWebSocket() {
     fsSearchResults,
     fsLoading,
     fsError,
+    fsFileData,
     fetchQuickAccess,
     listDirectory,
     fetchRecentFiles,
     searchFiles,
     openFileOnPC,
+    readFileForMobile,
+    clearFsFileData,
+    resetDirectory,
     fileTransferMessage,
     connect,
     disconnect,

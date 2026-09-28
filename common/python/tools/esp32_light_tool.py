@@ -12,6 +12,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -96,8 +98,67 @@ COLOR_MAP: dict[str, tuple[int, int, int]] = {
     "black": (0, 0, 0),
 }
 
-# State tracking for toggle
-_LAST_STATE = {"on": False}
+def _get_state_file() -> Path:
+    """Return path to persistent light state file."""
+    state_dir = Path.home() / ".blinky"
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        return state_dir / "esp32_light_state.json"
+    except Exception:
+        return Path(tempfile.gettempdir()) / "blinky_esp32_light_state.json"
+
+
+def get_saved_state() -> dict[str, Any]:
+    """Read the persisted light state from disk."""
+    state_file = _get_state_file()
+    if state_file.exists():
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {"on": False, "r": 0, "g": 0, "b": 0, "last_active_rgb": [255, 255, 255]}
+
+
+def save_state(on: bool, r: int = 0, g: int = 0, b: int = 0, last_active_rgb: list[int] | None = None) -> dict[str, Any]:
+    """Persist light state to disk and update in-memory cache."""
+    current = get_saved_state()
+    is_on = bool(on)
+    r = max(0, min(255, int(r)))
+    g = max(0, min(255, int(g)))
+    b = max(0, min(255, int(b)))
+
+    # Determine last_active_rgb to restore upon next toggle on
+    if last_active_rgb and any(c > 0 for c in last_active_rgb):
+        active_rgb = [max(0, min(255, int(c))) for c in last_active_rgb]
+    elif is_on and (r > 0 or g > 0 or b > 0):
+        active_rgb = [r, g, b]
+    else:
+        active_rgb = current.get("last_active_rgb") or [255, 255, 255]
+
+    state = {
+        "on": is_on,
+        "r": r,
+        "g": g,
+        "b": b,
+        "last_active_rgb": active_rgb,
+        "timestamp": time.time(),
+    }
+    _LAST_STATE.clear()
+    _LAST_STATE.update(state)
+    try:
+        state_file = _get_state_file()
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except Exception:
+        pass
+    return state
+
+
+# State tracking for toggle (persisted across CLI runs and processes)
+_LAST_STATE: dict[str, Any] = get_saved_state()
 
 
 def resolve_color(color_name: str, r=None, g=None, b=None, brightness: float = 1.0) -> tuple[int, int, int]:
@@ -134,7 +195,7 @@ def send_to_esp32(r: int, g: int, b: int, ip: str | None = None, timeout: float 
             req = urllib.request.Request(url, headers={"Connection": "close"}, method="GET")
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 body = response.read().decode("utf-8").strip()
-                _LAST_STATE["on"] = (r > 0 or g > 0 or b > 0)
+                save_state(on=(r > 0 or g > 0 or b > 0), r=r, g=g, b=b)
                 return {
                     "success": True,
                     "status": "ok",
@@ -154,7 +215,7 @@ def send_to_esp32(r: int, g: int, b: int, ip: str | None = None, timeout: float 
             break
 
     # If offline or failed, return graceful status so caller won't crash
-    _LAST_STATE["on"] = (r > 0 or g > 0 or b > 0)
+    save_state(on=(r > 0 or g > 0 or b > 0), r=r, g=g, b=b)
     return {
         "success": False,
         "error": f"Failed to connect to ESP32 at {target_ip}: {last_err}",
@@ -195,29 +256,41 @@ def handle_request(params: dict[str, Any]) -> dict[str, Any]:
     action = params.get("action", "set")
 
     if action == "status":
-        return check_status(ip=ip)
+        res = check_status(ip=ip)
+        res["state"] = get_saved_state()
+        return res
 
     if action in ("turn_off", "off"):
         res = send_to_esp32(0, 0, 0, ip=ip)
         res["message"] = "Turned off the smart light."
-        _LAST_STATE["on"] = False
+        save_state(on=False, r=0, g=0, b=0)
         return res
 
     if action in ("turn_on", "on"):
-        res = send_to_esp32(255, 255, 255, ip=ip)
+        state = get_saved_state()
+        active = state.get("last_active_rgb") or [255, 255, 255]
+        target_r = active[0] if any(c > 0 for c in active) else 255
+        target_g = active[1] if any(c > 0 for c in active) else 255
+        target_b = active[2] if any(c > 0 for c in active) else 255
+        res = send_to_esp32(target_r, target_g, target_b, ip=ip)
         res["message"] = "Turned on the smart light."
-        _LAST_STATE["on"] = True
+        save_state(on=True, r=target_r, g=target_g, b=target_b)
         return res
 
     if action == "toggle":
-        if _LAST_STATE["on"]:
+        state = get_saved_state()
+        if state.get("on", False):
             res = send_to_esp32(0, 0, 0, ip=ip)
             res["message"] = "Toggled smart light off."
-            _LAST_STATE["on"] = False
+            save_state(on=False, r=0, g=0, b=0)
         else:
-            res = send_to_esp32(255, 255, 255, ip=ip)
+            active = state.get("last_active_rgb") or [255, 255, 255]
+            target_r = active[0] if any(c > 0 for c in active) else 255
+            target_g = active[1] if any(c > 0 for c in active) else 255
+            target_b = active[2] if any(c > 0 for c in active) else 255
+            res = send_to_esp32(target_r, target_g, target_b, ip=ip)
             res["message"] = "Toggled smart light on."
-            _LAST_STATE["on"] = True
+            save_state(on=True, r=target_r, g=target_g, b=target_b)
         return res
 
     if action == "brightness":
@@ -227,7 +300,7 @@ def handle_request(params: dict[str, Any]) -> dict[str, Any]:
         val = max(0, min(255, val))
         res = send_to_esp32(val, val, val, ip=ip)
         res["message"] = f"Adjusted smart light brightness to {val}."
-        _LAST_STATE["on"] = val > 0
+        save_state(on=val > 0, r=val, g=val, b=val)
         return res
 
     color = params.get("color", "")
@@ -243,6 +316,7 @@ def handle_request(params: dict[str, Any]) -> dict[str, Any]:
     color_desc = color or f"RGB({final_r},{final_g},{final_b})"
     res["message"] = f"Set smart light to {color_desc}."
     res["color_requested"] = color_desc
+    save_state(on=(final_r > 0 or final_g > 0 or final_b > 0), r=final_r, g=final_g, b=final_b)
     return res
 
 

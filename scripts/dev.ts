@@ -128,11 +128,11 @@ async function tryStartDockerDaemon(dockerPath: string): Promise<boolean> {
     // Linux
     console.log("[Docker] 🐳 Attempting to start Docker daemon service...");
     try {
-      const startProc = spawn(["systemctl", "--user", "start", "docker"], { stdio: "ignore" });
+      const startProc = spawn(["systemctl", "--user", "start", "docker"], { stdio: ["ignore", "ignore", "ignore"] });
       await Promise.race([startProc.exited, new Promise((r) => setTimeout(r, 3000))]);
     } catch {
       try {
-        const sysStart = spawn(["sudo", "systemctl", "start", "docker"], { stdio: "ignore" });
+        const sysStart = spawn(["sudo", "systemctl", "start", "docker"], { stdio: ["ignore", "ignore", "ignore"] });
         await Promise.race([sysStart.exited, new Promise((r) => setTimeout(r, 3000))]);
       } catch {}
     }
@@ -386,11 +386,34 @@ if (process.platform === "win32" && !existsSync("common/python_runtime/Python313
 
 const customPort = process.env.PORT ? parseInt(process.env.PORT, 10) : 5173;
 
+/** Forcefully terminates blinky.exe process tree if running. */
+const killBlinkyProcess = () => {
+  if (process.platform === "win32") {
+    try {
+      Bun.spawnSync(["taskkill", "/F", "/T", "/IM", "blinky.exe"]);
+    } catch {}
+  } else {
+    try {
+      Bun.spawnSync(["pkill", "-9", "-f", "blinky"]);
+    } catch {}
+  }
+};
+
 /** Stops only the Windows process tree started by this dev run. */
 const killWindowsProcessTree = (pid?: number) => {
   if (process.platform !== "win32" || !pid) return;
   try {
     Bun.spawnSync(["taskkill", "/F", "/T", "/PID", String(pid)]);
+  } catch {}
+};
+
+/** Terminates lingering dev processes (node/bun/cargo) bound to Blinky ports to prevent port conflicts */
+const killDevPortListeners = () => {
+  if (process.platform !== "win32") return;
+  const ports = [...new Set([customPort, 8081, 9001, 9002, 9003])].filter(Number.isInteger);
+  const command = `$targets = @('node', 'bun', 'blinky', 'cargo'); Get-NetTCPConnection -State Listen -LocalPort ${ports.join(",")} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p -and $targets -contains $p.ProcessName.ToLower()) { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } }`;
+  try {
+    Bun.spawnSync(["powershell", "-NoProfile", "-Command", command]);
   } catch {}
 };
 
@@ -428,7 +451,9 @@ const restoreWindowsSystemCursor = () => {
   }
 };
 
-// Pre-flight cleanup to ensure the frontend and mobile service ports are free and the native cursor is active.
+// Pre-flight cleanup: terminate any orphaned blinky.exe or stale dev processes before starting
+killBlinkyProcess();
+killDevPortListeners();
 restoreWindowsSystemCursor();
 reportWindowsPortConflicts();
 
@@ -454,18 +479,37 @@ const tauriDev = spawn(tauriArgs, {
   stdin: "ignore",
 });
 
+let isCleaningUp = false;
 const cleanup = () => {
+  if (isCleaningUp) return;
+  isCleaningUp = true;
+
   restoreWindowsSystemCursor();
+
+  // 1. Terminate process trees first while parents are still alive
+  if (tauriDev?.pid) {
+    killWindowsProcessTree(tauriDev.pid);
+  }
+  if (mobileProcess?.pid) {
+    killWindowsProcessTree(mobileProcess.pid);
+  }
+
+  // 2. Explicitly kill blinky.exe and its child processes (e.g. WhatsApp backend, python)
+  killBlinkyProcess();
+
+  // 3. Clean up any leftover dev server listeners on 5173, 8081, 9001, 9002, 9003
+  killDevPortListeners();
+
+  // 4. Fallback process kill
+  try {
+    tauriDev.kill();
+  } catch {}
   if (mobileProcess) {
     try {
       mobileProcess.kill();
     } catch {}
   }
-  try {
-    tauriDev.kill();
-  } catch {}
 
-  killWindowsProcessTree(tauriDev.pid);
   restoreWindowsSystemCursor();
 };
 
@@ -478,8 +522,8 @@ if (process.stdin.isTTY) {
     process.stdin.setEncoding("utf8");
 
     process.stdin.on("data", (key: string) => {
-      // Handle Ctrl+C
-      if (key === "\u0003") {
+      // Handle Ctrl+C or Ctrl+D
+      if (key === "\u0003" || key === "\u0004") {
         console.log("\n[Blinky] 🛑 Shutting down dev servers and closing Blinky PC app (Docker remains running in background)...");
         cleanup();
         process.exit(0);
@@ -536,6 +580,12 @@ process.on("SIGTERM", () => {
   cleanup();
   process.exit(0);
 });
+if (process.platform === "win32") {
+  process.on("SIGBREAK", () => {
+    cleanup();
+    process.exit(0);
+  });
+}
 process.on("exit", cleanup);
 
 // Wait for Tauri dev process to exit
