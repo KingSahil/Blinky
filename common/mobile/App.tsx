@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import {
   StyleSheet,
   Text,
@@ -1683,6 +1684,7 @@ export default function App() {
   }
 
   return (
+    <SafeAreaProvider>
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View style={[styles.container, { backgroundColor: colors.background }]}>
         <StatusBar barStyle="light-content" />
@@ -1965,6 +1967,7 @@ export default function App() {
       {showSplash && <SplashScreen onDismiss={() => setShowSplash(false)} />}
       </View>
     </GestureHandlerRootView>
+    </SafeAreaProvider>
   );
 }
 
