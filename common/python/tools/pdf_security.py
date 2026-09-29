@@ -50,7 +50,10 @@ def add_watermark_to_pdf(
     try:
         from reportlab.pdfgen import canvas
         from reportlab.lib.pagesizes import letter
-        import pypdf
+        try:
+            import pypdf
+        except ImportError:
+            import PyPDF2 as pypdf
 
         watermark_temp = out_file.parent / f"watermark_temp_{out_file.stem}.pdf"
         c = canvas.Canvas(str(watermark_temp), pagesize=letter)
@@ -82,6 +85,45 @@ def add_watermark_to_pdf(
 
         LOGGER.info(f"Stamped watermark '{watermark_text}' via ReportLab fallback: {out_file.name}")
         return out_file
+    except ImportError:
+        pass
+
+    # 3. Fallback using PIL + pypdf
+    try:
+        from PIL import Image, ImageDraw
+        try:
+            import pypdf
+        except ImportError:
+            import PyPDF2 as pypdf
+
+        watermark_temp = out_file.parent / f"watermark_temp_{out_file.stem}.pdf"
+        txt_img = Image.new("RGBA", (612, 792), (255, 255, 255, 0))
+        d = ImageDraw.Draw(txt_img)
+        d.text((200, 350), watermark_text, fill=(180, 180, 180, int(255 * opacity)))
+        rotated = txt_img.rotate(angle)
+
+        img_rgb = rotated.convert("RGB")
+        img_rgb.save(str(watermark_temp), "PDF", resolution=100.0)
+
+        reader = pypdf.PdfReader(str(in_file))
+        wm_reader = pypdf.PdfReader(str(watermark_temp))
+        wm_page = wm_reader.pages[0]
+
+        writer = pypdf.PdfWriter()
+        for page in reader.pages:
+            page.merge_page(wm_page)
+            writer.add_page(page)
+
+        with open(out_file, "wb") as f:
+            writer.write(f)
+
+        try:
+            watermark_temp.unlink()
+        except Exception:
+            pass
+
+        LOGGER.info(f"Stamped watermark '{watermark_text}' via PIL fallback: {out_file.name}")
+        return out_file
     except Exception as exc:
         raise RuntimeError(f"Failed stamping watermark: {exc}")
 
@@ -110,6 +152,44 @@ def add_page_numbers_to_pdf(
 
         doc.save(str(out_file))
         LOGGER.info(f"Added page numbers to {in_file.name} -> {out_file.name}")
+        return out_file
+    except ImportError:
+        pass
+
+    # Fallback using PIL + PyPDF2
+    try:
+        try:
+            import pypdf
+        except ImportError:
+            import PyPDF2 as pypdf
+        from PIL import Image, ImageDraw
+
+        reader = pypdf.PdfReader(str(in_file))
+        total = len(reader.pages)
+        writer = pypdf.PdfWriter()
+
+        for idx, page in enumerate(reader.pages):
+            footer_text = format_str.format(page=idx + 1, total=total)
+            footer_temp = out_file.parent / f"footer_temp_{idx}_{out_file.stem}.pdf"
+
+            txt_img = Image.new("RGBA", (612, 792), (255, 255, 255, 0))
+            d = ImageDraw.Draw(txt_img)
+            d.text((270, 750), footer_text, fill=(100, 100, 100, 255))
+            txt_img.convert("RGB").save(str(footer_temp), "PDF", resolution=100.0)
+
+            f_reader = pypdf.PdfReader(str(footer_temp))
+            page.merge_page(f_reader.pages[0])
+            writer.add_page(page)
+
+            try:
+                footer_temp.unlink()
+            except Exception:
+                pass
+
+        with open(out_file, "wb") as f:
+            writer.write(f)
+
+        LOGGER.info(f"Added page numbers to {in_file.name} via PIL fallback")
         return out_file
     except Exception as exc:
         raise RuntimeError(f"Failed adding page numbers: {exc}")

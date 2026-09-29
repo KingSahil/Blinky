@@ -107,19 +107,24 @@ def convert_txt_to_pdf(txt_path: str | Path, output_pdf: str | Path) -> Path:
     except ImportError:
         pass
 
-    # Fallback Canvas Drawing
+    # Fallback to PIL (Pillow) image to PDF
     try:
-        from reportlab.pdfgen import canvas
-        c = canvas.Canvas(str(out_pdf))
-        y = 750
-        for line in content.splitlines():
-            c.drawString(50, y, line[:90])
-            y -= 15
-            if y < 50:
-                c.showPage()
-                y = 750
-        c.save()
-        LOGGER.info(f"Converted TXT to PDF using ReportLab Canvas fallback: {out_pdf}")
+        from PIL import Image, ImageDraw
+        lines = content.splitlines() or [""]
+        line_height = 22
+        padding = 40
+        width = 612  # Standard Letter width in points
+        height = max(792, padding * 2 + len(lines) * line_height)
+        img = Image.new("RGB", (width, height), color=(255, 255, 255))
+        draw = ImageDraw.Draw(img)
+
+        y = padding
+        for line in lines:
+            draw.text((padding, y), line, fill=(0, 0, 0))
+            y += line_height
+
+        img.save(str(out_pdf), "PDF", resolution=100.0)
+        LOGGER.info(f"Converted TXT to PDF using PIL fallback: {out_pdf}")
         return out_pdf
     except Exception as exc:
         raise RuntimeError(f"Failed converting TXT to PDF: {exc}")
