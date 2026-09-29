@@ -1,274 +1,292 @@
 <div align="center">
 
-# 🧠 Blinky — AI Desktop Tutor, Autonomous Agent & Workstation Companion
+<img src="https://raw.githubusercontent.com/KingSahil/Blinky/main/common/src-tauri/icons/Square150x150Logo.png" alt="Blinky logo">
 
-> An offline-first, privacy-respecting AI desktop tutor and remote workstation companion that reads your screen, guides you visually, runs background headless computer automation via Hermes `cua-driver`, bridges to mobile over encrypted WebSocket, and synchronizes with physical IoT hardware.
+# Blinky
 
-<br>
+### The AI desktop tutor that sees your screen, talks you through it, and can do it for you.
 
-### _Ask. Learn. Automate. Control from Anywhere._
-
-<br>
-
-<p align="center">
-<img src="https://img.shields.io/badge/Hackathon-AssemblyAI%20Voice%20Agent-blueviolet?style=for-the-badge">
-<img src="https://img.shields.io/badge/Tauri-2.x-orange?style=for-the-badge">
-<img src="https://img.shields.io/badge/React-19-61dafb?style=for-the-badge">
-<img src="https://img.shields.io/badge/Bun-1.3.14-f9f1e1?style=for-the-badge">
-<img src="https://img.shields.io/badge/Python-3.11-yellow?style=for-the-badge">
-</p>
-
-<p align="center">
-<img src="https://img.shields.io/badge/Playwright-Edge-green?style=for-the-badge">
-<img src="https://img.shields.io/badge/Ollama-gemma4:e4b-green?style=for-the-badge">
-<img src="https://img.shields.io/badge/Groq-Llama4Scout-purple?style=for-the-badge">
-<img src="https://img.shields.io/badge/OCR-Windows%20OCR-blue?style=for-the-badge">
-</p>
+Offline-first · Voice-driven · Screen-aware · Controllable from your phone
 
 <br>
 
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Android-blue)
-![License](https://img.shields.io/badge/license-MIT-purple)
+[![Demo](https://img.shields.io/badge/Watch_Demo-YouTube-red?style=for-the-badge)](https://youtu.be/CHFF9J_Jqgw)
+[![Website](https://img.shields.io/badge/Website-blinky.base44.app-6C47FF?style=for-the-badge)](https://blinky.base44.app)
+[![Pitch Deck](https://img.shields.io/badge/Pitch_Deck-Google_Slides-4285F4?style=for-the-badge)](https://docs.google.com/presentation/d/10isbvsbzb3Xm2RzeHyaA_FQqcjUTUzRipflrhuyABRY/edit)
+[![Blog](https://img.shields.io/badge/Blog-Medium-000000?style=for-the-badge)](https://medium.com/@khannasparsh0001/building-blinky-fighting-captchas-invisible-windows-and-the-agony-of-visualizing-ai-b1247b9fc324?sharedUserId=khannasparsh0001)
+
+<br>
+
+![Tauri](https://img.shields.io/badge/Tauri-2.x-FFC131?logo=tauri&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![Bun](https://img.shields.io/badge/Bun-1.3+-F9F1E1?logo=bun&logoColor=black)
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![Ollama](https://img.shields.io/badge/Ollama-gemma4:e4b-black?logo=ollama&logoColor=white)
+![Platform](https://img.shields.io/badge/Windows%20%7C%20Linux%20%7C%20Android-supported-blue)
+![License](https://img.shields.io/badge/License-MIT-green)
 
 </div>
 
----
+<br>
 
-## 🎙️ AssemblyAI - Voice Agent Hackathon Submission
-
-This project is submitted to the **AssemblyAI - Voice Agent Hackathon**, a month-long online challenge (Sep 1–30, 2026) run by lablab.ai together with AssemblyAI. 
-
-**Hackathon Highlights:**
-- 🌎 **Online Hackathon:** Fully online challenge connecting innovators globally.
-- 💻 **Challenge:** Building the fastest path to a working voice agent using AssemblyAI infrastructure.
-- 🏆 **Prize Pool:** $10,000 ($5k cash + $5k in AAI credits).
-
-Blinky leverages modern voice AI patterns to create an immersive, screen-aware voice agent that acts as a tutor directly on your desktop.
 
 ---
 
-## 📌 Problem & Domain
+## Table of Contents
 
-Learning complex software (like VS Code, Blender, CAD, or system configurations) typically involves constant context switching between tutorials, video timestamps, static manuals, and the application workspace. This induces "tutorial hell" and stalls productivity.
-
-Blinky brings the learning experience directly into the active application. By capturing the screen, running local OCR + Windows UIA, and leveraging local or cloud LLMs alongside powerful voice features, Blinky guides users step-by-step with real-time visual highlights directly on their screen.
-
----
-
-## 🎯 Objective
-
-Blinky serves students, developers, and general users learning to navigate desktop software.
-
-- **Target Users**: Software learners, junior developers, and remote users looking for hands-on, contextual guide steps.
-- **Pain Point**: Context-switching, static text manuals, video pacing issues, and lack of visual mapping.
-- **Value Provided**: Real-time visual overlay highlighting on the actual screen, hands-free desktop autopilot execution, and a fully interactive voice interface.
+- [Overview](#overview)
+- [Features](#features)
+- [How It Works](#how-it-works)
+- [Tech Stack](#tech-stack)
+- [Getting Started](#getting-started)
+- [Project Structure](#project-structure)
+- [Security and Privacy](#security-and-privacy)
+- [Documentation](#documentation)
+- [Team](#team)
+- [Acknowledgements](#acknowledgements)
 
 ---
 
-## 🧠 Team
+## Overview
 
-### Team Name:  
-`Tech Nerds`
+Learning complex software such as VS Code, Blender, or CAD tools usually means bouncing between tutorials, video timestamps, and the app itself. That constant context switching is what people call *tutorial hell*.
 
-### Team Members:  
-- **Sparsh Khanna** (GitHub: [KhannaSparsh0001](https://github.com/KhannaSparsh0001) / Role: Voice & UI-UX Architect)
-- **Sahil** (GitHub: [KingSahil](https://github.com/KingSahil) / Role: Backend & Tauri Developer)
-- **FeV-06** (GitHub: [FeV-06](https://github.com/FeV-06) / Role: Mobile and Linux Developer)
-- **meharwanfr** (GitHub: [meharwanfr](https://github.com/meharwanfr) / Role: Linux Developer)
+**Blinky brings the tutor into the app.** It captures your screen, reads it with OCR and Windows UI Automation, and guides you step by step with live highlights drawn directly over the real interface. Ask by voice, follow the glowing hints, or let Blinky take the wheel with hands-free automation.
 
----
-
-## 🛠️ Tech Stack
-
-### Core Technologies Used:
-
-| Component                            | Technology                                         |
-| ------------------------------------ | -------------------------------------------------- |
-| **Desktop Framework**                | Tauri 2 (Rust desktop shell)                       |
-| **Frontend**                         | React 19 + TypeScript                              |
-| **Backend Runtime**                  | Python 3.11+                                       |
-| **AI Runtime**                       | Ollama (Local)                                     |
-| **AI Model**                         | `gemma4:e4b`                                       |
-| **Cloud AI (optional)**              | Groq — `llama-3.3-70b-versatile`                   |
-| **OCR**                              | Windows OCR API (WinRT), Falls back to pytesseract |
-| **Screen Capture**                   | `dxcam` (DirectX-based high-frame capture)         |
-| **Window Detection**                 | `pywinauto`                                        |
-| **Browser Automation**               | Playwright + Microsoft Edge                        |
-| **Overlay System**                   | Transparent Tauri Window                           |
-| **Hosting & Prototyping**            | Base44 App Hosting (blinky.base44.app)             |
-| **Voice Agent / STT**                | AssemblyAI Voice Agent API & Real-time STT API     |
-| **TTS (Fallback)**                   | AssemblyAI Voice Output                            |
+| | |
+|---|---|
+| **Who it's for** | Students, junior developers, and anyone learning unfamiliar desktop software |
+| **The problem** | Static manuals, video pacing, and no visual link between instructions and the screen |
+| **The solution** | Real-time overlay guidance, voice control, and optional autopilot execution |
 
 ---
 
-## ✨ Key Features
+## Features
 
-### 🎙️ AssemblyAI Hackathon Coverage
-This project deeply integrates AssemblyAI to fulfill both major paths of the hackathon challenge:
+### Voice Agent (AssemblyAI)
 
-1. **Voice Agent API (End-to-End Voice Agent)**
-   - **Full Voice Stack**: Uses AssemblyAI for STT (Universal-3.5 Pro), LLM routing, turn-taking, VAD, and voice output.
-   - **JSON-Schema Tool Calling**: Enables the AssemblyAI Voice Agent to actuate and command the PC desktop. When a user asks to click an icon or search the screen, AssemblyAI sends a `tool.call` (`control_desktop`), Blinky executes native Windows UI automation, and returns a `tool.result` for AssemblyAI to speak back the status.
+- **Full voice stack**: speech-to-text (Universal-3 Pro), turn-taking, voice activity detection, and spoken replies.
+- **Desktop tool calling**: the voice agent sends a JSON-schema `tool.call` (`control_desktop`), Blinky runs native Windows UI automation, then returns a `tool.result` so the agent can speak the outcome.
+- **Realtime STT**: 16 kHz PCM16 audio streams to AssemblyAI's WebSocket API for sub-second transcripts, which feed Blinky's local multi-agent tutor pipeline.
+- **Synchronized readback**: the active word highlights in step with the spoken audio.
 
-2. **Realtime Speech-to-Text API**
-   - **Sub-second Transcription**: Live streaming of 16 kHz PCM16 audio directly to `wss://streaming.assemblyai.com/v3/ws`.
-   - **Bring Your Own Orchestration**: Feeds live Universal-3 Pro transcripts into Blinky's local desktop multi-agent tutor pipeline.
+### Screen-Aware Tutoring
 
-### 🗣️ Voice-Driven Agent Mode (Computer Use)
-Activate the 🤖 agent mode using voice commands to perform direct computer-use actions without requiring you to click anything:
-- **Open any app** — uses app protocol URIs, known executable paths, Windows Start Apps, and Windows Search.
-- **Play Spotify tracks** — searches and resolves tracks to open directly in the Spotify desktop app.
-- **Press keyboard shortcuts** — parses natural-language shortcut descriptions (`Ctrl+S`, `Alt+H`) and executes them via `pywinauto`.
+- **Visual overlay**: a transparent Tauri window draws highlights and a companion cursor over the real application.
+- **Flicker-free capture**: `SetWindowDisplayAffinity` hides Blinky's own overlay from screenshots, so the model sees a clean screen while you still see Blinky.
+- **Hybrid perception**: Windows OCR (with a `pytesseract` fallback), Windows UIA, and Microsoft OmniParser for bounding-box grounding.
 
-### 🎧 Audio-Synchronized Visual Highlighting
-- Dynamic **Real-time Word Highlighting**: Fades out unspoken text, highlighting the active word dynamically as the AssemblyAI synthesized readback plays in sync with the audio duration timeline.
-- Fully integrated speech-to-text dictation and text-to-speech readbacks via AssemblyAI for seamless hands-free operation.
+### Agent Mode (Computer Use)
 
-### 🧠 Intent Classification (Preflight Router)
-Before any screenshot is taken, Blinky runs a fast **preflight classifier** that routes requests:
-- `DESKTOP_AUTOMATION` — needs screen capture + OCR + AI overlay
-- `OPEN_APP` — directly launches the named app
-- `MEDIA_PLAYBACK` — plays a named song on Spotify
-- `SYSTEM_SHORTCUT` — presses a keyboard shortcut
-- `INFORMATIONAL_CHAT` — answers without any screen capture
+Voice-activated actions that need no clicking:
 
-### 🛡️ Dynamic Capture Exclusion (Flicker-Free Mode)
-- Excludes Blinky's overlay window from screenshots programmatically using `SetWindowDisplayAffinity`.
-- Blinky remains fully visible to you, but the screenshot sent to the AI model is completely clean.
+| Action | What Blinky does |
+|---|---|
+| **Open any app** | Uses protocol URIs, known executable paths, Start Apps, and Windows Search |
+| **Play music** | Resolves a track and opens it directly in the Spotify desktop app |
+| **Press shortcuts** | Parses natural language like "Ctrl+S" and executes it via `pywinauto` |
+| **Autopilot** | Runs a bounded observe-act loop, driven in the background by Hermes `cua-driver` |
+
+### Preflight Intent Router
+
+Before any screenshot is taken, a fast classifier decides what the request actually needs:
+
+| Intent | Behavior |
+|---|---|
+| `DESKTOP_AUTOMATION` | Screen capture, OCR, and AI overlay |
+| `OPEN_APP` | Launches the named app directly |
+| `MEDIA_PLAYBACK` | Plays a named song on Spotify |
+| `SYSTEM_SHORTCUT` | Presses a keyboard shortcut |
+| `INFORMATIONAL_CHAT` | Answers with no screen capture at all |
+
+### Mobile Companion and Hardware
+
+- **Remote workstation control** from an Expo / React Native app over an authenticated, encrypted WebSocket.
+- **System screen**: hardware telemetry, power controls, and Wake-on-LAN.
+- **Files screen**: remote PC file explorer and camera roll sync.
+- **ESP32 firmware**: ambient lighting synchronized with the desktop.
+- **WhatsApp automation**: headless Chromium WhatsApp Web backend.
 
 ---
 
-## 📽️ Demo & Deliverables
+## How It Works
 
-- **Demo Video Link:** [Youtube Video](https://youtu.be/CHFF9J_Jqgw)
-- **Deployment Link:** [blinky.base44.app](https://blinky.base44.app) (Landing Page & Releases) 
-- **Pitch Deck / PPT:** [Blinky Deck](https://docs.google.com/presentation/d/10isbvsbzb3Xm2RzeHyaA_FQqcjUTUzRipflrhuyABRY/edit)
-- **Blog:** [Building Blinky: Fighting CAPTCHAs, Invisible Windows, and the Agony of Visualizing AI](https://medium.com/@khannasparsh0001/building-blinky-fighting-captchas-invisible-windows-and-the-agony-of-visualizing-ai-b1247b9fc324?sharedUserId=khannasparsh0001) 
+```mermaid
+flowchart LR
+    U([User]) -->|voice| CB[Command Bar<br/>React 19]
+    CB <-->|WebSocket| AAI[AssemblyAI<br/>Voice Agent + STT]
+    CB --> T[Tauri 2 Shell<br/>Rust]
+    T <--> PY[Python Daemon<br/>Orchestrator]
+    PY --> R{Intent<br/>Router}
+    R -->|screen help| OCR[Capture + OCR<br/>+ UIA]
+    R -->|actions| CUA[cua-driver<br/>Actuator]
+    R -->|chat| LLM
+    OCR --> LLM[Ollama gemma4:e4b<br/>or Groq]
+    LLM --> OV[Transparent Overlay<br/>Highlights]
+    M([Mobile App]) <-->|WSS :9001<br/>token auth| T
+    T -.-> ESP[(ESP32)]
+```
 
 ---
 
-## 🧪 How to Run the Project
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| **Desktop shell** | Tauri 2 (Rust) |
+| **Frontend** | React 19 + TypeScript |
+| **Backend** | Python 3.11+ |
+| **Voice / STT / TTS** | AssemblyAI Voice Agent API and Realtime STT |
+| **Local AI** | Ollama with `gemma4:e4b` |
+| **Cloud AI (optional)** | Groq, `llama-3.3-70b-versatile` |
+| **OCR** | Windows OCR (WinRT), falls back to `pytesseract` |
+| **Screen capture** | `dxcam` (DirectX) |
+| **Window detection** | `pywinauto` |
+| **Browser automation** | Playwright + Microsoft Edge |
+| **Actuation** | Hermes `cua-driver` |
+| **Mobile** | Expo SDK 57 / React Native 0.86 |
+| **Hosting** | Base44 (landing page and releases) |
+
+---
+
+## Getting Started
 
 ### Prerequisites
-- **Bun** 1.3+
-- **Rust** Stable
-- **Python** 3.11+
-- **Node.js** & **Expo CLI** (for mobile companion)
-- **Ollama** (optional, for local offline inference)
-- **Docker** (optional, for local SearXNG search)
 
----
+| Tool | Version | Required |
+|---|---|---|
+| Bun | 1.3+ | Yes |
+| Rust | Stable | Yes |
+| Python | 3.11+ | Yes |
+| Node.js + Expo CLI | Latest | For mobile companion |
+| Ollama | Latest | For local offline inference |
+| Docker | Latest | For local SearXNG search |
 
-### 1️⃣ Setup Desktop Core (One-Click)
+### 1. Set up the desktop core
 
-#### Windows (Recommended):
+The setup script checks your toolchain, installs packages, builds the Python `.venv`, installs Playwright browsers, and creates your `.env`.
+
+**Windows (recommended)**
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File setup.ps1
-# or: bun run setup
+# or
+bun run setup
 ```
-*Checks Bun/Rust/Python, installs npm packages, builds Python `.venv`, installs Playwright browsers, and initializes `.env`.*
 
-#### Linux:
+**Linux**
+
 ```bash
 chmod +x setup.sh && ./setup.sh
 ```
 
-### 2️⃣ Start Blinky
+### 2. Run Blinky
+
 ```bash
 bun run dev
 ```
 
-- **Main Hotkey**: `CTRL + SHIFT + SPACE`
-- **Fallback Hotkey**: `CTRL + SHIFT + ENTER`
+| Hotkey | Action |
+|---|---|
+| `Ctrl` + `Shift` + `Space` | Main hotkey |
+| `Ctrl` + `Shift` + `Enter` | Fallback hotkey |
 
-*(Optional) Start local SearXNG search engine:*
+Optional local search engine:
+
 ```bash
 docker compose -f common/docker-compose.yml up -d
 ```
 
----
-
-### 3️⃣ Start Mobile Companion (`common/mobile`)
+### 3. Run the mobile companion
 
 ```bash
 cd common/mobile
 bun install
 bun run start
 ```
-- Scan the QR code using Expo Go or run on a connected Android phone:
-```bash
-# Connect via USB port forwarding
-connect_usb.bat
 
-# Install standalone APK directly
-install_apk.bat
+Scan the QR code with Expo Go, or use a connected Android phone:
+
+```bash
+connect_usb.bat    # USB port forwarding
+install_apk.bat    # install the standalone APK
 ```
 
 ---
 
-## 📂 Project Structure
+## Project Structure
 
 ```text
 Blinky/
 ├── common/
-│   ├── src-tauri/                   Tauri 2 Rust shell, WS gateway (:9001), Windows Credential DLL
-│   │   ├── src/lib.rs               Window affinity, hotkeys, and secure WebSocket server
-│   │   └── tauri.conf.json          Tauri window and strict CSP security configuration
-│   │
-│   ├── frontend/src/                React 19 desktop webview UI
-│   │   ├── CommandBar.tsx           Primary floating command hub & voice synthesizer
-│   │   ├── Overlay.tsx              Transparent screen highlight & companion cursor layer
-│   │   └── lib/autopilot.ts         Observe-act bounded autopilot execution loop
-│   │
-│   ├── mobile/                      Expo SDK 57 / React Native 0.86 companion app
-│   │   ├── App.tsx                  Dashboard, tab router, and WebSocket subscriber
-│   │   ├── components/              Modular UI screens
-│   │   │   ├── SystemScreen.tsx     Sentinel hardware telemetry, power controls, and WoL
-│   │   │   ├── FilesScreen.tsx      Remote PC file explorer & camera roll sync
-│   │   │   ├── PromoCodeModal.tsx   Offline voucher bypass sheet
-│   │   │   ├── SlashCommandMenu.tsx Antigravity IDE slash command bar
-│   │   │   └── BottomNavigation.tsx Tab navigation with Pro lock indicators
-│   │   ├── lib/purchases.ts         RevenueCat SDK + Offline Promo Code Engine
-│   │   ├── usePCWebSocket.ts        Duplex WSS transport with ?token= authentication
-│   │   └── eas.json                 EAS standalone Android APK build profiles
-│   │
-│   └── python/                      Python 3.11 AI & automation daemon
-│       ├── main.py                  Screen tutor orchestrator and preflight intent classifier
-│       ├── computer_use/            Actuation engine
-│       │   ├── backends/cua_driver.py cua-driver (Hermes) background desktop actuator
-│       │   ├── backends/base.py     Platform-neutral computer-use abstractions
-│       │   └── tools.py             Desktop automation tools (app launch, shortcuts, Spotify)
-│       ├── ai/                      Model provider routing (Groq Llama 3.3 / Ollama gemma4)
-│       ├── ocr/                     Microsoft OmniParser and WinRT OCR extraction
-│       └── whatsapp_backend/        Headless Chromium WhatsApp Web automation
-│
-├── esp32_firmware/                  ESP32 universal micro-daemon for ambient lighting sync
-├── docs/                            Comprehensive architecture, Hermes plan, and security guides
-│   ├── HERMES-INTEGRATION-PLAN.md   Detailed cua-driver actuator documentation
-│   ├── LINUX-PORT-ROADMAP.md        Wayland/X11 Linux porting progress
-│   ├── SECURITY-REMEDIATION.md      WebSocket auth hardening & CSP policy
-│   ├── history.md                   Full post-100 commits architectural evolution
-│   └── REVENUECAT-AND-ANDROID-DISTRIBUTION-GUIDE.md  RevenueCat audit & APK packaging guide
-│
-├── setup.ps1                        Automated Windows installation script
-└── setup.sh                         Automated Linux installation script
+│   ├── src-tauri/          Tauri 2 Rust shell, WS gateway (:9001), Windows Credential DLL
+│   ├── frontend/src/       React 19 webview
+│   │   ├── CommandBar.tsx    Floating command hub and voice synthesizer
+│   │   ├── Overlay.tsx       Transparent highlight and companion cursor layer
+│   │   └── lib/autopilot.ts  Bounded observe-act execution loop
+│   ├── mobile/             Expo companion app (dashboard, System, Files, transport)
+│   └── python/             AI and automation daemon
+│       ├── main.py           Orchestrator and preflight intent classifier
+│       ├── computer_use/     Actuation engine (cua-driver backend, tools)
+│       ├── ai/               Model routing (Groq / Ollama)
+│       ├── ocr/              OmniParser and WinRT OCR
+│       └── whatsapp_backend/ Headless WhatsApp Web automation
+├── esp32_firmware/         ESP32 ambient lighting micro-daemon
+├── docs/                   Architecture, Hermes plan, Linux roadmap, security guides
+├── setup.ps1               Windows installer
+└── setup.sh                Linux installer
 ```
 
 ---
 
-## 🔒 Security & Privacy
+## Security and Privacy
 
-- **Authenticated WebSocket Transport**: Every command sent from the mobile companion requires secret token verification (`?token=`), hardened against unauthorized LAN access.
-- **Strict Content Security Policy (CSP)**: Tauri webview CSP strictly prevents credential exfiltration.
-- **Automated Firewall Rules**: Windows NSIS installer automatically configures restrictive inbound firewall rules for port `9001`.
-- **Local Processing**: Offline-first screen OCR via Windows WinRT and local LLM inference via Ollama ensure zero screenshots leave your machine unless cloud Groq inference is explicitly enabled.
+| Protection | Details |
+|---|---|
+| **Authenticated transport** | Every mobile command requires a secret `?token=`, hardened against unauthorized LAN access |
+| **Strict CSP** | The Tauri webview policy prevents credential exfiltration |
+| **Firewall rules** | The Windows NSIS installer adds restrictive inbound rules for port `9001` |
+| **Local-first processing** | WinRT OCR and Ollama inference keep screenshots on your machine unless you explicitly enable cloud Groq inference |
 
 ---
 
-## 📎 Resources & Credits
+## Documentation
 
-- **Actuation**: Built on [cua-driver](https://github.com/nousresearch) by Nous Research.
-- **Voice**: [Sarvam AI](https://sarvam.ai) for multilingual speech-to-text (`saaras:v3`) and text-to-speech (`bulbul:v3`).
-- **Vision**: Microsoft OmniParser for bounding-box grounding and DirectX `dxcam` for high-speed capture.
-- **Mobile**: Built with [Expo](https://expo.dev) and [React Native](https://reactnative.dev).
-- **Desktop**: Powered by [Tauri 2](https://v2.tauri.app) and [React 19](https://react.dev).
+| Guide | Topic |
+|---|---|
+| [`HERMES-INTEGRATION-PLAN.md`](docs/HERMES-INTEGRATION-PLAN.md) | `cua-driver` actuator design |
+| [`LINUX-PORT-ROADMAP.md`](docs/LINUX-PORT-ROADMAP.md) | Wayland / X11 porting progress |
+| [`SECURITY-REMEDIATION.md`](docs/SECURITY-REMEDIATION.md) | WebSocket auth hardening and CSP |
+| [`history.md`](docs/history.md) | Architectural evolution after the first 100 commits |
+| [`REVENUECAT-AND-ANDROID-DISTRIBUTION-GUIDE.md`](docs/REVENUECAT-AND-ANDROID-DISTRIBUTION-GUIDE.md) | RevenueCat audit and APK packaging |
+
+---
+
+## Team
+
+**Tech Nerds**
+
+| Member | Role | GitHub |
+|---|---|---|
+| Sparsh Khanna | Voice and UI/UX Architect | [@KhannaSparsh0001](https://github.com/KhannaSparsh0001) |
+| Sahil | Backend and Tauri Developer | [@KingSahil](https://github.com/KingSahil) |
+| FeV-06 | Mobile and Linux Developer | [@FeV-06](https://github.com/FeV-06) |
+| meharwanfr | Linux Developer | [@meharwanfr](https://github.com/meharwanfr) |
+
+---
+
+## Acknowledgements
+
+- [AssemblyAI](https://www.assemblyai.com) for the Voice Agent and Realtime STT APIs
+- [cua-driver](https://github.com/nousresearch) by Nous Research for background desktop actuation
+- [Sarvam AI](https://sarvam.ai) for multilingual speech (`saaras:v3`, `bulbul:v3`)
+- [Microsoft OmniParser](https://github.com/microsoft/OmniParser) and `dxcam` for vision and capture
+- [Tauri](https://v2.tauri.app), [React](https://react.dev), [Expo](https://expo.dev), and [React Native](https://reactnative.dev)
+
+---
+
+<div align="center">
+
+Released under the MIT License.
+
+**Ask. Learn. Automate. Control from anywhere.**
