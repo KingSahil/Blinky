@@ -17,6 +17,7 @@ use tokio::io::{
     AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
 };
 use tokio::net::TcpListener;
+use tokio::process::Command;
 use tokio::sync::{mpsc::UnboundedSender, Mutex, Semaphore};
 use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
@@ -213,18 +214,12 @@ async fn offer_file(app: &AppHandle, message: &Value, sender: ClientSender) {
         ));
         return;
     }
-    let destination_dir = match resolve_destination(
+    let (destination_dir, destination_warning) = resolve_ai_destination(
+        app,
         message.get("destinationPath").and_then(Value::as_str),
+        message.get("destinationHint").and_then(Value::as_str),
         &root,
-    ) {
-        Ok(path) => path,
-        Err(error) => {
-            fail(&format!(
-                "The PC destination folder is unavailable: {error}"
-            ));
-            return;
-        }
-    };
+    ).await;
     let edit_requested = message.get("purpose").and_then(Value::as_str) == Some("edit");
     let required_space = if edit_requested {
         size.saturating_mul(2)
@@ -319,8 +314,68 @@ async fn offer_file(app: &AppHandle, message: &Value, sender: ClientSender) {
             "chunkSize": MAX_CHUNK_BYTES,
             "expiresInSeconds": SESSION_TTL.as_secs(),
             "destinationPath": destination_dir.to_string_lossy(),
+            "destinationWarning": destination_warning,
         }),
     );
+}
+
+async fn resolve_ai_destination(
+    app: &AppHandle,
+    requested: Option<&str>,
+    hint: Option<&str>,
+    default_dir: &Path,
+) -> (PathBuf, Option<String>) {
+    if let Some(path) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+        return match resolve_destination(Some(path), default_dir) {
+            Ok(path) => (path, None),
+            Err(_) => (default_dir.to_path_buf(), Some("I couldn't access the requested PC folder, so I saved the files in Downloads\\Blinky.".to_string())),
+        };
+    }
+    let Some(instruction) = hint.map(str::trim).filter(|value| !value.is_empty()) else {
+        return (default_dir.to_path_buf(), None);
+    };
+
+    let roots: Vec<String> = [
+        app.path().desktop_dir(), app.path().document_dir(), app.path().download_dir(),
+        app.path().picture_dir(), app.path().video_dir(), app.path().audio_dir(),
+        app.path().home_dir(),
+    ].into_iter().filter_map(Result::ok).map(|path| path.to_string_lossy().into_owned()).collect();
+    let root = crate::websocket::project_root();
+    let python = crate::websocket::python_executable(&root);
+    let script = root.join("common").join("python").join("file_destination_ai.py");
+    let mut command = Command::new(python);
+    command.kill_on_drop(true);
+    command.arg(script).current_dir(&root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .envs(crate::websocket::read_env_file(&root));
+    let result = async {
+        let mut child = command.spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(json!({"instruction": instruction, "roots": roots}).to_string().as_bytes()).await?;
+        }
+        child.wait_with_output().await
+    };
+    let warning = "I couldn't find the requested PC folder, so I saved the files in Downloads\\Blinky.";
+    let output = match timeout(Duration::from_secs(55), result).await {
+        Ok(Ok(output)) if output.status.success() => output,
+        _ => return (default_dir.to_path_buf(), Some(warning.to_string())),
+    };
+    let response: Value = match serde_json::from_slice(&output.stdout) {
+        Ok(value) => value,
+        Err(_) => return (default_dir.to_path_buf(), Some(warning.to_string())),
+    };
+    if response.get("reason").and_then(Value::as_str) == Some("no_folder_requested") {
+        return (default_dir.to_path_buf(), None);
+    }
+    let Some(path) = response.get("path").and_then(Value::as_str) else {
+        return (default_dir.to_path_buf(), Some(warning.to_string()));
+    };
+    match resolve_destination(Some(path), default_dir) {
+        Ok(path) => (path, None),
+        Err(_) => (default_dir.to_path_buf(), Some(warning.to_string())),
+    }
 }
 
 async fn resume_file(message: &Value, sender: ClientSender) {

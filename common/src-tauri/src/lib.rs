@@ -178,6 +178,7 @@ fn show_overlay(app: AppHandle) -> Result<(), String> {
 fn hide_overlay(app: AppHandle) -> Result<(), String> {
     if let Some(overlay) = app.get_webview_window("overlay") {
         let _ = overlay.emit("blinky://guidance", serde_json::json!({ "steps": [] }));
+        overlay.hide().map_err(|err| err.to_string())?;
     }
     Ok(())
 }
@@ -1061,13 +1062,13 @@ pub fn run() {
             if let Some(overlay) = app.get_webview_window("overlay") {
                 configure_overlay_passthrough(&overlay);
                 let _ = overlay.emit("blinky://guidance", serde_json::json!({ "steps": [] }));
-                let _ = overlay.show();
-                configure_overlay_passthrough(&overlay);
             }
 
-            if let Some(command) = app.get_webview_window("command") {
-                let _ = command.show();
-                let _ = command.set_focus();
+            if std::env::var("BLINKY_BACKGROUND_SERVER").ok().as_deref() != Some("1") {
+                if let Some(command) = app.get_webview_window("command") {
+                    let _ = command.show();
+                    let _ = command.set_focus();
+                }
             }
 
             let app_handle = app.handle().clone();

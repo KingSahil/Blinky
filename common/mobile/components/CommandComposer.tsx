@@ -12,6 +12,7 @@ import {
   UIManager,
   Image,
   Alert,
+  ScrollView,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -19,20 +20,18 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { colors, typography, radius, spacing } from '../theme/theme';
 import type { AttachedFile } from '../types';
-import { readUriAsBase64 } from '../lib/fileTransfer';
 
 // LayoutAnimation works automatically on Android Fabric (New Architecture)
 
 interface CommandComposerProps {
   queryText: string;
   setQueryText: (text: string) => void;
-  onSubmit: (file?: AttachedFile | null) => void;
+  onSubmit: (files: AttachedFile[]) => void;
   onStop: () => void;
   status: 'idle' | 'processing' | 'success' | 'error';
   isConnected: boolean;
   onPeekImage?: (uri: string) => void;
   onCaptureScreenshot?: () => void;
-  onSendFilesToPC: () => void;
 
   // Voice recording
   isVoiceRecording: boolean;
@@ -50,13 +49,12 @@ export function CommandComposer({
   isConnected,
   onPeekImage,
   onCaptureScreenshot,
-  onSendFilesToPC,
   isVoiceRecording,
   isVoiceTranscribing,
   onToggleVoice
 }: CommandComposerProps) {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
-  const [attachedFile, setAttachedFile] = useState<AttachedFile | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [recordingDuration, setRecordingDuration] = useState(0);
 
   const attachAnim = useRef(new Animated.Value(0)).current;
@@ -88,6 +86,14 @@ export function CommandComposer({
     setShowAttachMenu(!showAttachMenu);
   };
 
+  const appendAttachments = (files: AttachedFile[]) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setAttachedFiles(previous => {
+      const existing = new Set(previous.map(file => file.uri));
+      return [...previous, ...files.filter(file => !existing.has(file.uri))];
+    });
+  };
+
   const handleAttachOption = async (option: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setShowAttachMenu(false);
@@ -103,84 +109,53 @@ export function CommandComposer({
           mediaTypes: ['images'],
           allowsEditing: false,
           quality: 0.7,
-          base64: true,
+          base64: false,
         });
         if (!result.canceled && result.assets && result.assets.length > 0) {
           const asset = result.assets[0];
           const sizeMB = asset.fileSize ? Number((asset.fileSize / (1024 * 1024)).toFixed(2)) : undefined;
-          let b64 = asset.base64;
-          if (!b64 && asset.uri) {
-            try {
-              b64 = await readUriAsBase64(asset.uri);
-            } catch (readErr) {
-              console.warn('Failed to read camera photo base64:', readErr);
-            }
-          }
-          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-          setAttachedFile({
+          appendAttachments([{
             uri: asset.uri,
             name: asset.fileName || `Photo_${Date.now()}.jpg`,
             size: sizeMB,
             type: 'image',
             mimeType: asset.mimeType || 'image/jpeg',
-            base64: b64 || undefined,
-          });
+          }]);
         }
       } else if (option === 'Image') {
         const result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ['images'],
           allowsEditing: false,
+          allowsMultipleSelection: true,
           quality: 0.7,
-          base64: true,
+          base64: false,
         });
         if (!result.canceled && result.assets && result.assets.length > 0) {
-          const asset = result.assets[0];
-          const sizeMB = asset.fileSize ? Number((asset.fileSize / (1024 * 1024)).toFixed(2)) : undefined;
-          let b64 = asset.base64;
-          if (!b64 && asset.uri) {
-            try {
-              b64 = await readUriAsBase64(asset.uri);
-            } catch (readErr) {
-              console.warn('Failed to read image library base64:', readErr);
-            }
-          }
-          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-          setAttachedFile({
+          appendAttachments(result.assets.map(asset => ({
             uri: asset.uri,
             name: asset.fileName || `Image_${Date.now()}.jpg`,
-            size: sizeMB,
+            size: asset.fileSize ? Number((asset.fileSize / (1024 * 1024)).toFixed(2)) : undefined,
             type: 'image',
             mimeType: asset.mimeType || 'image/jpeg',
-            base64: b64 || undefined,
-          });
+          })));
         }
       } else if (option === 'File') {
         const result = await DocumentPicker.getDocumentAsync({
           type: '*/*',
           copyToCacheDirectory: true,
+          multiple: true,
         });
         if (!result.canceled && result.assets && result.assets.length > 0) {
-          const asset = result.assets[0];
-          const sizeMB = asset.size ? Number((asset.size / (1024 * 1024)).toFixed(2)) : undefined;
-          let b64: string | undefined = undefined;
-          if (asset.uri) {
-            try {
-              b64 = await readUriAsBase64(asset.uri);
-            } catch (readErr) {
-              console.warn('Failed to read document/file base64:', readErr);
-            }
-          }
-          const isImg = asset.mimeType?.startsWith('image/') || /\.(jpe?g|png|webp|gif)$/i.test(asset.name);
-          const isVid = asset.mimeType?.startsWith('video/') || /\.(mp4|mov|mkv|avi|webm)$/i.test(asset.name);
-          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-          setAttachedFile({
+          appendAttachments(result.assets.map(asset => ({
             uri: asset.uri,
             name: asset.name,
-            size: sizeMB,
-            type: isImg ? 'image' : (isVid ? 'video' : 'document'),
+            size: asset.size ? Number((asset.size / (1024 * 1024)).toFixed(2)) : undefined,
+            type: asset.mimeType?.startsWith('image/') || /\.(jpe?g|png|webp|gif)$/i.test(asset.name)
+              ? 'image'
+              : asset.mimeType?.startsWith('video/') || /\.(mp4|mov|mkv|avi|webm)$/i.test(asset.name)
+                ? 'video' : 'document',
             mimeType: asset.mimeType,
-            base64: b64 || undefined,
-          });
+          })));
         }
       } else if (option === 'Screenshot') {
         if (onCaptureScreenshot) {
@@ -193,10 +168,10 @@ export function CommandComposer({
     }
   };
 
-  const handleRemoveAttachment = () => {
+  const handleRemoveAttachment = (uri: string) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setAttachedFile(null);
+    setAttachedFiles(previous => previous.filter(file => file.uri !== uri));
   };
 
   const formatDuration = (seconds: number) => {
@@ -237,21 +212,6 @@ export function CommandComposer({
             <AttachOption icon="camera-outline" label="Camera" sublabel="Take a photo" onPress={() => handleAttachOption('Camera')} />
             <AttachOption icon="desktop-outline" label="Screenshot" sublabel="Capture screen" onPress={() => handleAttachOption('Screenshot')} />
           </View>
-          <TouchableOpacity
-            style={styles.sendToPCOption}
-            onPress={() => {
-              setShowAttachMenu(false);
-              onSendFilesToPC();
-            }}
-            accessibilityLabel="Send files to PC"
-            activeOpacity={0.7}
-          >
-            <Ionicons name="cloud-upload-outline" size={20} color={colors.accent} />
-            <View>
-              <Text style={styles.sendToPCTitle}>Send files to PC</Text>
-              <Text style={styles.sendToPCSubtitle}>Transfer and edit files on your PC</Text>
-            </View>
-          </TouchableOpacity>
         </Animated.View>
       )}
 
@@ -263,8 +223,9 @@ export function CommandComposer({
       ]}>
 
         {/* Attachment Preview (if any) */}
-        {attachedFile && !isVoiceRecording && (
-          <View style={styles.attachmentPreview}>
+        {attachedFiles.length > 0 && !isVoiceRecording && (
+          <ScrollView style={styles.attachmentList} keyboardShouldPersistTaps="handled">
+          {attachedFiles.map(attachedFile => <View key={attachedFile.uri} style={styles.attachmentPreview}>
             <TouchableOpacity
               style={styles.attachmentContentRow}
               activeOpacity={attachedFile.type === 'image' || attachedFile.mimeType?.startsWith('image') ? 0.7 : 1}
@@ -290,10 +251,11 @@ export function CommandComposer({
                 </Text>
               </View>
             </TouchableOpacity>
-            <TouchableOpacity onPress={handleRemoveAttachment} style={styles.attachmentRemove}>
+            <TouchableOpacity onPress={() => handleRemoveAttachment(attachedFile.uri)} style={styles.attachmentRemove}>
               <Ionicons name="close" size={16} color={colors.textSecondary} />
             </TouchableOpacity>
-          </View>
+          </View>)}
+          </ScrollView>
         )}
 
         <View style={styles.inputRow}>
@@ -351,15 +313,13 @@ export function CommandComposer({
           {/* Right: Attach & Send/Stop */}
           {!isVoiceRecording && (
             <View style={styles.rightActions}>
-              {queryText.length === 0 && (
-                <TouchableOpacity
-                  style={styles.attachBtn}
-                  onPress={handleToggleAttach}
-                  activeOpacity={0.7}
-                >
-                  <Ionicons name="attach-outline" size={24} color={colors.textSecondary} style={{ transform: [{ rotate: '45deg' }] }} />
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity
+                style={styles.attachBtn}
+                onPress={handleToggleAttach}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="attach-outline" size={24} color={colors.textSecondary} style={{ transform: [{ rotate: '45deg' }] }} />
+              </TouchableOpacity>
 
               {status === 'processing' ? (
                 <TouchableOpacity
@@ -373,17 +333,17 @@ export function CommandComposer({
                 <TouchableOpacity
                   style={[
                     styles.sendBtn,
-                    (!isConnected || (!queryText.trim() && !attachedFile)) && styles.sendBtnDisabled
+                    (!isConnected || (!queryText.trim() && attachedFiles.length === 0)) && styles.sendBtnDisabled
                   ]}
                   onPress={() => {
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    onSubmit(attachedFile);
-                    setAttachedFile(null);
+                    onSubmit(attachedFiles);
+                    setAttachedFiles([]);
                   }}
-                  disabled={!isConnected || (!queryText.trim() && !attachedFile)}
+                  disabled={!isConnected || (!queryText.trim() && attachedFiles.length === 0)}
                   activeOpacity={0.7}
                 >
-                  <Ionicons name="arrow-up" size={20} color={(!isConnected || (!queryText.trim() && !attachedFile)) ? colors.accent : "#FFFFFF"} />
+                  <Ionicons name="arrow-up" size={20} color={(!isConnected || (!queryText.trim() && attachedFiles.length === 0)) ? colors.accent : "#FFFFFF"} />
                 </TouchableOpacity>
               )}
             </View>
@@ -566,23 +526,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.sm,
   },
-  sendToPCOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-    padding: spacing.sm,
-    borderRadius: radius.md,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  sendToPCTitle: {
-    ...typography.bodySmall,
-    color: colors.textPrimary,
-  },
-  sendToPCSubtitle: {
-    color: colors.textSecondary,
-    fontSize: 11,
-  },
   attachOption: {
     alignItems: 'center',
     width: 72,
@@ -610,6 +553,9 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     color: colors.textMuted,
     fontSize: 9,
+  },
+  attachmentList: {
+    maxHeight: 180,
   },
   attachmentPreview: {
     flexDirection: 'row',

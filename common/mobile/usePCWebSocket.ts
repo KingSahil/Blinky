@@ -23,6 +23,7 @@ export type FileTransferMessage = {
   chunkSize?: number;
   expiresInSeconds?: number;
   destinationPath?: string;
+  destinationWarning?: string;
   complete?: boolean;
   editing?: boolean;
   edited?: boolean;

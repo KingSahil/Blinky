@@ -587,9 +587,7 @@ export default function App() {
     latestResponse,
     systemInfo,
     latestPowerEvent,
-    antigravityApproval,
-    antigravityComplete,
-    antigravityProgress,
+    latestLightEvent,
     quickAccessFolders,
     currentDirectory,
     recentFiles,
@@ -605,6 +603,9 @@ export default function App() {
     readFileForMobile,
     clearFsFileData,
     resetDirectory,
+    antigravityApproval,
+    antigravityComplete,
+    antigravityProgress,
     fileTransferMessage,
     connect,
     disconnect,
@@ -616,7 +617,6 @@ export default function App() {
     dismissAntigravityComplete,
     sendFileTransferMessage,
     getFileTransferModule,
-    latestLightEvent,
   } = usePCWebSocket();
   const [macAddress, setMacAddress] = useState('');
   const [wolBroadcastIp, setWolBroadcastIp] = useState('255.255.255.255');
@@ -633,7 +633,6 @@ export default function App() {
   const [isLightOn, setIsLightOn] = useState<boolean>(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [discoveryProgress, setDiscoveryProgress] = useState<string | null>(null);
-  const [showFileTransfer, setShowFileTransfer] = useState(false);
   const fileTransferPanelRef = useRef<FileTransferPanelRef>(null);
   // Tracks the chat message ID showing live transfer status
   const transferStatusMsgIdRef = useRef<string | null>(null);
@@ -1092,42 +1091,32 @@ export default function App() {
     });
   };
 
-  /** Detect whether the query text is asking to send/upload a file to the PC. */
-  const detectSendToPCIntent = (text: string): boolean => {
-    return /send\s+(it\s+)?to\s+(pc|computer|laptop|desktop|blinky)/i.test(text) ||
-      /upload\s+(it\s+)?to\s+(pc|computer|blinky)/i.test(text) ||
-      /transfer\s+(it\s+)?to\s+(pc|computer|blinky)/i.test(text) ||
-      /\bsend\s+to\s+pc\b/i.test(text) ||
-      /\bsend\s+file\s+to\b/i.test(text);
-  };
-
-  /**
-   * Extract the AiCut instruction from a chat message that also requests a PC transfer.
-   * e.g. "trim from 3 to 20 seconds and send to pc" → "trim from 3 to 20 seconds"
-   */
-  const extractTransferInstruction = (text: string): string => {
-    return text
-      .replace(/,?\s*(and\s+)?((send|upload|transfer)\s+(it\s+)?to\s+(pc|computer|laptop|desktop|blinky))/gi, '')
-      .replace(/^,?\s*(and\s+)?/, '')
+  /** Keep media editing separate from the destination requested in chat. */
+  const extractTransferEdit = (text: string): string => {
+    const match = /\b(trim|cut|merge|crop|rotate|caption|subtitle|speed up|slow down|add background music|remove audio)\b/i.exec(text);
+    if (!match) return '';
+    return text.slice(match.index)
+      .replace(/\s+(?:and\s+)?(?:send|save|put|copy|transfer|upload)\b.*$/i, '')
       .trim();
   };
 
-  const handleQuery = (attachedFile?: AttachedFile | null) => {
+  const handleQuery = (attachedFiles: AttachedFile[] = []) => {
     let query = queryText.trim();
-    if (!query && !attachedFile) {
+    if (!query && attachedFiles.length === 0) {
       triggerHaptic('selection');
       Alert.alert('Empty query', 'Please enter a search/browsing query or attach a file first.');
       return;
     }
 
-    // --- "Send to PC" intent: start a file transfer silently from the chat bar ---
-    if (attachedFile && detectSendToPCIntent(query)) {
-      const instruction = extractTransferInstruction(query);
-      const fileToSend: SelectedFile = {
-        uri: attachedFile.uri,
-        name: attachedFile.name,
-        size: attachedFile.size ? Math.round(attachedFile.size * 1024 * 1024) : undefined,
-      };
+    // Attachments always use the verified streaming transfer path. The PC
+    // resolves the natural-language destination before accepting any bytes.
+    if (attachedFiles.length > 0) {
+      const instruction = extractTransferEdit(query);
+      const filesToSend: SelectedFile[] = attachedFiles.map(file => ({
+        uri: file.uri,
+        name: file.name,
+        size: file.size ? Math.round(file.size * 1024 * 1024) : undefined,
+      }));
 
       // Show a user message in chat
       const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1135,13 +1124,11 @@ export default function App() {
       const statusMsgId = generateUuid();
       transferStatusMsgIdRef.current = statusMsgId;
 
-      const displayText = instruction
-        ? `Sending ${attachedFile.name} to PC — ${instruction}`
-        : `Sending ${attachedFile.name} to PC…`;
+      const displayText = query || `Send ${attachedFiles.length} ${attachedFiles.length === 1 ? 'file' : 'files'} to PC`;
 
       setMessages(prev => [
         ...prev,
-        { id: userMsgId, sender: 'user' as const, text: displayText, timestamp: currentTime, attachedFile },
+        { id: userMsgId, sender: 'user' as const, text: displayText, timestamp: currentTime, attachedFiles },
         {
           id: statusMsgId,
           sender: 'blinky' as const,
@@ -1154,11 +1141,7 @@ export default function App() {
       setQueryText('');
       triggerHaptic('medium');
 
-      // Trigger the transfer in the background via the panel ref.
-      // Pass empty destination so the Rust backend resolves its own default
-      // absolute Downloads/Blinky path — sending a relative string like
-      // "Downloads/Blinky" causes the backend to reject it as non-absolute.
-      fileTransferPanelRef.current?.startTransfer([fileToSend], instruction, '');
+      fileTransferPanelRef.current?.startTransfer(filesToSend, instruction, '', query);
       return;
     }
 
@@ -1184,7 +1167,6 @@ export default function App() {
             sender: 'user',
             text: `⚡ Sent to Antigravity: "${prompt}"`,
             timestamp: currentTime,
-            attachedFile: attachedFile || undefined,
           },
           {
             id: agyMsgId,
@@ -1212,7 +1194,7 @@ export default function App() {
     } else if (query.startsWith('/ask ')) {
       query = query.replace(/^\/ask\s+/i, '').trim();
     }
-    const displayQuery = query || (attachedFile ? `Attached: ${attachedFile.name}` : '');
+    const displayQuery = query;
     setRunningQuery(displayQuery);
     setQueryText('');
     setAgentStatus('processing');
@@ -1232,7 +1214,6 @@ export default function App() {
         sender: 'user',
         text: displayQuery,
         timestamp: currentTime,
-        attachedFile: attachedFile || undefined,
       },
       {
         id: blinkyMsgId,
@@ -1247,21 +1228,7 @@ export default function App() {
       }
     ]);
 
-    const queryToSend = attachedFile
-      ? `[Referenced Files: ${attachedFile.name}] ${query}`.trim()
-      : query;
-    const attachedImage = (attachedFile?.type === 'image' && attachedFile.base64)
-      ? attachedFile.base64
-      : undefined;
-    const attachedFilePayload = attachedFile?.base64
-      ? {
-          name: attachedFile.name,
-          base64: attachedFile.base64,
-          mimeType: attachedFile.mimeType,
-          size: attachedFile.size,
-        }
-      : undefined;
-    const success = sendQuery(queryToSend, generateUuid(), attachedImage, attachedFilePayload);
+    const success = sendQuery(query, generateUuid());
     if (!success) {
       setAgentStatus('error');
       setMessages(prev => prev.map(m => {
@@ -2094,7 +2061,6 @@ export default function App() {
                   setPreviewImageUri(uri);
                 }}
                 onCaptureScreenshot={handleCaptureScreenshot}
-                onSendFilesToPC={() => setShowFileTransfer(true)}
                 isVoiceRecording={isVoiceRecording}
                 isVoiceTranscribing={isVoiceTranscribing}
                 onToggleVoice={toggleVoiceRecording}
@@ -2352,7 +2318,7 @@ export default function App() {
           </Modal>
           <FileTransferPanel
             ref={fileTransferPanelRef}
-            visible={showFileTransfer}
+            visible={false}
             connected={isConnected}
             hostAddress={ipAddress}
             releaseTransport={RELEASE_TRANSPORT}
@@ -2360,7 +2326,7 @@ export default function App() {
             fileTransferMessage={fileTransferMessage}
             sendMessage={sendFileTransferMessage}
             getNativeModule={getFileTransferModule}
-            onClose={() => setShowFileTransfer(false)}
+            onClose={() => {}}
             onTransferStatusChange={(status) => {
               const msgId = transferStatusMsgIdRef.current;
               if (!msgId) return;
