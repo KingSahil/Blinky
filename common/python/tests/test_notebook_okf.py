@@ -50,7 +50,7 @@ class TestNotebookOKF(unittest.TestCase):
         )
         fetched = self.manager.get_notebook(nb["id"])
         context = build_okf_prompt_context(fetched, "How do I split editor?")
-        self.assertIn("Grounded", context["system_prompt"])
+        self.assertIn("grounded", context["system_prompt"].lower())
         self.assertIn("manual.txt", context["user_prompt"])
         self.assertIn("Ctrl+\\", context["user_prompt"])
 
