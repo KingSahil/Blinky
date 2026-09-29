@@ -1,11 +1,12 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo } from 'lucide-react';
+import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import QRCode from 'qrcode';
+import { NotebookView } from './NotebookView';
 import { runAutopilotLoop, extractTextToType, shouldPressEnterAfterTyping, isScrollAction, getScrollDirection, isClickInstruction, isSingleActionQuery, createEmptyTutorResult, getPhysicalClickablePoint } from './lib/autopilot';
 import {
   getCurrentGuideSteps,
@@ -224,6 +225,7 @@ export function CommandBar() {
   const [steps, setSteps] = useState<any[]>([]);
   const [showGuideCompletionSummary, setShowGuideCompletionSummary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showNotebookModal, setShowNotebookModal] = useState(false);
   const [provider, setProvider] = useState('groq');
   const [shortcut, setShortcut] = useState('Enter');
   const defaultAaiKey = (import.meta as any).env?.VITE_ASSEMBLY_AI_API_KEY || '';
@@ -2720,6 +2722,18 @@ export function CommandBar() {
                 >
                   <Bot size={16} />
                 </button>
+                <button
+                  type="button"
+                  className="command-agent-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowNotebookModal(true);
+                  }}
+                  disabled={isRunning || isTranscribing}
+                  title="Open OKF Notebook Hub"
+                >
+                  <BookOpen size={16} />
+                </button>
               </div>
               <div className="command-input-actions-right">
                 <button
@@ -2909,6 +2923,10 @@ export function CommandBar() {
             </div>
           </div>
         </div>
+      )}
+
+      {showNotebookModal && (
+        <NotebookView onClose={() => setShowNotebookModal(false)} />
       )}
     </main>
   );
