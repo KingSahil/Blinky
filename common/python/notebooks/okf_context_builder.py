@@ -5,19 +5,30 @@ from typing import Dict, Any, List, Optional
 
 def build_okf_prompt_context(
     notebook: Dict[str, Any],
-    query: str
+    query: str,
+    vector_matches: Optional[List[Tuple[Dict[str, Any], float]]] = None
 ) -> Dict[str, str]:
     """
-    Assembles active notebook document sources into a structured, grounded LLM prompt system payload.
+    Assembles active notebook document sources or top-K vector search chunks into a grounded LLM prompt system payload.
     """
     sources = notebook.get("sources", [])
     active_sources = [s for s in sources if s.get("active", True)]
 
-    okf_source_blocks = []
-    for src in active_sources:
-        okf_source_blocks.append(src.get("okf_content", ""))
-
-    sources_payload = "\n\n".join(okf_source_blocks) if okf_source_blocks else "[No active notebook sources selected]"
+    if vector_matches:
+        v_blocks = []
+        for match, score in vector_matches:
+            src_name = match.get("source_name", "unknown")
+            idx = match.get("chunk_index", 0)
+            content = match.get("content", "")
+            v_blocks.append(
+                f"### VECTOR CHUNK: {src_name} (Part {idx + 1}, Match Score: {int(score * 100)}%)\n{content}"
+            )
+        sources_payload = "\n\n".join(v_blocks)
+    else:
+        okf_source_blocks = []
+        for src in active_sources:
+            okf_source_blocks.append(src.get("okf_content", ""))
+        sources_payload = "\n\n".join(okf_source_blocks) if okf_source_blocks else "[No active notebook sources selected]"
 
     system_prompt = (
         "You are Blinky Notebook AI, a grounded research tutor and document intelligence assistant.\n"
@@ -39,5 +50,5 @@ def build_okf_prompt_context(
     return {
         "system_prompt": system_prompt,
         "user_prompt": user_prompt,
-        "source_count": len(active_sources),
+        "source_count": len(vector_matches) if vector_matches else len(active_sources),
     }
