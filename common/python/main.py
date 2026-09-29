@@ -337,6 +337,10 @@ def run(
     if intent == "WEB_SEARCH" or is_web_research_question(question):
         LOGGER.info("Automatically enabling web search mode for classified intent: WEB_SEARCH / research query")
         web_search_enabled = True
+    elif intent == "NOTEBOOK":
+        LOGGER.info("Routing to Notebook Intelligence engine for intent: NOTEBOOK")
+        notebook_id = extracted_params.get("notebook_id") or "default"
+        return run_notebook_intelligence(notebook_id, question, started, warnings)
     elif intent == "VIDEO_EDIT":
         LOGGER.info("Routing to AiCut video editor for intent: VIDEO_EDIT")
         return run_aicut_tool(extracted_params, question, started, warnings)
@@ -1209,6 +1213,101 @@ def run_web_intelligence(
             "sources": result.get("sources", []),
         },
     }
+
+
+def run_notebook_intelligence(
+    notebook_id: str,
+    question: str,
+    started: float,
+    warnings: list[str],
+) -> dict:
+    from notebooks.notebook_manager import NotebookManager
+    from notebooks.okf_context_builder import build_okf_prompt_context
+    from ai.client import ask_text_model
+
+    _emit_status("notebook", "Querying Notebook grounded context...")
+    manager = NotebookManager()
+    notebook = manager.get_notebook(notebook_id)
+    if not notebook:
+        return {
+            "summary": f"Notebook '{notebook_id}' not found.",
+            "steps": [],
+            "elapsed_ms": int((time.perf_counter() - started) * 1000),
+            "warnings": warnings + [f"Notebook {notebook_id} not found"],
+        }
+
+    context_payload = build_okf_prompt_context(notebook, question)
+    system_prompt = context_payload["system_prompt"]
+    user_prompt = context_payload["user_prompt"]
+
+    try:
+        response = ask_text_model(f"{system_prompt}\n\n{user_prompt}")
+        answer = response.get("answer") or response.get("response") or str(response)
+    except Exception as exc:
+        answer = f"Error processing notebook query: {exc}"
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": str(answer).strip(),
+        "steps": [],
+        "source_count": context_payload["source_count"],
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+    }
+
+
+def handle_notebook_rpc(action: str, params: dict) -> dict:
+    """Handle RPC actions for Notebook management and mobile API Key sync."""
+    from notebooks.notebook_manager import NotebookManager
+    manager = NotebookManager()
+
+    if action == "notebook_create":
+        title = params.get("title", "Untitled Notebook")
+        description = params.get("description", "")
+        return {"success": True, "notebook": manager.create_notebook(title, description)}
+
+    elif action == "notebook_list":
+        return {"success": True, "notebooks": manager.list_notebooks()}
+
+    elif action == "notebook_get":
+        nb_id = params.get("notebook_id", "")
+        nb = manager.get_notebook(nb_id)
+        return {"success": nb is not None, "notebook": nb}
+
+    elif action == "notebook_add_source":
+        nb_id = params.get("notebook_id", "")
+        source_name = params.get("source_name", "document.txt")
+        content = params.get("content", "")
+        file_type = params.get("file_type", "txt")
+        res = manager.add_source_to_notebook(nb_id, source_name, content, file_type=file_type)
+        return {"success": res is not None, "source": res}
+
+    elif action == "notebook_toggle_source":
+        nb_id = params.get("notebook_id", "")
+        source_id = params.get("source_id", "")
+        active = bool(params.get("active", True))
+        ok = manager.toggle_source_active(nb_id, source_id, active)
+        return {"success": ok}
+
+    elif action == "notebook_delete":
+        nb_id = params.get("notebook_id", "")
+        ok = manager.delete_notebook(nb_id)
+        return {"success": ok}
+
+    elif action == "sync_api_keys":
+        import os
+        keys_payload = {
+            "groq_key": os.environ.get("GROQ_API_KEY", ""),
+            "openai_key": os.environ.get("OPENAI_API_KEY", ""),
+            "gemini_key": os.environ.get("GEMINI_API_KEY", ""),
+            "deepseek_key": os.environ.get("DEEPSEEK_API_KEY", ""),
+        }
+        return {"success": True, "keys": keys_payload}
+
+    return {"success": False, "error": f"Unknown notebook action: {action}"}
+
+
 
 
 def resolve_locator_fast_path(question: str, screenshot, target_pid: int | None, warnings: list[str], started: float) -> dict | None:
