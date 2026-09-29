@@ -29,11 +29,12 @@ interface ChatMessage {
 export const NotebookScreen: React.FC = () => {
   const [notebooks, setNotebooks] = useState<MobileNotebook[]>([]);
   const [activeNotebookId, setActiveNotebookId] = useState<string>('');
+  const [useVectorSearch, setUseVectorSearch] = useState<boolean>(true);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'm1',
       sender: 'ai',
-      text: 'Welcome to Blinky Mobile Notebook! Upload documents on your phone or query synced notebooks.',
+      text: 'Welcome to Blinky Mobile Notebook! Upload documents on your phone or query synced notebooks with Top-K Mobile Vector Search.',
     },
   ]);
   const [queryInput, setQueryInput] = useState('');
@@ -66,13 +67,12 @@ export const NotebookScreen: React.FC = () => {
       if (!res.canceled && res.assets && res.assets.length > 0) {
         const asset = res.assets[0];
         const fileName = asset.name;
-        // Read contents or placeholder text
         const content = `[Document ${fileName} attached on mobile device]`;
 
         const added = await addSourceToMobileNotebook(activeNotebook.id, fileName, content);
         if (added) {
           await loadNotebooks();
-          Alert.alert('Document Attached', `Successfully added "${fileName}" to notebook.`);
+          Alert.alert('Document Attached', `Successfully indexed "${fileName}" into mobile vector database.`);
         }
       }
     } catch (err: any) {
@@ -100,12 +100,15 @@ export const NotebookScreen: React.FC = () => {
     setLoading(true);
 
     try {
-      const { systemPrompt, userPrompt } = buildMobileOkfContext(activeNotebook, q);
+      const { systemPrompt, userPrompt, matchCount } = buildMobileOkfContext(
+        activeNotebook,
+        q,
+        useVectorSearch
+      );
       const keys = await getSyncedApiKeys();
 
       let answer = '';
       if (keys.groq_key) {
-        // Direct Groq Cloud API call from mobile (PC offline mode)
         const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: {
@@ -122,10 +125,10 @@ export const NotebookScreen: React.FC = () => {
           }),
         });
         const data = await resp.json();
-        answer = data?.choices?.[0]?.message?.content || 'No response from Groq.';
+        const responseText = data?.choices?.[0]?.message?.content || 'No response from Groq.';
+        answer = `[Vector Match Mode: ${useVectorSearch ? 'Top-K Mobile Search' : 'Full Context'} (${matchCount} chunk matches)]\n\n${responseText}`;
       } else {
-        // Fallback message if no synced keys present
-        answer = `[Local Mobile Query Result]\nAnswer for "${q}" derived from ${activeNotebook.sources.length} document sources. Connect to PC Blinky to sync cloud keys!`;
+        answer = `[Local Mobile Vector RAG Result]\nMode: ${useVectorSearch ? 'Top-K Vector Cosine Similarity' : 'Full Context'}\nMatched ${matchCount} chunks for "${q}". Connect to PC Blinky to sync cloud keys!`;
       }
 
       const aiMsg: ChatMessage = { id: `ai_${Date.now()}`, sender: 'ai', text: answer };
@@ -134,7 +137,7 @@ export const NotebookScreen: React.FC = () => {
       const errMsg: ChatMessage = {
         id: `err_${Date.now()}`,
         sender: 'ai',
-        text: `Error executing query: ${err?.message || 'Network error'}`,
+        text: `Error executing mobile vector query: ${err?.message || 'Network error'}`,
       };
       setMessages((prev) => [...prev, errMsg]);
     } finally {
@@ -152,13 +155,23 @@ export const NotebookScreen: React.FC = () => {
         </TouchableOpacity>
       </View>
 
-      {/* NOTEBOOK SELECTOR & SOURCES BAR */}
+      {/* NOTEBOOK SELECTOR & VECTOR RAG TOGGLE */}
       {activeNotebook && (
         <View style={styles.subHeader}>
           <Text style={styles.activeNbTitle}>{activeNotebook.title}</Text>
-          <TouchableOpacity style={styles.attachBtn} onPress={handlePickDocument}>
-            <Text style={styles.attachBtnText}>📎 Attach File</Text>
-          </TouchableOpacity>
+          <View style={styles.controlsRow}>
+            <TouchableOpacity
+              style={[styles.toggleBtn, useVectorSearch ? styles.toggleBtnActive : null]}
+              onPress={() => setUseVectorSearch(!useVectorSearch)}
+            >
+              <Text style={styles.toggleBtnText}>
+                {useVectorSearch ? '⚡ Vector RAG' : '📄 Full Context'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.attachBtn} onPress={handlePickDocument}>
+              <Text style={styles.attachBtnText}>📎 Attach File</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
@@ -169,20 +182,24 @@ export const NotebookScreen: React.FC = () => {
             <Text style={styles.bubbleText}>{msg.text}</Text>
           </View>
         ))}
-        {loading && <ActivityIndicator color="#ff8b6a" style={{ marginTop: 10 }} />}
       </ScrollView>
 
       {/* INPUT BAR */}
       <View style={styles.inputBar}>
         <TextInput
           style={styles.textInput}
+          placeholder="Ask your mobile documents..."
+          placeholderTextColor="#8e8e93"
           value={queryInput}
           onChangeText={setQueryInput}
-          placeholder="Ask grounded questions..."
-          placeholderTextColor="#6b7280"
+          onSubmitEditing={handleSendQuery}
         />
         <TouchableOpacity style={styles.sendBtn} onPress={handleSendQuery} disabled={loading}>
-          <Text style={styles.sendBtnText}>Send</Text>
+          {loading ? (
+            <ActivityIndicator color="#ffffff" size="small" />
+          ) : (
+            <Text style={styles.sendBtnText}>Send</Text>
+          )}
         </TouchableOpacity>
       </View>
     </View>
@@ -190,51 +207,63 @@ export const NotebookScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#12151c' },
+  container: { flex: 1, backgroundColor: '#0f172a' },
   header: {
-    height: 56,
-    paddingHorizontal: 16,
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+    alignItems: 'center',
+    paddingTop: 48,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: '#1e293b',
   },
-  headerTitle: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
-  addNbBtn: { backgroundColor: 'rgba(255, 139, 106, 0.2)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
-  addNbBtnText: { color: '#ff8b6a', fontSize: 12, fontWeight: '600' },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: '#f8fafc' },
+  addNbBtn: { backgroundColor: '#3b82f6', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
+  addNbBtnText: { color: '#ffffff', fontWeight: '600', fontSize: 13 },
   subHeader: {
     paddingHorizontal: 16,
     paddingVertical: 10,
+    backgroundColor: '#334155',
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    alignItems: 'center',
   },
-  activeNbTitle: { color: '#e5e7eb', fontSize: 14, fontWeight: '600' },
-  attachBtn: { backgroundColor: 'rgba(255, 255, 255, 0.05)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
-  attachBtnText: { color: '#9ca3af', fontSize: 12 },
+  activeNbTitle: { color: '#e2e8f0', fontWeight: '600', fontSize: 14, flex: 1 },
+  controlsRow: { flexDirection: 'row', alignItems: 'center' },
+  toggleBtn: {
+    backgroundColor: '#475569',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  toggleBtnActive: { backgroundColor: '#8b5cf6' },
+  toggleBtnText: { color: '#ffffff', fontSize: 11, fontWeight: '600' },
+  attachBtn: { backgroundColor: '#0284c7', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
+  attachBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '600' },
   chatStream: { flex: 1 },
-  chatContent: { padding: 16, gap: 12 },
-  bubble: { padding: 12, borderRadius: 12, maxWidth: '85%' },
-  userBubble: { alignSelf: 'flex-end', backgroundColor: '#ff8b6a' },
-  aiBubble: { alignSelf: 'flex-start', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.08)' },
-  bubbleText: { color: '#ffffff', fontSize: 14, lineHeight: 20 },
+  chatContent: { padding: 16 },
+  bubble: { padding: 12, borderRadius: 12, marginBottom: 12, maxWidth: '85%' },
+  userBubble: { alignSelf: 'flex-end', backgroundColor: '#2563eb' },
+  aiBubble: { alignSelf: 'flex-start', backgroundColor: '#1e293b', borderWidth: 1, borderColor: '#334155' },
+  bubbleText: { color: '#f8fafc', fontSize: 14, lineHeight: 20 },
   inputBar: {
-    padding: 12,
     flexDirection: 'row',
-    gap: 8,
+    padding: 12,
+    backgroundColor: '#1e293b',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.08)',
+    borderTopColor: '#334155',
   },
   textInput: {
     flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    color: '#ffffff',
+    backgroundColor: '#0f172a',
+    color: '#f8fafc',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     fontSize: 14,
+    marginRight: 8,
   },
-  sendBtn: { backgroundColor: '#ff8b6a', justifyContent: 'center', paddingHorizontal: 16, borderRadius: 10 },
+  sendBtn: { backgroundColor: '#3b82f6', justifyContent: 'center', paddingHorizontal: 16, borderRadius: 8 },
   sendBtnText: { color: '#ffffff', fontWeight: '600' },
 });

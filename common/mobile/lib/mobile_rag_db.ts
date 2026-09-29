@@ -22,6 +22,61 @@ export interface MobileNotebook {
   sources: MobileSource[];
 }
 
+export interface MobileVectorMatch {
+  source_name: string;
+  chunk_index: number;
+  content: string;
+  score: number;
+}
+
+/**
+ * Tokenizes text into lowercase alphanumeric words.
+ */
+export function simpleTokenize(text: str | string): string[] {
+  return (text || '').toLowerCase().match(/\b\w+\b/g) || [];
+}
+
+/**
+ * Calculates normalized term frequencies for a token list.
+ */
+export function calculateTermFrequencies(tokens: string[]): Record<string, number> {
+  if (!tokens || tokens.length === 0) return {};
+  const tf: Record<string, number> = {};
+  for (const t of tokens) {
+    tf[t] = (tf[t] || 0) + 1;
+  }
+  const total = tokens.length;
+  for (const k in tf) {
+    tf[k] = tf[k] / total;
+  }
+  return tf;
+}
+
+/**
+ * Calculates cosine similarity between two term-frequency maps.
+ */
+export function calculateCosineSimilarity(tf1: Record<string, number>, tf2: Record<string, number>): number {
+  if (!tf1 || !tf2) return 0;
+  let dotProduct = 0;
+  let mag1Sq = 0;
+  let mag2Sq = 0;
+
+  for (const k in tf1) {
+    mag1Sq += tf1[k] * tf1[k];
+    if (tf2[k]) {
+      dotProduct += tf1[k] * tf2[k];
+    }
+  }
+  for (const k in tf2) {
+    mag2Sq += tf2[k] * tf2[k];
+  }
+
+  const mag1 = Math.sqrt(mag1Sq);
+  const mag2 = Math.sqrt(mag2Sq);
+  if (mag1 === 0 || mag2 === 0) return 0;
+  return dotProduct / (mag1 * mag2);
+}
+
 /**
  * Loads all mobile notebooks from Android device storage.
  */
@@ -29,7 +84,6 @@ export async function listMobileNotebooks(): Promise<MobileNotebook[]> {
   try {
     const raw = await AsyncStorage.getItem(MOBILE_NOTEBOOKS_STORAGE_KEY);
     if (!raw) {
-      // Default sample notebook
       const defaultNb: MobileNotebook = {
         id: 'mb_default',
         title: 'Mobile Companion Hub',
@@ -78,7 +132,7 @@ export async function createMobileNotebook(title: string, description: string = 
   const newNb: MobileNotebook = {
     id: `mb_${Date.now()}`,
     title: title.trim() || 'Untitled Notebook',
-    description: description.strip ? description.strip() : description,
+    description: description.trim ? description.trim() : description,
     created_at: Date.now(),
     updated_at: Date.now(),
     sources: [],
@@ -129,11 +183,81 @@ export async function addSourceToMobileNotebook(
 }
 
 /**
- * Builds grounded LLM context payload from active mobile document sources.
+ * Searches active document sources in a mobile notebook using Top-K vector cosine similarity.
  */
-export function buildMobileOkfContext(notebook: MobileNotebook, query: string): { systemPrompt: string; userPrompt: string } {
+export function searchMobileVectorChunks(
+  notebook: MobileNotebook,
+  query: string,
+  topK: number = 5
+): MobileVectorMatch[] {
+  const queryTokens = simpleTokenize(query);
+  if (queryTokens.length === 0) return [];
+  const queryTf = calculateTermFrequencies(queryTokens);
+
+  const matches: MobileVectorMatch[] = [];
   const activeSources = notebook.sources.filter((s) => s.active);
-  const okfBlocks = activeSources.map((s) => s.okf_block).join('\n\n');
+
+  for (const src of activeSources) {
+    // Chunk source content into 100-word blocks for mobile RAG
+    const words = src.content.split(/\s+/);
+    const chunkSize = 100;
+    const overlap = 20;
+
+    let idx = 0;
+    for (let i = 0; i < words.length; i += chunkSize - overlap) {
+      const chunkWords = words.slice(i, i + chunkSize);
+      const chunkText = chunkWords.join(' ');
+      const chunkTokens = simpleTokenize(chunkText);
+      const chunkTf = calculateTermFrequencies(chunkTokens);
+
+      const sim = calculateCosineSimilarity(queryTf, chunkTf);
+      if (sim > 0) {
+        matches.push({
+          source_name: src.source_name,
+          chunk_index: idx,
+          content: chunkText,
+          score: Math.round(sim * 100) / 100,
+        });
+      }
+      idx++;
+      if (i + chunkSize >= words.length) break;
+    }
+  }
+
+  matches.sort((a, b) => b.score - a.score);
+  return matches.slice(0, topK);
+}
+
+/**
+ * Builds grounded LLM context payload from active mobile document sources (or Top-K vector matches).
+ */
+export function buildMobileOkfContext(
+  notebook: MobileNotebook,
+  query: string,
+  useVectorSearch: boolean = false
+): { systemPrompt: string; userPrompt: string; matchCount: number } {
+  const activeSources = notebook.sources.filter((s) => s.active);
+  let payloadText = '';
+  let matchCount = 0;
+
+  if (useVectorSearch) {
+    const vMatches = searchMobileVectorChunks(notebook, query, 5);
+    matchCount = vMatches.length;
+    if (vMatches.length > 0) {
+      payloadText = vMatches
+        .map(
+          (m) =>
+            `### VECTOR CHUNK: ${m.source_name} (Part ${m.chunk_index + 1}, Relevance: ${Math.round(m.score * 100)}%)\n${m.content}`
+        )
+        .join('\n\n');
+    } else {
+      payloadText = activeSources.map((s) => s.okf_block).join('\n\n');
+      matchCount = activeSources.length;
+    }
+  } else {
+    payloadText = activeSources.map((s) => s.okf_block).join('\n\n');
+    matchCount = activeSources.length;
+  }
 
   const systemPrompt =
     'You are Blinky Mobile AI, a grounded research assistant.\n' +
@@ -141,8 +265,8 @@ export function buildMobileOkfContext(notebook: MobileNotebook, query: string): 
     'Cite your sources using exact inline badges: [Source: filename.pdf].\n';
 
   const userPrompt =
-    `--- MOBILE NOTEBOOK SOURCES ---\n${okfBlocks || '[No active sources]'}\n\n` +
+    `--- MOBILE NOTEBOOK SOURCES ---\n${payloadText || '[No active sources selected]'}\n\n` +
     `--- USER QUERY ---\n${query.trim()}`;
 
-  return { systemPrompt, userPrompt };
+  return { systemPrompt, userPrompt, matchCount };
 }
