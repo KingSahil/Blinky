@@ -44,6 +44,10 @@ function loadNativeSecureSocketModule(): NativeSecureSocketModule | null {
   }
 }
 
+export interface SystemCpu {
+  percent: number;
+}
+
 export interface SystemMemory {
   total_mb: number;
   used_mb: number;
@@ -54,11 +58,13 @@ export interface SystemBattery {
   has_battery: boolean;
   percent: number | null;
   is_charging: boolean;
+  power_plugged?: boolean;
   status: string;
 }
 
 export interface SystemNetwork {
   mac_address: string;
+  ip_address?: string;
   interface: string;
 }
 
@@ -69,6 +75,8 @@ export interface SystemInfo {
   platform: 'linux' | 'windows';
   compositor: string;
   uptime_seconds: number;
+  cpu?: SystemCpu;
+  cpu_percent?: number;
   memory: SystemMemory;
   battery: SystemBattery;
   network: SystemNetwork;
@@ -82,6 +90,20 @@ export interface PowerEvent {
   status: 'triggered';
   message: string;
   timestamp: number;
+}
+
+export interface LightEvent {
+  type: 'light_event';
+  action: string;
+  data: {
+    success?: boolean;
+    status?: string;
+    r?: number;
+    g?: number;
+    b?: number;
+    message?: string;
+    [key: string]: any;
+  };
 }
 
 export interface AntigravityApproval {
@@ -108,6 +130,36 @@ export interface AntigravityProgress {
   timestamp?: number;
 }
 
+export interface QuickAccessFolder {
+  id: string;
+  name: string;
+  path: string;
+  icon: string;
+  count: string;
+}
+
+export interface FsEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size_bytes: number;
+  modified_ts: number;
+  ext: string;
+}
+
+export interface FsDirContents {
+  currentPath: string;
+  parentPath: string | null;
+  entries: FsEntry[];
+}
+
+export interface FsFileData {
+  path: string;
+  name: string;
+  size: number;
+  base64: string;
+}
+
 export type PowerCommand =
   | 'power_off'
   | 'restart'
@@ -130,9 +182,18 @@ export function usePCWebSocket() {
   const [latestResponse, setLatestResponse] = useState<any>(null);
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [latestPowerEvent, setLatestPowerEvent] = useState<PowerEvent | null>(null);
+  const [latestLightEvent, setLatestLightEvent] = useState<LightEvent | null>(null);
   const [antigravityApproval, setAntigravityApproval] = useState<AntigravityApproval | null>(null);
   const [antigravityComplete, setAntigravityComplete] = useState<AntigravityComplete | null>(null);
   const [antigravityProgress, setAntigravityProgress] = useState<AntigravityProgress | null>(null);
+  // Filesystem sync states
+  const [quickAccessFolders, setQuickAccessFolders] = useState<QuickAccessFolder[]>([]);
+  const [currentDirectory, setCurrentDirectory] = useState<FsDirContents | null>(null);
+  const [recentFiles, setRecentFiles] = useState<FsEntry[]>([]);
+  const [fsSearchResults, setFsSearchResults] = useState<FsEntry[]>([]);
+  const [fsLoading, setFsLoading] = useState<boolean>(false);
+  const [fsError, setFsError] = useState<string | null>(null);
+  const [fsFileData, setFsFileData] = useState<FsFileData | null>(null);
   const [fileTransferMessage, setFileTransferMessage] = useState<FileTransferMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const nativeRef = useRef<NativeSecureSocket | null>(null);
@@ -152,6 +213,13 @@ export function usePCWebSocket() {
     setStatus(nextState.status);
     setErrorMsg(nextState.errorMsg);
     setLatestResponse(nextState.latestResponse);
+    setLatestLightEvent(null);
+    setQuickAccessFolders([]);
+    setCurrentDirectory(null);
+    setRecentFiles([]);
+    setFsSearchResults([]);
+    setFsLoading(false);
+    setFsError(null);
   }, []);
 
   /** Opens a WebSocket connection and authenticates it when a token is provided. */
@@ -220,6 +288,13 @@ export function usePCWebSocket() {
               nativeRef.current.authenticated = true;
               setStatus('connected');
               setErrorMsg(null);
+              setTimeout(() => {
+                if (nativeRef.current?.authenticated) {
+                  void nativeModule.sendText(socketId, 'get_system_info');
+                  void nativeModule.sendText(socketId, JSON.stringify({ type: 'fs_get_quick_access' }));
+                  void nativeModule.sendText(socketId, JSON.stringify({ type: 'fs_get_recent' }));
+                }
+              }, 300);
             } else {
               disconnect('The PC rejected the remote token.');
             }
@@ -236,6 +311,40 @@ export function usePCWebSocket() {
               setAntigravityComplete(parsed as AntigravityComplete);
             } else if (parsed.type === 'antigravity_progress') {
               setAntigravityProgress(parsed as AntigravityProgress);
+            } else if (parsed.type === 'fs_quick_access') {
+              if (Array.isArray(parsed.folders)) {
+                setQuickAccessFolders(parsed.folders);
+              }
+            } else if (parsed.type === 'fs_dir_contents') {
+              setCurrentDirectory({
+                currentPath: parsed.currentPath || '',
+                parentPath: parsed.parentPath || null,
+                entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+              });
+              setFsLoading(false);
+            } else if (parsed.type === 'fs_recent_files') {
+              if (Array.isArray(parsed.files)) {
+                setRecentFiles(parsed.files);
+              }
+              setFsLoading(false);
+            } else if (parsed.type === 'fs_search_results') {
+              if (Array.isArray(parsed.results)) {
+                setFsSearchResults(parsed.results);
+              }
+              setFsLoading(false);
+            } else if (parsed.type === 'fs_file_data') {
+              setFsFileData({
+                path: parsed.path || '',
+                name: parsed.name || '',
+                size: parsed.size || 0,
+                base64: parsed.base64 || '',
+              });
+              setFsLoading(false);
+            } else if (parsed.type === 'fs_error') {
+              setFsError(parsed.message || 'Filesystem error');
+              setFsLoading(false);
+            } else if (parsed.type === 'light_event') {
+              setLatestLightEvent(parsed as LightEvent);
             } else {
               setLatestResponse(parsed);
             }
@@ -283,19 +392,23 @@ export function usePCWebSocket() {
     let connectTimeout: any = null;
 
     try {
+      console.log(`[WS] Connecting to ${wsUrl}`);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       connectTimeout = setTimeout(() => {
+        const stateStr = ws.readyState === WebSocket.CONNECTING ? 'CONNECTING' : ws.readyState === WebSocket.OPEN ? 'OPEN' : ws.readyState === WebSocket.CLOSING ? 'CLOSING' : 'CLOSED';
+        console.log(`[WS] Timeout triggered. readyState=${stateStr}, isCurrent=${wsRef.current === ws}`);
         if (wsRef.current === ws && ws.readyState !== WebSocket.OPEN) {
           try { ws.close(); } catch (e) {}
           wsRef.current = null;
           setStatus('error');
-          setErrorMsg(`Connection timed out (${formattedIp}). Ensure Blinky desktop app is running and port 9001 is open.`);
+          setErrorMsg(`Connection timed out (${formattedIp}, state=${stateStr}). Ensure Blinky desktop app is running and port 9001 is open.`);
         }
-      }, 5000);
+      }, 10000);
 
       ws.onopen = () => {
+        console.log(`[WS] ws.onopen successfully fired for ${wsUrl}`);
         if (connectTimeout) clearTimeout(connectTimeout);
         if (wsRef.current === ws) {
           // Authenticate the remote connection before any commands are sent.
@@ -307,10 +420,12 @@ export function usePCWebSocket() {
           setStatus('connected');
           setErrorMsg(null);
 
-          // Request initial telemetry upon connection
+          // Request initial telemetry and filesystem snapshot upon connection
           setTimeout(() => {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send('get_system_info');
+              ws.send(JSON.stringify({ type: 'fs_get_quick_access' }));
+              ws.send(JSON.stringify({ type: 'fs_get_recent' }));
             }
           }, 300);
         }
@@ -326,12 +441,46 @@ export function usePCWebSocket() {
               setFileTransferMessage(parsed as FileTransferMessage);
             } else if (parsed.type === 'power_event') {
               setLatestPowerEvent(parsed as PowerEvent);
+            } else if (parsed.type === 'light_event') {
+              setLatestLightEvent(parsed as LightEvent);
             } else if (parsed.type === 'antigravity_approval') {
               setAntigravityApproval(parsed as AntigravityApproval);
             } else if (parsed.type === 'antigravity_complete') {
               setAntigravityComplete(parsed as AntigravityComplete);
             } else if (parsed.type === 'antigravity_progress') {
               setAntigravityProgress(parsed as AntigravityProgress);
+            } else if (parsed.type === 'fs_quick_access') {
+              if (Array.isArray(parsed.folders)) {
+                setQuickAccessFolders(parsed.folders);
+              }
+            } else if (parsed.type === 'fs_dir_contents') {
+              setCurrentDirectory({
+                currentPath: parsed.currentPath || '',
+                parentPath: parsed.parentPath || null,
+                entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+              });
+              setFsLoading(false);
+            } else if (parsed.type === 'fs_recent_files') {
+              if (Array.isArray(parsed.files)) {
+                setRecentFiles(parsed.files);
+              }
+              setFsLoading(false);
+            } else if (parsed.type === 'fs_search_results') {
+              if (Array.isArray(parsed.results)) {
+                setFsSearchResults(parsed.results);
+              }
+              setFsLoading(false);
+            } else if (parsed.type === 'fs_file_data') {
+              setFsFileData({
+                path: parsed.path || '',
+                name: parsed.name || '',
+                size: parsed.size || 0,
+                base64: parsed.base64 || '',
+              });
+              setFsLoading(false);
+            } else if (parsed.type === 'fs_error') {
+              setFsError(parsed.message || 'Filesystem error');
+              setFsLoading(false);
             } else {
               setLatestResponse(parsed);
             }
@@ -342,6 +491,7 @@ export function usePCWebSocket() {
       };
 
       ws.onclose = (e) => {
+        console.log(`[WS] ws.onclose fired: code=${e?.code}, reason=${e?.reason}`);
         if (connectTimeout) clearTimeout(connectTimeout);
         if (wsRef.current === ws) {
           setStatus('disconnected');
@@ -349,11 +499,12 @@ export function usePCWebSocket() {
         }
       };
 
-      ws.onerror = (e) => {
+      ws.onerror = (e: any) => {
+        console.log(`[WS] ws.onerror fired:`, e?.message || e);
         if (connectTimeout) clearTimeout(connectTimeout);
         if (wsRef.current === ws) {
           setStatus('error');
-          setErrorMsg(`Failed to connect to ${formattedIp}. Check Wi-Fi & PC firewall.`);
+          setErrorMsg(`Failed to connect to ${formattedIp}. ${e?.message || 'Check Wi-Fi & PC firewall.'}`);
           wsRef.current = null;
         }
       };
@@ -391,12 +542,12 @@ export function usePCWebSocket() {
   const fetchSystemInfo = useCallback(() => {
     return sendCommand('get_system_info');
   }, [sendCommand]);
-  const sendQuery = useCallback((query: string, requestId: string) => {
+  const sendQuery = useCallback((query: string, requestId: string, attachedImage?: string, attachedFile?: { name: string; base64: string; mimeType?: string; size?: number }) => {
+    const payload = JSON.stringify({ requestId, query, attachedImage, attachedFile });
     if (RELEASE_TRANSPORT) {
-      return sendNativeText(JSON.stringify({ requestId, query }));
+      return sendNativeText(payload);
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      const payload = JSON.stringify({ requestId, query });
       wsRef.current.send(payload);
       return true;
     }
@@ -450,15 +601,80 @@ export function usePCWebSocket() {
     setAntigravityComplete(null);
   }, []);
 
+  // Filesystem action dispatchers
+  const fetchQuickAccess = useCallback(() => {
+    setFsLoading(true);
+    sendCommand(JSON.stringify({ type: 'fs_get_quick_access' }));
+  }, [sendCommand]);
+
+  const listDirectory = useCallback((path?: string) => {
+    setFsLoading(true);
+    setFsError(null);
+    sendCommand(JSON.stringify({ type: 'fs_list_dir', path: path || '' }));
+  }, [sendCommand]);
+
+  const fetchRecentFiles = useCallback(() => {
+    sendCommand(JSON.stringify({ type: 'fs_get_recent' }));
+  }, [sendCommand]);
+
+  const searchFiles = useCallback((query: string, path?: string) => {
+    if (!query.trim()) {
+      setFsSearchResults([]);
+      return;
+    }
+    setFsLoading(true);
+    sendCommand(JSON.stringify({ type: 'fs_search', query: query.trim(), path: path || '' }));
+  }, [sendCommand]);
+
+  const openFileOnPC = useCallback((path: string) => {
+    sendCommand(JSON.stringify({ type: 'fs_open_file', path }));
+  }, [sendCommand]);
+
+  const readFileForMobile = useCallback((path: string) => {
+    setFsLoading(true);
+    setFsError(null);
+    setFsFileData(null);
+    sendCommand(JSON.stringify({ type: 'fs_read_file', path }));
+  }, [sendCommand]);
+
+  const clearFsFileData = useCallback(() => {
+    setFsFileData(null);
+  }, []);
+
+  const resetDirectory = useCallback(() => {
+    setCurrentDirectory(null);
+    setFsSearchResults([]);
+    setFsError(null);
+    fetchQuickAccess();
+    fetchRecentFiles();
+  }, [fetchQuickAccess, fetchRecentFiles]);
+
   return {
     status,
     errorMsg,
     latestResponse,
     systemInfo,
     latestPowerEvent,
+    latestLightEvent,
     antigravityApproval,
     antigravityComplete,
     antigravityProgress,
+    // Filesystem sync
+    quickAccessFolders,
+    currentDirectory,
+    recentFiles,
+    fsSearchResults,
+    fsLoading,
+    fsError,
+    fsFileData,
+    fetchQuickAccess,
+    listDirectory,
+    fetchRecentFiles,
+    searchFiles,
+    openFileOnPC,
+    readFileForMobile,
+    clearFsFileData,
+    resetDirectory,
     fileTransferMessage,
     connect,
     disconnect,
