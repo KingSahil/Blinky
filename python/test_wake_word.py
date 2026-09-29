@@ -150,7 +150,7 @@ def test_live_detection(duration=10, threshold=0.25):
                     score = list(prediction.values())[0] if prediction else 0.0
                     elapsed = int(time.time() - start_time)
 
-                    status_text = f"⚡ WAKE_WORD_DETECTED (>{threshold})!" if score > threshold else ("🎤 Hearing speech..." if rms > 150 else "💤 Listening...")
+                    status_text = f"*** WAKE_WORD_DETECTED (>{threshold}) ***" if score > threshold else ("[SPEECH] Hearing speech..." if rms > 150 else "[WAIT] Listening...")
                     print(f"{elapsed:>5}s  | {rms:>10.1f}   | {score:>16.4f}   | {status_text}", flush=True)
 
                     if score > threshold:

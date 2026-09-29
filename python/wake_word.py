@@ -170,7 +170,7 @@ def start_wake_word_detector(model_name="hey_blinky.onnx", threshold=0.25, verbo
 
                     if score > threshold:
                         elapsed = int(time.time() - start_time)
-                        status_text = f"⚡ WAKE_WORD_DETECTED (Score: {score:.4f} > {threshold})"
+                        status_text = f"*** WAKE_WORD_DETECTED (Score: {score:.4f} > {threshold}) ***"
                         print(f"{elapsed:>5}s  | {rms:>10.1f}   | {score:>16.4f}   | {status_text}", file=sys.stderr, flush=True)
                         print("WAKE_WORD_DETECTED", flush=True)
                         owwModel.reset()
@@ -181,7 +181,7 @@ def start_wake_word_detector(model_name="hey_blinky.onnx", threshold=0.25, verbo
                     now = time.time()
                     if verbose and now - last_debug_time >= 1.0:
                         elapsed = int(now - start_time)
-                        status_text = "🎤 Hearing speech..." if rms > 150 else ("🔉 Low sound" if rms > 30 else "💤 Listening (silence)...")
+                        status_text = "[SPEECH] Hearing speech..." if rms > 150 else ("[LOW] Quiet sound" if rms > 30 else "[WAIT] Listening...")
                         print(f"{elapsed:>5}s  | {rms:>10.1f}   | {score:>16.4f}   | {status_text}", file=sys.stderr, flush=True)
                         last_debug_time = now
 
