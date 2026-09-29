@@ -1257,9 +1257,11 @@ def run_notebook_intelligence(
     question: str,
     started: float,
     warnings: list[str],
+    use_vector_search: bool = False,
 ) -> dict:
     from notebooks.notebook_manager import NotebookManager
     from notebooks.okf_context_builder import build_okf_prompt_context
+    from notebooks.vector_store import VectorStore
     from ai.client import ask_text_model
 
     _emit_status("notebook", "Querying Notebook grounded context...")
@@ -1273,7 +1275,12 @@ def run_notebook_intelligence(
             "warnings": warnings + [f"Notebook {notebook_id} not found"],
         }
 
-    context_payload = build_okf_prompt_context(notebook, question)
+    vector_matches = None
+    if use_vector_search:
+        v_store = VectorStore()
+        vector_matches = v_store.search_top_k(notebook_id, question, top_k=5)
+
+    context_payload = build_okf_prompt_context(notebook, question, vector_matches=vector_matches)
     system_prompt = context_payload["system_prompt"]
     user_prompt = context_payload["user_prompt"]
 
@@ -1288,6 +1295,7 @@ def run_notebook_intelligence(
         "summary": str(answer).strip(),
         "steps": [],
         "source_count": context_payload["source_count"],
+        "use_vector_search": use_vector_search,
         "elapsed_ms": elapsed_ms,
         "provider": get_provider_label(),
         "warnings": warnings,

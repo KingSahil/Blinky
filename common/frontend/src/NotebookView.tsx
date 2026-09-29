@@ -40,11 +40,12 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose }) => {
     },
   ]);
   const [activeNotebookId, setActiveNotebookId] = useState<string>('default');
+  const [useVectorSearch, setUseVectorSearch] = useState<boolean>(true);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'm1',
       sender: 'ai',
-      text: 'Welcome to your Blinky Notebook Hub! Upload PDFs, notes, or documents on the left. Every answer is 100% grounded with source citations.',
+      text: 'Welcome to your Blinky Notebook Hub! Upload PDFs, notes, or documents on the left. Toggle between Dense Vector RAG and Full Context OKF mode.',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -75,10 +76,10 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose }) => {
     setLoading(true);
 
     try {
-      // Dispatch grounded query to Blinky Python daemon via RPC
       const payload = {
         question: `[NOTEBOOK:${activeNotebook.id}] ${text}`,
         agent_mode: false,
+        use_vector_search: useVectorSearch,
       };
       const res = await runTutor(JSON.stringify(payload));
       const parsed = typeof res === 'string' ? JSON.parse(res) : res;
@@ -173,6 +174,23 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose }) => {
           <div className="notebook-title-area">
             <span className="notebook-badge">OKF Notebook</span>
             <h2>{activeNotebook.title}</h2>
+            <button
+              style={{
+                marginLeft: '12px',
+                padding: '4px 10px',
+                fontSize: '12px',
+                borderRadius: '6px',
+                border: 'none',
+                background: useVectorSearch ? '#8b5cf6' : '#334155',
+                color: '#fff',
+                cursor: 'pointer',
+                fontWeight: 600,
+              }}
+              onClick={() => setUseVectorSearch(!useVectorSearch)}
+              title="Toggle between Dense Vector RAG and Full Context OKF"
+            >
+              {useVectorSearch ? '⚡ Dense Vector RAG' : '📄 Full Context OKF'}
+            </button>
           </div>
           <button className="notebook-close-btn" onClick={onClose} title="Close Workspace">
             ✕
@@ -201,63 +219,70 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose }) => {
               onDrop={(e) => {
                 e.preventDefault();
                 setDragOver(false);
-                // Handle file drop
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                  const inputEvt = { target: { files: e.dataTransfer.files } } as any;
+                  handleFileUpload(inputEvt);
+                }
               }}
             >
-              {activeNotebook.sources.length === 0 ? (
-                <div className="empty-sources">Drop PDFs, TXT, or Markdown files here</div>
-              ) : (
-                <div className="sources-list">
-                  {activeNotebook.sources.map((src) => (
-                    <div key={src.id} className={`source-card ${src.active ? 'active' : 'disabled'}`}>
-                      <input
-                        type="checkbox"
-                        checked={src.active}
-                        onChange={() => toggleSourceActive(src.id)}
-                      />
-                      <div className="source-info">
-                        <span className="source-name">{src.source_name}</span>
-                        <span className="source-meta">
-                          {src.file_type.toUpperCase()} • ~{src.word_count} words
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+              <p>Drag & drop PDFs, Markdown, or text documents here</p>
+            </div>
+
+            <div className="sources-list">
+              {activeNotebook.sources.map((src) => (
+                <div key={src.id} className={`source-card ${src.active ? 'active' : 'inactive'}`}>
+                  <input
+                    type="checkbox"
+                    checked={src.active}
+                    onChange={() => toggleSourceActive(src.id)}
+                    className="source-checkbox"
+                  />
+                  <div className="source-info">
+                    <span className="source-name">{src.source_name}</span>
+                    <span className="source-meta">
+                      {src.file_type.toUpperCase()} • {src.word_count} words
+                    </span>
+                  </div>
                 </div>
-              )}
+              ))}
             </div>
           </div>
 
-          {/* CENTER COLUMN: GROUNDED CHAT */}
+          {/* CENTER COLUMN: GROUNDED CHAT STREAM */}
           <div className="notebook-col notebook-chat-col">
             <div className="chat-stream">
               {messages.map((msg) => (
-                <div key={msg.id} className={`chat-bubble ${msg.sender}`}>
+                <div key={msg.id} className={`message-bubble ${msg.sender}`}>
                   <div className="bubble-header">
-                    <span className="sender-label">{msg.sender === 'ai' ? 'Blinky AI' : 'You'}</span>
-                    <span className="msg-time">{msg.timestamp}</span>
+                    <span className="sender-name">{msg.sender === 'user' ? 'You' : 'Blinky Notebook AI'}</span>
+                    <span className="timestamp">{msg.timestamp}</span>
                   </div>
                   <div className="bubble-text">{msg.text}</div>
                 </div>
               ))}
               {loading && (
-                <div className="chat-bubble ai loading">
-                  <span className="typing-dots">Synthesizing grounded answer...</span>
+                <div className="message-bubble ai loading">
+                  <div className="typing-indicator">
+                    <span></span><span></span><span></span>
+                  </div>
+                  <span style={{ fontSize: '12px', color: '#94a3b8', marginLeft: '8px' }}>
+                    {useVectorSearch ? 'Searching Vector Database & generating response...' : 'Reading active notebook context...'}
+                  </span>
                 </div>
               )}
               <div ref={chatEndRef} />
             </div>
 
-            <div className="chat-input-area">
+            <div className="notebook-input-area">
               <input
                 type="text"
+                className="notebook-input"
+                placeholder={useVectorSearch ? 'Query notebook using Dense Vector Search...' : 'Ask a grounded question across active sources...'}
                 value={queryInput}
                 onChange={(e) => setQueryInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                placeholder="Ask anything grounded in your sources..."
-                disabled={loading}
               />
-              <button onClick={() => handleSendMessage()} disabled={loading || !queryInput.trim()}>
+              <button className="send-btn" onClick={() => handleSendMessage()} disabled={loading}>
                 Send
               </button>
             </div>
@@ -268,19 +293,39 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose }) => {
             <div className="col-header">
               <h3>Studio Artifacts</h3>
             </div>
-            <p className="artifacts-desc">Generate grounded summaries and guides with one click.</p>
-            <div className="artifact-buttons">
+            <p className="artifacts-desc">One-click generate structured knowledge artifacts from your active sources:</p>
+
+            <div className="artifacts-buttons">
               <button className="artifact-btn" onClick={() => handleArtifactGenerate('summary')}>
-                📊 Executive Summary
+                <span className="btn-icon">📋</span>
+                <div className="btn-text">
+                  <strong>Executive Summary</strong>
+                  <small>High-level key points overview</small>
+                </div>
               </button>
+
               <button className="artifact-btn" onClick={() => handleArtifactGenerate('faq')}>
-                ❓ FAQ Generator
+                <span className="btn-icon">❓</span>
+                <div className="btn-text">
+                  <strong>FAQ Generator</strong>
+                  <small>Question & Answer study guide</small>
+                </div>
               </button>
+
               <button className="artifact-btn" onClick={() => handleArtifactGenerate('study')}>
-                📚 Study Guide
+                <span className="btn-icon">📚</span>
+                <div className="btn-text">
+                  <strong>Study Guide</strong>
+                  <small>Definitions & core concepts</small>
+                </div>
               </button>
+
               <button className="artifact-btn" onClick={() => handleArtifactGenerate('action')}>
-                ✅ Action Checklist
+                <span className="btn-icon">✅</span>
+                <div className="btn-text">
+                  <strong>Action Checklist</strong>
+                  <small>Extracted step-by-step tasks</small>
+                </div>
               </button>
             </div>
           </div>
