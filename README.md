@@ -1,5 +1,3 @@
-<img width="4320" height="1440" alt="Blinky - AssemblyAI Voice Agent Hackathon" src="https://github.com/user-attachments/assets/c698b2cd-da84-4cb0-9276-125c6a7244aa" />
-
 <div align="center">
 
 # 🧠 Blinky — AI Desktop Tutor, Autonomous Agent & Workstation Companion
