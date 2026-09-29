@@ -150,7 +150,14 @@ test('restoring credentials reconnects after a failed token attempt', () => {
   emit('onMessage', second, { data: JSON.stringify({ type: 'auth_result', ok: true }) });
   expect(render().status).toBe('connected');
   expect(render().errorMsg).toBeNull();
-  expect(timers.size).toBe(0);
+
+  // The failed first attempt must not leave its connect timeout armed. Once authenticated the
+  // hook also schedules a deferred telemetry + filesystem snapshot request, so assert behaviour
+  // instead of a bare timer count: firing everything still pending must not disturb the link.
+  for (const callback of [...timers.values()]) callback();
+  expect(render().status).toBe('connected');
+  expect(render().errorMsg).toBeNull();
+  expect(close).not.toHaveBeenCalledWith(second);
 });
 
 test('disconnect clears pending timeout and unmount closes the socket', () => {

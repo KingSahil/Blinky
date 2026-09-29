@@ -22,7 +22,6 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import {
@@ -111,7 +110,7 @@ let VolumeManager: any = null;
 try {
   VolumeManager = require('react-native-volume-manager').VolumeManager;
 } catch (e) {
-  console.log('react-native-volume-manager not available in this environment');
+  // VolumeManager is optional
 }
 
 const getExpoHostIp = (): string | null => {
@@ -128,7 +127,7 @@ const getExpoHostIp = (): string | null => {
   return host || null;
 };
 
-const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 1500, certificatePin?: string): Promise<string> => {
+const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 3000, certificatePin?: string): Promise<string> => {
   const clean = rawIp.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/+$/, '');
   const [ipOnly, customPort] = clean.includes(':') ? clean.split(':') : [clean, undefined];
   const targetPort = customPort ? parseInt(customPort, 10) : port;
@@ -290,7 +289,7 @@ const probeCandidateIps = async (certificatePin?: string): Promise<string | null
   if (!candidates.includes('127.0.0.1')) candidates.push('127.0.0.1');
 
   const probePromises = candidates.map((ip) =>
-    checkIpAddress(ip, 9001, 1500, certificatePin)
+    checkIpAddress(ip, 9001, 3000, certificatePin)
       .then((found) => found)
       .catch(() => null)
   );
@@ -310,6 +309,7 @@ interface Message {
     duration: number;
   };
   screenshot_b64?: string;
+  attachedFile?: AttachedFile;
   steps?: any[];
 }
 
@@ -538,7 +538,7 @@ interface SlashCommand {
   color: string;
 }
 
-const SLASH_COMMANDS: SlashCommand[] = [
+const SLASH_COMMANDS: SlashCommandDef[] = [
   {
     id: 'antigravity',
     prefix: '/agy ',
@@ -570,6 +570,14 @@ const SLASH_COMMANDS: SlashCommand[] = [
 
 /** Renders the Blinky mobile companion and coordinates its desktop connection. */
 export default function App() {
+  const [fontsLoaded] = useFonts({
+    'Unigeo': require('./assets/fonts/unigeo.ttf'),
+    'TypoFormal': require('./assets/fonts/typo-formal.otf'),
+    'OkineSans': require('./assets/fonts/okine-regular.otf'),
+    'OkineSansMedium': require('./assets/fonts/okine-medium.otf'),
+  });
+
+  const [showSplash, setShowSplash] = useState(true);
   const [ipAddress, setIpAddress] = useState('');
   const [remoteToken, setRemoteToken] = useState('');
   const [certificatePin, setCertificatePin] = useState('');
@@ -582,6 +590,21 @@ export default function App() {
     antigravityApproval,
     antigravityComplete,
     antigravityProgress,
+    quickAccessFolders,
+    currentDirectory,
+    recentFiles,
+    fsSearchResults,
+    fsLoading,
+    fsError,
+    fsFileData,
+    fetchQuickAccess,
+    listDirectory,
+    fetchRecentFiles,
+    searchFiles,
+    openFileOnPC,
+    readFileForMobile,
+    clearFsFileData,
+    resetDirectory,
     fileTransferMessage,
     connect,
     disconnect,
@@ -593,6 +616,7 @@ export default function App() {
     dismissAntigravityComplete,
     sendFileTransferMessage,
     getFileTransferModule,
+    latestLightEvent,
   } = usePCWebSocket();
   const [macAddress, setMacAddress] = useState('');
   const [wolBroadcastIp, setWolBroadcastIp] = useState('255.255.255.255');
@@ -600,8 +624,13 @@ export default function App() {
   const [wolFeedback, setWolFeedback] = useState<string | null>(null);
   const [isWorkstationLocked, setIsWorkstationLocked] = useState(false);
   const [workstationPin, setWorkstationPin] = useState('');
+  const [showPinPromptModal, setShowPinPromptModal] = useState(false);
+  const [inputPin, setInputPin] = useState('');
+  const [rememberPin, setRememberPin] = useState(true);
+  const [pendingUnlockAfterWake, setPendingUnlockAfterWake] = useState(false);
   const isConnected = status === 'connected';
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+  const [isLightOn, setIsLightOn] = useState<boolean>(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [discoveryProgress, setDiscoveryProgress] = useState<string | null>(null);
   const [showFileTransfer, setShowFileTransfer] = useState(false);
@@ -614,6 +643,7 @@ export default function App() {
   const [agentStatus, setAgentStatus] = useState<'idle' | 'processing' | 'success' | 'error'>('idle');
   
   // Custom message history state
+  const [activeTab, setActiveTab] = useState<TabScreen>('Chat');
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
@@ -628,7 +658,6 @@ export default function App() {
   const scrollViewRef = useRef<ScrollView>(null);
 
   const [showSettings, setShowSettings] = useState(false);
-  const [showMenu, setShowMenu] = useState(false);
   const [timerSeconds, setTimerSeconds] = useState(0);
 
   // PC Controls monetization & promo code state
@@ -771,7 +800,6 @@ export default function App() {
   const [previewImageUri, setPreviewImageUri] = useState<string | null>(null);
 
   const handleCaptureScreenshot = () => {
-    setShowMenu(false);
     if (!isConnected) {
       Alert.alert('Error', 'Failed to capture screenshot. Check link to PC.');
       return;
@@ -893,6 +921,7 @@ export default function App() {
         setAssemblyaiApiKey(latestResponse.key);
         return;
       }
+
       if (latestResponse.type === 'sarvam_key') {
         setSarvamApiKey(latestResponse.key);
         return;
@@ -1087,7 +1116,7 @@ export default function App() {
     let query = queryText.trim();
     if (!query && !attachedFile) {
       triggerHaptic('selection');
-      Alert.alert('Empty query', 'Please enter a search/browsing query first.');
+      Alert.alert('Empty query', 'Please enter a search/browsing query or attach a file first.');
       return;
     }
 
@@ -1135,11 +1164,11 @@ export default function App() {
 
     // Direct prompt to Antigravity IDE
     if (
-      queryText.startsWith('/agy ') ||
-      queryText.startsWith('/antigravity ') ||
-      queryText.toLowerCase().startsWith('antigravity:')
+      query.startsWith('/agy ') ||
+      query.startsWith('/antigravity ') ||
+      query.toLowerCase().startsWith('antigravity:')
     ) {
-      const prompt = queryText.replace(/^(\/(agy|antigravity)\s*|antigravity:\s*)/i, '').trim();
+      const prompt = query.replace(/^(\/(agy|antigravity)\s*|antigravity:\s*)/i, '').trim();
       if (prompt) {
         sendAntigravityPrompt(prompt);
         setAgentStatus('processing');
@@ -1155,6 +1184,7 @@ export default function App() {
             sender: 'user',
             text: `⚡ Sent to Antigravity: "${prompt}"`,
             timestamp: currentTime,
+            attachedFile: attachedFile || undefined,
           },
           {
             id: agyMsgId,
@@ -1177,13 +1207,13 @@ export default function App() {
     triggerHaptic('light');
 
     // Parse agent or ask prefixes if provided
-    let query = queryText.trim();
     if (query.startsWith('/agent ')) {
       query = query.replace(/^\/agent\s+/i, '').trim();
     } else if (query.startsWith('/ask ')) {
       query = query.replace(/^\/ask\s+/i, '').trim();
     }
-    setRunningQuery(query);
+    const displayQuery = query || (attachedFile ? `Attached: ${attachedFile.name}` : '');
+    setRunningQuery(displayQuery);
     setQueryText('');
     setAgentStatus('processing');
     setTimerSeconds(0);
@@ -1200,8 +1230,9 @@ export default function App() {
       {
         id: userMsgId,
         sender: 'user',
-        text: query,
+        text: displayQuery,
         timestamp: currentTime,
+        attachedFile: attachedFile || undefined,
       },
       {
         id: blinkyMsgId,
@@ -1216,7 +1247,21 @@ export default function App() {
       }
     ]);
 
-    const success = sendQuery(query, generateUuid());
+    const queryToSend = attachedFile
+      ? `[Referenced Files: ${attachedFile.name}] ${query}`.trim()
+      : query;
+    const attachedImage = (attachedFile?.type === 'image' && attachedFile.base64)
+      ? attachedFile.base64
+      : undefined;
+    const attachedFilePayload = attachedFile?.base64
+      ? {
+          name: attachedFile.name,
+          base64: attachedFile.base64,
+          mimeType: attachedFile.mimeType,
+          size: attachedFile.size,
+        }
+      : undefined;
+    const success = sendQuery(queryToSend, generateUuid(), attachedImage, attachedFilePayload);
     if (!success) {
       setAgentStatus('error');
       setMessages(prev => prev.map(m => {
@@ -1316,7 +1361,7 @@ export default function App() {
                   'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                  audio_url,
+                  audio_url: upload_url,
                   speech_models: ['universal-3-5-pro'],
                   punctuate: true,
                   format_text: true,
@@ -1349,7 +1394,7 @@ export default function App() {
         }
       }
 
-      // Priority 2: Fallback to Sarvam STT if AssemblyAI didn't produce transcript
+      // Priority 2: Fallback to Sarvam STT if AssemblyAI did not produce a transcript
       if (!transcript && sarvamApiKey) {
         const formData = new FormData();
         formData.append('file', {
@@ -1360,22 +1405,46 @@ export default function App() {
         formData.append('model', 'saaras:v3');
         formData.append('language_code', 'en-IN');
 
-        const res = await fetch('https://api.sarvam.ai/speech-to-text', {
-          method: 'POST',
-          headers: {
-            'api-subscription-key': sarvamApiKey,
-          },
-          body: formData,
-        });
+        // Use XMLHttpRequest to avoid Expo fetch's "Unsupported FormDataPart implementation" error
+        // Expo's fetch polyfill does not support React Native's file URI object in FormData,
+        // whereas React Native's XMLHttpRequest natively handles `{ uri, type, name }` multipart uploads.
+        const data: any = await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', 'https://api.sarvam.ai/speech-to-text');
+          xhr.setRequestHeader('api-subscription-key', sarvamApiKey);
 
-        if (res.ok) {
-          const data = await res.json();
-          transcript = data.transcript?.trim() || '';
-        }
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              try {
+                resolve(JSON.parse(xhr.responseText));
+              } catch (e) {
+                reject(new Error('Invalid JSON response from Sarvam STT'));
+              }
+            } else {
+              let errorMsg = `HTTP ${xhr.status}`;
+              try {
+                const parsed = JSON.parse(xhr.responseText);
+                if (parsed.message) errorMsg = parsed.message;
+              } catch {}
+              reject(new Error(errorMsg));
+            }
+          };
+
+          xhr.onerror = () => {
+            reject(new Error('Network error during speech recognition upload'));
+          };
+
+          xhr.ontimeout = () => {
+            reject(new Error('Speech recognition request timed out'));
+          };
+
+          xhr.send(formData);
+        });
+        transcript = data.transcript?.trim() || '';
       }
 
       if (!transcript) {
-        throw new Error('Could not transcribe audio. Please ensure AssemblyAI API key is valid.');
+        throw new Error('Could not transcribe audio. Please check your AssemblyAI / Sarvam API key.');
       }
 
       if (transcript) {
@@ -1551,6 +1620,26 @@ export default function App() {
     }
   }, [systemInfo?.is_locked]);
 
+  // Auto-unlock workstation if Wake PC was triggered while host was offline
+  useEffect(() => {
+    if (isConnected && pendingUnlockAfterWake) {
+      setPendingUnlockAfterWake(false);
+      const timer = setTimeout(() => {
+        handleUnlockWorkstation();
+      }, 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [isConnected, pendingUnlockAfterWake]);
+
+  // Periodically query telemetry to keep workstation lock state synchronized
+  useEffect(() => {
+    if (!isConnected) return;
+    const interval = setInterval(() => {
+      sendCommand('get_system_info');
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [isConnected]);
+
   // When connection succeeds, auto-close the settings card
   useEffect(() => {
     if (isConnected) {
@@ -1708,7 +1797,6 @@ export default function App() {
       return;
     }
     triggerHaptic('heavy');
-    setShowMenu(false);
     Alert.alert(
       `Confirm ${label}`,
       `Are you sure you want to trigger "${label}" on your PC?`,
@@ -1735,12 +1823,16 @@ export default function App() {
     );
   };
 
-  /** Unlocks the host workstation by waking displays, dismissing lock screen, and typing optional PIN. */
+  /** Unlocks the host workstation by waking displays, dismissing lock screen, and entering PIN or password. */
   const handleUnlockWorkstation = (pin?: string) => {
     triggerHaptic('heavy');
-    setShowMenu(false);
     const targetPin = (pin !== undefined ? pin : workstationPin).trim();
-    const cmd = targetPin ? `unlock:${targetPin}` : 'unlock';
+    if (!targetPin) {
+      // Prompt user to enter their Windows password/PIN if not yet configured
+      setShowPinPromptModal(true);
+      return;
+    }
+    const cmd = `unlock:${targetPin}`;
     const success = sendCommand(cmd as any);
     if (success) {
       setIsWorkstationLocked(false);
@@ -1751,29 +1843,33 @@ export default function App() {
     }
   };
 
-  /** Handles Wake PC button tap, offering unlock if host workstation is locked. */
-  const onWakePcPressed = () => {
-    triggerHaptic('heavy');
-    setShowMenu(false);
-    if (isWorkstationLocked && isConnected) {
-      Alert.alert(
-        'Workstation Locked',
-        'Your host PC is currently connected and locked. Would you like to unlock it or dispatch a Wake-on-LAN packet?',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Unlock Workstation',
-            onPress: () => handleUnlockWorkstation(),
-          },
-          {
-            text: 'Send WoL Packet',
-            onPress: () => handleSendWakeOnLan(),
-          },
-        ]
-      );
+  /** Submits PIN from prompt modal, persists it if requested, and dispatches unlock. */
+  const submitPinAndUnlock = () => {
+    const trimmed = inputPin.trim();
+    if (!trimmed) {
+      Alert.alert('Required', 'Please enter your Windows password or PIN.');
       return;
     }
+    if (rememberPin) {
+      setWorkstationPin(trimmed);
+      AsyncStorage.setItem(WORKSTATION_PIN_STORAGE_KEY, trimmed).catch(() => {});
+    }
+    setShowPinPromptModal(false);
+    setInputPin('');
+    handleUnlockWorkstation(trimmed);
+  };
+
+  /** Handles Wake PC button tap: wakes display, sends WoL, and unlocks host workstation automatically. */
+  const onWakePcPressed = () => {
+    triggerHaptic('heavy');
+    if (isConnected) {
+      handleUnlockWorkstation();
+      return;
+    }
+    // If offline / PC asleep, broadcast WoL packet and auto-unlock once online
+    setPendingUnlockAfterWake(true);
     handleSendWakeOnLan();
+    setActionFeedback('⚡ Waking PC... Will auto-unlock once online.');
   };
 
   /** Sends a Wake-on-LAN request using the currently configured host settings. */
@@ -1813,7 +1909,6 @@ export default function App() {
 
   const triggerQuickAction = (command: any, label: string) => {
     triggerHaptic('medium');
-    setShowMenu(false);
     if (command === 'unlock') {
       handleUnlockWorkstation();
       return;
@@ -1829,10 +1924,13 @@ export default function App() {
       Alert.alert('Error', 'Failed to send command. Check link.');
     }
   };
+  if (!fontsLoaded) {
+    return null;
+  }
 
-    return (
+  return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <LinearGradient colors={['#070313', '#090710', '#05020B']} style={styles.container}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
         <StatusBar barStyle="light-content" />
         <View style={styles.safeArea}>
           <KeyboardAvoidingView
@@ -1840,257 +1938,13 @@ export default function App() {
             style={styles.keyboardView}
           >
           {/* Header */}
-          <View style={styles.header}>
-            <View style={styles.headerLeft}>
-              <Ionicons name="sparkles" size={24} color="#FF5A36" style={{ marginRight: 8 }} />
-              <Text style={styles.title}>BLINKY</Text>
-            </View>
-            <View style={styles.headerRight}>
-              <TouchableOpacity
-                style={styles.statusRowHeader}
-                onPress={() => {
-                  triggerHaptic('light');
-                  setShowSettings(!showSettings);
-                }}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.statusDotHeader, { backgroundColor: isConnected ? '#10B981' : (status === 'connecting' ? '#F59E0B' : '#EF4444') }]} />
-                <Text style={styles.statusTextHeader}>
-                  {isConnected ? 'Connected' : (status === 'connecting' ? 'Connecting...' : 'Disconnected')}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => { triggerHaptic('light'); setShowMenu(!showMenu); }} style={styles.menuBtn}>
-                <Ionicons name="ellipsis-vertical" size={20} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-          </View>
+          <BrandHeader
+            status={status}
+            isConnected={isConnected}
+            onPressConnection={() => setShowSettings(!showSettings)}
+          />
 
-          {/* Three Dots Dropdown Overlay Menu */}
-          {showMenu && (
-            <View style={styles.dropdownMenu}>
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => { triggerHaptic('light'); setShowMenu(false); setShowSettings(!showSettings); }}>
-                <Ionicons name="settings-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
-                <Text style={styles.dropdownText}>Local Link Setup</Text>
-              </TouchableOpacity>
-
-              <View style={styles.dropdownDivider} />
-
-              <TouchableOpacity
-                style={styles.dropdownItem}
-                onPress={onWakePcPressed}
-                disabled={isSendingWol}
-              >
-                <Ionicons name="flash" size={18} color="#10B981" style={styles.dropdownIcon} />
-                <Text style={[styles.dropdownText, { color: '#10B981', fontWeight: '600' }]}>
-                  {isSendingWol ? 'Waking PC...' : isWorkstationLocked ? 'Wake / Unlock PC' : 'Wake PC (WoL)'}
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerQuickAction('volume_mute', 'Mute')}>
-                <Ionicons name="volume-mute-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
-                <Text style={styles.dropdownText}>Mute Volume</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={handleCaptureScreenshot}>
-                <Ionicons name="crop-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
-                <Text style={styles.dropdownText}>Capture Screenshot</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.dropdownItem}
-                onPress={() => {
-                  if (isWorkstationLocked) {
-                    handleUnlockWorkstation();
-                  } else {
-                    triggerQuickAction('lock' as any, 'Lock');
-                  }
-                }}
-              >
-                <Ionicons
-                  name={isWorkstationLocked ? 'lock-open-outline' : 'lock-closed-outline'}
-                  size={18}
-                  color={isWorkstationLocked ? '#10B981' : '#FFFFFF'}
-                  style={styles.dropdownIcon}
-                />
-                <Text style={[styles.dropdownText, isWorkstationLocked && { color: '#10B981', fontWeight: '600' }]}>
-                  {isWorkstationLocked ? 'Unlock Workstation' : 'Lock Workstation'}
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerPowerCommand('hibernate', 'Hibernate')}>
-                <Ionicons name="moon" size={18} color="#A78BFA" style={styles.dropdownIcon} />
-                <Text style={[styles.dropdownText, { color: '#A78BFA' }]}>Hibernate Host</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerPowerCommand('sleep', 'Sleep')}>
-                <Ionicons name="moon-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
-                <Text style={styles.dropdownText}>Sleep Mode</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerPowerCommand('restart', 'Reboot')}>
-                <Ionicons name="refresh-outline" size={18} color="#FFFFFF" style={styles.dropdownIcon} />
-                <Text style={styles.dropdownText}>Reboot PC</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.dropdownItem} onPress={() => triggerPowerCommand('power_off', 'Shutdown')}>
-                <Ionicons name="power-outline" size={18} color="#EF4444" style={styles.dropdownIcon} />
-                <Text style={[styles.dropdownText, { color: '#EF4444' }]}>Shutdown PC</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* Local Link Setup Box (Shows right below header when toggled) */}
-          {showSettings && (
-            <View style={styles.connectionCard}>
-              <View style={styles.connectionHeaderRow}>
-                <Text style={styles.connectionTitle}>Local Wi-Fi Link Setup</Text>
-                <TouchableOpacity onPress={() => setShowSettings(false)}>
-                  <Ionicons name="close" size={20} color="#8A86AA" />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.connectionSubtitle}>
-                {RELEASE_TRANSPORT
-                  ? 'Enter the PC IP, remote token, and the pinned certificate value from the PC release build.'
-                  : 'Enter your PC\'s IP (e.g. 100.122.62.2) or tap "Auto-Discover" to automatically locate and connect to Blinky.'}
-              </Text>
-              <View style={styles.inputWrapper}>
-                <Ionicons name="link-outline" size={20} color="#6C6985" style={styles.inputIcon} />
-                <TextInput
-                  style={[styles.input, isConnected && styles.inputDisabled]}
-                  placeholder="Enter PC IP (e.g. 100.122.62.2)"
-                  placeholderTextColor="#6C6985"
-                  value={ipAddress}
-                  onChangeText={setIpAddress}
-                  editable={!isConnected && status !== 'connecting'}
-                  keyboardType="numeric"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </View>
-              <View style={styles.inputWrapper}>
-                <Ionicons name="key-outline" size={20} color="#6C6985" style={styles.inputIcon} />
-                <TextInput
-                  style={[styles.input, isConnected && styles.inputDisabled]}
-                  placeholder="Remote token (BLINKY_REMOTE_TOKEN)"
-                  placeholderTextColor="#6C6985"
-                  value={remoteToken}
-                  onChangeText={setRemoteToken}
-                  editable={!isConnected && status !== 'connecting'}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </View>
-              {RELEASE_TRANSPORT && (
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="shield-checkmark-outline" size={20} color="#6C6985" style={styles.inputIcon} />
-                  <TextInput
-                    style={[styles.input, isConnected && styles.inputDisabled]}
-                    placeholder="Certificate pin (sha256/...)"
-                    placeholderTextColor="#6C6985"
-                    value={certificatePin}
-                    onChangeText={setCertificatePin}
-                    editable={!isConnected && status !== 'connecting'}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                </View>
-              )}
-              <View style={styles.inputWrapper}>
-                <Ionicons name="lock-open-outline" size={20} color="#6C6985" style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Windows Account Password"
-                  placeholderTextColor="#6C6985"
-                  value={workstationPin}
-                  onChangeText={(val) => {
-                    setWorkstationPin(val);
-                    AsyncStorage.setItem(WORKSTATION_PIN_STORAGE_KEY, val).catch(() => {});
-                  }}
-                  secureTextEntry
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </View>
-              <Text style={{ color: '#6C6985', fontSize: 11, marginTop: -6, marginBottom: 8, paddingHorizontal: 4, lineHeight: 15 }}>
-                Enter your Windows password (not Windows Hello PIN) to unlock remotely via the Unlock Provider.
-              </Text>
-              <View style={styles.actionRow}>
-
-                {status !== 'connected' && status !== 'connecting' ? (
-                  <>
-                    <TouchableOpacity style={styles.connectBtn} onPress={handleConnect} activeOpacity={0.8} disabled={isDiscovering}>
-                      <LinearGradient
-                        colors={isDiscovering ? ['#4B5563', '#374151'] : ['#3B82F6', '#1D4ED8']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.gradientBtn}
-                      >
-                        <Text style={styles.btnText}>Establish Link</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.discoverBtn} onPress={handleAutoDiscover} activeOpacity={0.8} disabled={isDiscovering}>
-                      <LinearGradient
-                        colors={isDiscovering ? ['#4B5563', '#374151'] : ['#8B5CF6', '#6D28D9']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.gradientBtn}
-                      >
-                        <Text style={styles.btnText}>Auto-Discover</Text>
-                      </LinearGradient>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <TouchableOpacity style={styles.disconnectBtn} onPress={() => { triggerHaptic('heavy'); disconnect(); }} activeOpacity={0.8}>
-                    <Text style={styles.disconnectBtnText}>
-                      {status === 'connecting' ? 'Cancel Connection' : 'Disconnect Link'}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-              {discoveryProgress && (
-                <View style={styles.discoveryProgressContainer}>
-                  <ActivityIndicator size="small" color="#8B5CF6" style={{ marginRight: 8 }} />
-                  <Text style={styles.discoveryProgressText}>{discoveryProgress}</Text>
-                </View>
-              )}
-              {errorMsg && (
-                <View style={styles.errorContainer}>
-                  <Text style={styles.errorText}>{errorMsg}</Text>
-                </View>
-              )}
-
-              {/* Target MAC address for Wake-on-LAN */}
-              <View style={{ marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255, 255, 255, 0.08)' }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <Text style={{ color: '#8A86AA', fontSize: 11, fontWeight: '700', letterSpacing: 0.5 }}>TARGET PC MAC ADDRESS</Text>
-                  {systemInfo?.network?.mac_address ? (
-                    <TouchableOpacity
-                      onPress={() => {
-                        triggerHaptic('light');
-                        setMacAddress(systemInfo.network.mac_address);
-                      }}
-                      style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: 'rgba(16, 185, 129, 0.15)', borderWidth: 1, borderColor: 'rgba(16, 185, 129, 0.3)' }}
-                    >
-                      <Text style={{ fontSize: 10, color: '#10B981', fontWeight: '700' }}>⚡ Auto-detected</Text>
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-                <View style={styles.inputWrapper}>
-                  <Ionicons name="hardware-chip-outline" size={18} color="#6C6985" style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    placeholder={systemInfo?.network?.mac_address || "e.g. 68:c6:ac:a2:d2:30"}
-                    placeholderTextColor="#6C6985"
-                    value={macAddress}
-                    onChangeText={setMacAddress}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                  />
-                </View>
-              </View>
-            </View>
-          )}
+          {/* Settings modal extracted to SettingsModal.tsx */}
 
           {/* Disconnected Alert Banner (if disconnected and settings not open) */}
           {!isConnected && !showSettings && (
@@ -2349,233 +2203,138 @@ export default function App() {
               setInputPin('');
             }}
           >
-            {messages.map((message) => {
-              const isUser = message.sender === 'user';
-              return (
-                <View key={message.id} style={isUser ? styles.userMessageRow : styles.blinkyMessageRow}>
-                  {/* Blinky Avatar */}
-                  {!isUser && (
-                    <View style={styles.avatarContainer}>
-                      <Ionicons name="sparkles" size={14} color="#FF5A36" />
-                    </View>
-                  )}
-
-                  <View style={isUser ? styles.userMessageBubble : styles.blinkyMessageBubble}>
-                    {/* Bubble main text with full Markdown & LaTeX rendering */}
-                    <MarkdownRenderer content={message.text} isUser={isUser} />
-
-                    {/* Nested Active Progress Card inside Blinky's response bubble */}
-                    {!isUser && message.progress && (
-                      <View style={styles.nestedProgressCard}>
-                        {/* Progress slider line */}
-                        <View style={styles.progressBarWrapper}>
-                          <View style={styles.progressBarContainer}>
-                            <View 
-                              style={[
-                                styles.progressBarFill, 
-                                { width: `${message.progress.percent}%` }
-                              ]} 
-                            />
-                          </View>
-                          <Text style={styles.progressPercent}>{message.progress.percent}%</Text>
-                        </View>
-
-                        {/* Status message */}
-                        <View style={styles.progressStatusRow}>
-                          <View style={styles.progressStatusDot} />
-                          <Text style={styles.progressStatusText} numberOfLines={2}>
-                            {message.progress.statusText}
-                          </Text>
-                        </View>
-
-                        {/* Stopwatch */}
-                        <View style={styles.progressTimerRow}>
-                          <Ionicons name="time-outline" size={14} color="#8A86AA" style={{ marginRight: 6 }} />
-                          <Text style={styles.progressTimerText}>{formatTime(message.progress.duration)}</Text>
-                        </View>
-                      </View>
-                    )}
-
-                    {/* Screenshot results inside the final success bubble */}
-                    {!isUser && message.screenshot_b64 && (
-                      <TouchableOpacity
-                        activeOpacity={0.88}
-                        onPress={() => {
-                          triggerHaptic('light');
-                          setPreviewImageUri(`data:image/jpeg;base64,${message.screenshot_b64}`);
-                        }}
-                        style={styles.screenshotTouchable}
-                      >
-                        <Image
-                          source={{ uri: `data:image/jpeg;base64,${message.screenshot_b64}` }}
-                          style={styles.bubbleScreenshot}
-                        />
-                        <View style={styles.enlargeBadge}>
-                          <Ionicons name="expand-outline" size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
-                          <Text style={styles.enlargeBadgeText}>Tap to enlarge</Text>
-                        </View>
-                      </TouchableOpacity>
-                    )}
-
-                    {/* Steps trace inside the final success bubble */}
-                    {!isUser && message.steps && message.steps.length > 0 && (
-                      <View style={styles.bubbleStepsContainer}>
-                        {message.steps.map((step: any, index: number) => (
-                          <View key={index} style={styles.bubbleStepItem}>
-                            <View style={styles.bubbleStepBadge}>
-                              <Text style={styles.bubbleStepBadgeText}>{step.step || index + 1}</Text>
-                            </View>
-                            <View style={styles.bubbleStepContent}>
-                              <Text style={styles.bubbleStepText}>{step.instruction}</Text>
-                              {step.target_text && (
-                                <View style={styles.bubbleStepTargetBadge}>
-                                  <Text style={styles.bubbleStepTargetText}>{step.target_text}</Text>
-                                </View>
-                              )}
-                            </View>
-                          </View>
-                        ))}
-                      </View>
-                    )}
+            <KeyboardAvoidingView
+              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+              style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.75)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
+            >
+              <View
+                style={{
+                  width: '100%',
+                  maxWidth: 380,
+                  backgroundColor: '#161426',
+                  borderRadius: 24,
+                  padding: 24,
+                  borderWidth: 1,
+                  borderColor: 'rgba(255, 90, 54, 0.3)',
+                  shadowColor: '#000',
+                  shadowOffset: { width: 0, height: 12 },
+                  shadowOpacity: 0.5,
+                  shadowRadius: 24,
+                  elevation: 10,
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+                  <View
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 14,
+                      backgroundColor: 'rgba(255, 90, 54, 0.15)',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      marginRight: 14,
+                    }}
+                  >
+                    <Ionicons name="key" size={22} color="#FF5A36" />
                   </View>
-
-                  {/* Timestamp aligned right under user or blinky message */}
-                  <View style={isUser ? styles.userMetaRow : styles.blinkyMetaRow}>
-                    <Text style={styles.metaTimestamp}>{message.timestamp}</Text>
-                    {isUser && (
-                      <View style={styles.checkmarksRow}>
-                        <Ionicons name="checkmark-done" size={14} color="#FF5A36" />
-                      </View>
-                    )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 17, fontWeight: '800', color: '#FFFFFF' }}>
+                      Unlock Workstation
+                    </Text>
+                    <Text style={{ fontSize: 12, color: 'rgba(255, 255, 255, 0.5)' }}>
+                      Windows Password or PIN
+                    </Text>
                   </View>
                 </View>
-              );
-            })}
-          </ScrollView>
 
-          {/* Slash Commands Dropdown Menu */}
-          {(() => {
-            const showSlashMenu = queryText.startsWith('/') && !queryText.includes(' ');
-            const slashFilter = queryText.toLowerCase().replace('/', '');
-            const filteredCommands = SLASH_COMMANDS.filter(cmd =>
-              !slashFilter ||
-              cmd.id.includes(slashFilter) ||
-              cmd.title.toLowerCase().includes(slashFilter) ||
-              cmd.badge.toLowerCase().includes(slashFilter)
-            );
+                <Text style={{ fontSize: 13, color: 'rgba(255, 255, 255, 0.7)', marginBottom: 16, lineHeight: 18 }}>
+                  Enter your Windows lockscreen PIN or password to unlock your host workstation automatically.
+                </Text>
 
-            if (!showSlashMenu || filteredCommands.length === 0) return null;
-
-            return (
-              <View style={styles.slashMenuContainer}>
-                <View style={styles.slashMenuHeader}>
-                  <Ionicons name="terminal-outline" size={13} color="#FF5A36" style={{ marginRight: 6 }} />
-                  <Text style={styles.slashMenuHeaderText}>COMMANDS</Text>
+                <View
+                  style={{
+                    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+                    borderRadius: 16,
+                    borderWidth: 1,
+                    borderColor: 'rgba(255, 255, 255, 0.1)',
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingHorizontal: 16,
+                    marginBottom: 16,
+                  }}
+                >
+                  <Ionicons name="lock-closed" size={18} color="#FF5A36" style={{ marginRight: 10 }} />
+                  <TextInput
+                    style={{ height: 48, flex: 1, color: '#FFFFFF', fontSize: 15 }}
+                    placeholder="Enter Windows PIN or password"
+                    placeholderTextColor="rgba(255, 255, 255, 0.35)"
+                    value={inputPin}
+                    onChangeText={setInputPin}
+                    secureTextEntry
+                    autoFocus
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    onSubmitEditing={submitPinAndUnlock}
+                  />
                 </View>
-                {filteredCommands.map((cmd, idx) => (
+
+                <TouchableOpacity
+                  style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}
+                  onPress={() => setRememberPin(!rememberPin)}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={rememberPin ? 'checkbox' : 'square-outline'}
+                    size={20}
+                    color={rememberPin ? '#FF5A36' : 'rgba(255, 255, 255, 0.4)'}
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={{ fontSize: 13, color: 'rgba(255, 255, 255, 0.8)', fontWeight: '500' }}>
+                    Remember for future Wake PC taps
+                  </Text>
+                </TouchableOpacity>
+
+                <View style={{ flexDirection: 'row', gap: 12 }}>
                   <TouchableOpacity
-                    key={cmd.id}
-                    style={[
-                      styles.slashMenuItem,
-                      idx < filteredCommands.length - 1 && styles.slashMenuItemBorder
-                    ]}
+                    style={{
+                      flex: 1,
+                      height: 46,
+                      borderRadius: 14,
+                      backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
                     onPress={() => {
-                      triggerHaptic('light');
-                      setQueryText(cmd.prefix);
+                      setShowPinPromptModal(false);
+                      setInputPin('');
                     }}
                     activeOpacity={0.7}
                   >
-                    <View style={[styles.slashMenuIconBadge, { backgroundColor: `${cmd.color}22`, borderColor: `${cmd.color}55` }]}>
-                      <Ionicons name={cmd.icon} size={15} color={cmd.color} />
-                    </View>
-                    <View style={styles.slashMenuContent}>
-                      <View style={styles.slashMenuTitleRow}>
-                        <Text style={styles.slashMenuTitle}>{cmd.title}</Text>
-                        <View style={[styles.slashMenuBadge, { backgroundColor: `${cmd.color}22` }]}>
-                          <Text style={[styles.slashMenuBadgeText, { color: cmd.color }]}>{cmd.badge}</Text>
-                        </View>
-                      </View>
-                      <Text style={styles.slashMenuDesc} numberOfLines={1}>
-                        {cmd.description}
-                      </Text>
-                    </View>
-                    <Ionicons name="return-down-back-outline" size={14} color="#6C6985" />
+                    <Text style={{ color: 'rgba(255, 255, 255, 0.7)', fontSize: 14, fontWeight: '700' }}>
+                      Cancel
+                    </Text>
                   </TouchableOpacity>
-                ))}
+
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      height: 46,
+                      borderRadius: 14,
+                      backgroundColor: '#FF5A36',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
+                    onPress={submitPinAndUnlock}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={{ color: '#FFFFFF', fontSize: 14, fontWeight: '800' }}>
+                      Unlock PC
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-            );
-          })()}
-
-          {/* Bottom Chat Bar */}
-          <View style={[styles.chatInputBar, !isConnected && styles.chatInputBarDisabled]}>
-            {/* Voice Command Mic Circle Button */}
-            {isVoiceTranscribing ? (
-              <View style={styles.voiceSpinnerWrapper}>
-                <ActivityIndicator size="small" color="#FF5A36" />
-              </View>
-            ) : (
-              <TouchableOpacity
-                style={[
-                  styles.voiceMicBtn,
-                  isVoiceRecording && styles.voiceMicBtnRecording,
-                  !isConnected && styles.voiceMicBtnDisabled
-                ]}
-                onPress={toggleVoiceRecording}
-                disabled={!isConnected || isVoiceTranscribing}
-                activeOpacity={0.7}
-              >
-                <Ionicons 
-                  name={isVoiceRecording ? "mic" : "mic"} 
-                  size={20} 
-                  color={isVoiceRecording ? "#EF4444" : "#FF5A36"} 
-                />
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity
-              style={[styles.fileAttachBtn, !isConnected && styles.voiceMicBtnDisabled]}
-              onPress={() => setShowFileTransfer(true)}
-              disabled={!isConnected}
-              accessibilityLabel="Send a file to PC"
-              activeOpacity={0.7}
-            >
-              <Ionicons name="attach-outline" size={21} color="#B9A7FF" />
-            </TouchableOpacity>
-
-            <TextInput
-              style={styles.chatTextInput}
-              placeholder="Message Blinky or /agy <prompt>"
-              placeholderTextColor="#6C6985"
-              value={queryText}
-              onChangeText={setQueryText}
-              editable={isConnected && agentStatus !== 'processing'}
-              autoCapitalize="none"
-              autoCorrect={false}
-              onSubmitEditing={handleQuery}
-            />
-
-            {/* Stop Action or Send Button */}
-            {agentStatus === 'processing' ? (
-              <TouchableOpacity 
-                style={styles.stopCircleBtn} 
-                onPress={handleStopQuery}
-                activeOpacity={0.7}
-              >
-                <View style={styles.stopSquare} />
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity 
-                style={[
-                  styles.chatSendBtn, 
-                  (!isConnected || !queryText.trim()) && styles.chatSendBtnDisabled
-                ]}
-                onPress={handleQuery}
-                disabled={!isConnected || !queryText.trim()}
-              >
-                <Ionicons name="arrow-up" size={20} color="#FFFFFF" />
-              </TouchableOpacity>
-            )}
-          </View>
+            </KeyboardAvoidingView>
+          </Modal>
 
           {/* Fullscreen Image Preview Modal with Pinch to Zoom */}
           <Modal
@@ -2651,7 +2410,6 @@ export default function App() {
       </View>
       {showSplash && <SplashScreen onDismiss={() => setShowSplash(false)} />}
       </View>
-    </LinearGradient>
     </GestureHandlerRootView>
   );
 }
@@ -2719,44 +2477,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.05)',
   },
-  dropdownMenu: {
-    position: 'absolute',
-    top: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 52 : 96,
-    right: 20,
-    width: 220,
-    backgroundColor: '#16151A',
-    borderRadius: 16,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    zIndex: 1000,
-    shadowColor: '#000',
-    shadowOpacity: 0.5,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 10,
-  },
-  dropdownItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-  },
-  dropdownIcon: {
-    marginRight: 12,
-    width: 20,
-    textAlign: 'center',
-  },
-  dropdownText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  dropdownDivider: {
-    height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-    marginVertical: 4,
-  },
+
   connectionCard: {
     backgroundColor: 'rgba(21, 17, 43, 0.9)',
     borderRadius: 24,
