@@ -1334,13 +1334,23 @@ def handle_notebook_rpc(action: str, params: dict) -> dict:
 
     elif action == "sync_api_keys":
         import os
-        keys_payload = {
+        import time
+        import base64
+        import json
+        raw_keys = {
             "groq_key": os.environ.get("GROQ_API_KEY", ""),
             "openai_key": os.environ.get("OPENAI_API_KEY", ""),
             "gemini_key": os.environ.get("GEMINI_API_KEY", ""),
             "deepseek_key": os.environ.get("DEEPSEEK_API_KEY", ""),
         }
-        return {"success": True, "keys": keys_payload}
+        json_bytes = json.dumps(raw_keys).encode("utf-8")
+        encoded_token = base64.b64encode(json_bytes).decode("utf-8")
+        return {
+            "success": True,
+            "keys": raw_keys,
+            "encoded_payload": encoded_token,
+            "synced_at": time.time(),
+        }
 
     return {"success": False, "error": f"Unknown notebook action: {action}"}
 

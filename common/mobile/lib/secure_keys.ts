@@ -1,6 +1,8 @@
+import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const SECURE_KEYS_STORAGE_KEY = '@blinky_mobile_api_keys';
+export const SECURE_KEYS_STORAGE_KEY = 'blinky_mobile_api_keys_v2';
+export const ASYNC_KEYS_FALLBACK_KEY = '@blinky_mobile_api_keys';
 
 export interface SyncedApiKeys {
   groq_key?: string;
@@ -10,28 +12,50 @@ export interface SyncedApiKeys {
 }
 
 /**
- * Persists API keys transferred from PC Blinky into mobile storage.
+ * Persists API keys transferred from PC Blinky into hardware Android KeyStore via SecureStore.
  */
 export async function saveSyncedApiKeys(keys: SyncedApiKeys): Promise<void> {
   try {
     const payload = JSON.stringify(keys);
-    await AsyncStorage.setItem(SECURE_KEYS_STORAGE_KEY, payload);
-    console.log('[SecureKeys] API Keys successfully synced and saved on mobile.');
+    const isSecureAvailable = await SecureStore.isAvailableAsync();
+    
+    if (isSecureAvailable) {
+      await SecureStore.setItemAsync(SECURE_KEYS_STORAGE_KEY, payload, {
+        keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+      });
+      console.log('[SecureKeys] API Keys securely encrypted in Android KeyStore.');
+    } else {
+      await AsyncStorage.setItem(ASYNC_KEYS_FALLBACK_KEY, payload);
+      console.log('[SecureKeys] API Keys saved to AsyncStorage fallback.');
+    }
   } catch (err) {
-    console.warn('[SecureKeys] Error saving API keys on mobile:', err);
+    console.warn('[SecureKeys] Error saving encrypted API keys on mobile:', err);
+    try {
+      await AsyncStorage.setItem(ASYNC_KEYS_FALLBACK_KEY, JSON.stringify(keys));
+    } catch (_) {}
   }
 }
 
 /**
- * Retrieves the stored API keys for standalone mobile execution (PC offline).
+ * Retrieves the stored encrypted API keys for standalone mobile execution (PC offline).
  */
 export async function getSyncedApiKeys(): Promise<SyncedApiKeys> {
   try {
-    const data = await AsyncStorage.getItem(SECURE_KEYS_STORAGE_KEY);
+    const isSecureAvailable = await SecureStore.isAvailableAsync();
+    let data: string | null = null;
+
+    if (isSecureAvailable) {
+      data = await SecureStore.getItemAsync(SECURE_KEYS_STORAGE_KEY);
+    }
+
+    if (!data) {
+      data = await AsyncStorage.getItem(ASYNC_KEYS_FALLBACK_KEY);
+    }
+
     if (!data) return {};
     return JSON.parse(data) as SyncedApiKeys;
   } catch (err) {
-    console.warn('[SecureKeys] Error loading API keys on mobile:', err);
+    console.warn('[SecureKeys] Error loading encrypted API keys on mobile:', err);
     return {};
   }
 }

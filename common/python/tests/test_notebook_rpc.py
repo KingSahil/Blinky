@@ -37,6 +37,8 @@ class TestNotebookRPC(unittest.TestCase):
         res_keys = handle_notebook_rpc("sync_api_keys", {})
         self.assertTrue(res_keys["success"])
         self.assertIn("groq_key", res_keys["keys"])
+        self.assertIn("encoded_payload", res_keys)
+        self.assertIn("synced_at", res_keys)
 
         # 5. Delete Notebook
         res_del = handle_notebook_rpc("notebook_delete", {"notebook_id": nb_id})
