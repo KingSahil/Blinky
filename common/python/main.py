@@ -341,6 +341,10 @@ def run(
         LOGGER.info("Routing to Notebook Intelligence engine for intent: NOTEBOOK")
         notebook_id = extracted_params.get("notebook_id") or "default"
         return run_notebook_intelligence(notebook_id, question, started, warnings)
+    elif intent == "PDF_ENGINE":
+        LOGGER.info("Routing to Custom PDF Engine for intent: PDF_ENGINE")
+        action = str(extracted_params.get("pdf_action") or "convert").lower()
+        return run_pdf_tool(action, extracted_params, started, warnings)
     elif intent == "VIDEO_EDIT":
         LOGGER.info("Routing to AiCut video editor for intent: VIDEO_EDIT")
         return run_aicut_tool(extracted_params, question, started, warnings)
@@ -1168,6 +1172,39 @@ def run_esp32_light_tool(
         "warnings": warnings,
         "is_continuation": False,
     }
+
+
+def run_pdf_tool(
+    action: str,
+    params: dict,
+    started: float,
+    warnings: list[str],
+) -> dict:
+    """Execute Custom PDF Engine action and return a Blinky-formatted result."""
+    from tools.pdf_tool import handle_pdf_action
+    _emit_status("pdf_engine", f"Executing PDF action: {action}...")
+    try:
+        res = handle_pdf_action(action, params)
+        if res.get("success"):
+            output = res.get("output_path") or res.get("output_csv") or "PDF operation completed."
+            summary = f"PDF Action '{action}' completed successfully: {output}"
+        else:
+            summary = f"PDF Action '{action}' failed: {res.get('error', 'Unknown error')}"
+    except Exception as exc:
+        summary = f"PDF Action error: {exc}"
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": summary,
+        "steps": [],
+        "active_app": {"title": "", "process": "", "supported": False},
+        "ocr": {"count": 0, "items": []},
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+        "is_continuation": False,
+    }
+
 
 
 def run_web_intelligence(
