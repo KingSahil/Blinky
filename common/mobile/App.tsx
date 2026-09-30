@@ -174,7 +174,8 @@ const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 3000, certificat
 
   if (RELEASE_TRANSPORT) {
     const nativeModule = loadNativeSecureSocketModule();
-    if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative) || !certificatePin?.trim()) {
+    const pin = certificatePin?.trim();
+    if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative) || !pin) {
       return Promise.reject(new Error('Release discovery requires the secure socket module and certificate pin.'));
     }
     const socketId = `discovery-${ip}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -208,7 +209,7 @@ const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 3000, certificat
         subscriptions.forEach((subscription) => subscription.remove());
         void nativeModule.close(socketId).catch(() => undefined);
       };
-      void nativeModule.connect(socketId, `wss://${ip}:${targetPort}`, certificatePin.trim()).catch((error: any) => {
+      void nativeModule.connect(socketId, `wss://${ip}:${targetPort}`, pin).catch((error: any) => {
         finish();
         reject(error);
       });
