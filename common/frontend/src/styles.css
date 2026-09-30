@@ -1487,7 +1487,7 @@ h3 {
   right: 14px;
   width: 320px;
   max-width: calc(100vw - 28px);
-  max-height: min(600px, calc(100vh - 64px));
+  max-height: 600px;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;

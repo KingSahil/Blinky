@@ -505,8 +505,11 @@ export function App() {
       let height = formRect.height;
 
       if (showSettings && dropdownRef.current) {
-        const dropdownRect = dropdownRef.current.getBoundingClientRect();
-        height = Math.max(height, 52 + dropdownRect.height);
+        const dd = dropdownRef.current;
+        // Use scrollHeight (full content) instead of the capped visible rect,
+        // otherwise the window never grows enough and the menu gets cut off.
+        const dropdownHeight = Math.max(dd.scrollHeight, dd.getBoundingClientRect().height);
+        height = Math.max(height, 52 + dropdownHeight);
       }
 
       if (showWaModal) {
@@ -518,16 +521,22 @@ export function App() {
     };
 
     resizeWindow();
+    // Re-measure after layout/fonts settle so the full menu height is used.
+    const raf = requestAnimationFrame(resizeWindow);
 
     const observer = new ResizeObserver(() => {
       resizeWindow();
     });
 
     observer.observe(formElement);
+    if (showSettings && dropdownRef.current) {
+      observer.observe(dropdownRef.current);
+    }
     return () => {
+      cancelAnimationFrame(raf);
       observer.disconnect();
     };
-  }, [showSettings, showWaModal, waStatus]);
+  }, [showSettings, showWaModal, waStatus, provider, voiceProvider]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setQuestion(event.target.value);
