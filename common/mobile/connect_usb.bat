@@ -37,10 +37,12 @@ exit /b 1
 
 :run_adb
 echo.
-echo Running 'adb reverse tcp:9001 tcp:9001', 'adb reverse tcp:9002 tcp:9002', and 'adb reverse tcp:8081 tcp:8081'...
+echo Running 'adb reverse tcp:9001 tcp:9001', 'adb reverse tcp:9002 tcp:9002', 'adb reverse tcp:9004 tcp:9004', and 'adb reverse tcp:8081 tcp:8081'...
 %ADB_PATH% reverse tcp:9001 tcp:9001
 if %ERRORLEVEL% neq 0 goto reverse_error
 %ADB_PATH% reverse tcp:9002 tcp:9002
+if %ERRORLEVEL% neq 0 goto reverse_error
+%ADB_PATH% reverse tcp:9004 tcp:9004
 if %ERRORLEVEL% neq 0 goto reverse_error
 %ADB_PATH% reverse tcp:8081 tcp:8081 >nul 2>nul
 if %ERRORLEVEL% neq 0 goto reverse_error

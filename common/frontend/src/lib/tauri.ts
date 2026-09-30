@@ -47,6 +47,24 @@ export function getSecureTransportInfo(): Promise<SecureTransportInfo> {
   return invoke<SecureTransportInfo>('get_secure_transport_info');
 }
 
+export interface MobilePairingPayload {
+  v: number;
+  ips: string[];
+  ws_port: number;
+  discovery_port: number;
+  token: string;
+  certificate_pin: string | null;
+  mode: 'development' | 'release';
+}
+
+export function getMobilePairingPayload(): Promise<MobilePairingPayload> {
+  return invoke<MobilePairingPayload>('get_mobile_pairing_payload');
+}
+
+export function regenerateRemoteToken(): Promise<string> {
+  return invoke<string>('regenerate_remote_token');
+}
+
 export function connectSecureSocket(
   socketId: string,
   url: string,
@@ -202,11 +220,26 @@ export async function logDebugMessage(message: string): Promise<void> {
 }
 
 export async function pauseWakeWord(): Promise<void> {
-  return invoke('pause_wake_word');
+  try {
+    if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+      await invoke('pause_wake_word');
+    }
+  } catch {
+    // Benign: hot-reload raced a Rust async op ("Couldn't find callback id")
+    // or the wake-word process isn't running. Never reject — all call sites
+    // use fire-and-forget `void pauseWakeWord()`.
+  }
 }
 
 export async function resumeWakeWord(): Promise<void> {
-  return invoke('resume_wake_word');
+  try {
+    if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+      await invoke('resume_wake_word');
+    }
+  } catch {
+    // Same as above — swallow reload-race rejections so Vite never reports
+    // "[Unhandled rejection] Unknown Error: [object Event]".
+  }
 }
 
 export async function setAgentCursorVisibility(visible: boolean): Promise<void> {

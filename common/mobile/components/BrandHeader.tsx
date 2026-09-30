@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography, radius } from '../theme/theme';
 import * as Haptics from 'expo-haptics';
@@ -15,7 +15,11 @@ export function BrandHeader({ status, isConnected, onPressConnection }: BrandHea
     <View style={styles.header}>
       {/* Brand / Logo */}
       <View style={styles.brandContainer}>
-        <Ionicons name="sparkles" size={22} color={colors.accent} style={{ marginRight: 6 }} />
+        <Image
+          source={require('../assets/blinky-mascot-logo.png')}
+          style={styles.brandLogo}
+          resizeMode="contain"
+        />
         <Text style={styles.brandText}>Blinky</Text>
       </View>
 
@@ -64,6 +68,12 @@ const styles = StyleSheet.create({
   brandContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+  },
+  brandLogo: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    marginRight: 8,
   },
   brandText: {
     ...typography.heading3,

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,16 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors, typography, radius, spacing } from '../theme/theme';
+import { QrScanner, parsePairingQr } from './QrScanner';
+
+export type LinkTab = 'qr' | 'manual';
+
+export interface QrConnectInfo {
+  ip: string;
+  token?: string;
+  pin?: string;
+  mode?: string;
+}
 
 export interface SettingsModalProps {
   visible: boolean;
@@ -37,6 +47,7 @@ export interface SettingsModalProps {
   isDiscovering: boolean;
   handleConnect: () => void;
   handleAutoDiscover: () => void;
+  handleQrConnect: (qr: QrConnectInfo) => void;
   disconnect: () => void;
   discoveryProgress: string | null;
   errorMsg: string | null;
@@ -46,6 +57,8 @@ export interface SettingsModalProps {
 
 export function SettingsModal(props: SettingsModalProps) {
   const panY = useRef(new Animated.Value(0)).current;
+  const [linkTab, setLinkTab] = useState<LinkTab>('qr');
+  const [qrError, setQrError] = useState<string | null>(null);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -89,10 +102,30 @@ export function SettingsModal(props: SettingsModalProps) {
   useEffect(() => {
     if (props.visible) {
       panY.setValue(0);
+      setQrError(null);
     }
   }, [props.visible]);
 
   if (!props.visible) return null;
+
+  // QR pairing is a release-build feature (release APK <-> release PC,
+  // wss + pinned cert). Dev builds use the manual flow below.
+  const qrAvailable = props.RELEASE_TRANSPORT;
+
+  const handleQrScanned = (data: string) => {
+    const parsed = parsePairingQr(data);
+    if (!parsed) {
+      setQrError('That is not a Blinky pairing code. Open the Blinky PC app, tap the QR icon in its header, and scan that code.');
+      return;
+    }
+    setQrError(null);
+    props.handleQrConnect({
+      ip: parsed.ip,
+      token: parsed.token,
+      pin: parsed.pin ?? undefined,
+      mode: parsed.mode,
+    });
+  };
 
   return (
     <Modal visible={props.visible} animationType="fade" transparent={true} onRequestClose={handleDismiss}>
@@ -120,10 +153,77 @@ export function SettingsModal(props: SettingsModalProps) {
           <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
             <Text style={styles.connectionSubtitle}>
               {props.RELEASE_TRANSPORT
-                ? 'Enter the PC IP, remote token, and the pinned certificate value from the PC release build.'
+                ? 'Scan the QR from the PC app, or enter the details manually below.'
                 : 'Enter your PC\'s IP (e.g. 100.122.62.2) or tap "Auto-Discover" to automatically locate and connect to Blinky.'}
             </Text>
-            
+
+            {qrAvailable && (
+            <View style={styles.tabRow}>
+              <TouchableOpacity
+                style={[styles.tab, linkTab === 'qr' && styles.tabActive]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                  setLinkTab('qr');
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="qr-code-outline"
+                  size={16}
+                  color={linkTab === 'qr' ? colors.white : colors.textSecondary}
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={[styles.tabText, linkTab === 'qr' && styles.tabTextActive]}>QR</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.tab, linkTab === 'manual' && styles.tabActive]}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                  setLinkTab('manual');
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="create-outline"
+                  size={16}
+                  color={linkTab === 'manual' ? colors.white : colors.textSecondary}
+                  style={{ marginRight: 6 }}
+                />
+                  <Text style={[styles.tabText, linkTab === 'manual' && styles.tabTextActive]}>Manual</Text>
+                </TouchableOpacity>
+            </View>
+            )}
+
+            {qrAvailable && linkTab === 'qr' ? (
+              props.status === 'connected' ? (
+                <View style={styles.connectedNote}>
+                  <Ionicons name="checkmark-circle-outline" size={20} color={colors.success} />
+                  <Text style={styles.connectedNoteText}>
+                    Connected{props.ipAddress ? ` to ${props.ipAddress}` : ''}. Disconnect to pair a different PC.
+                  </Text>
+                </View>
+              ) : props.status === 'connecting' ? (
+                <View style={styles.progressContainer}>
+                  <ActivityIndicator size="small" color={colors.accent} style={{ marginRight: 8 }} />
+                  <Text style={styles.progressText}>Connecting...</Text>
+                </View>
+              ) : (
+              <View>
+                <QrScanner onScanned={handleQrScanned} scanActive={props.visible} />
+                {qrError ? (
+                  <View style={styles.errorContainer}>
+                    <Text style={styles.errorText}>{qrError}</Text>
+                  </View>
+                ) : null}
+                {props.errorMsg ? (
+                  <View style={styles.errorContainer}>
+                    <Text style={styles.errorText}>{props.errorMsg}</Text>
+                  </View>
+                ) : null}
+              </View>
+              )
+            ) : (
+              <View>
             <View style={styles.inputWrapper}>
               <Ionicons name="link-outline" size={20} color={colors.textSecondary} style={styles.inputIcon} />
               <TextInput
@@ -138,7 +238,8 @@ export function SettingsModal(props: SettingsModalProps) {
                 autoCorrect={false}
               />
             </View>
-            
+
+            {props.RELEASE_TRANSPORT && (
             <View style={styles.inputWrapper}>
               <Ionicons name="key-outline" size={20} color={colors.textSecondary} style={styles.inputIcon} />
               <TextInput
@@ -153,6 +254,7 @@ export function SettingsModal(props: SettingsModalProps) {
                 autoCorrect={false}
               />
             </View>
+            )}
             
             {props.RELEASE_TRANSPORT && (
               <View style={styles.inputWrapper}>
@@ -224,6 +326,8 @@ export function SettingsModal(props: SettingsModalProps) {
                 <Text style={styles.errorText}>{props.errorMsg}</Text>
               </View>
             ) : null}
+              </View>
+            )}
 
             {/* Target MAC address for Wake-on-LAN */}
             <View style={styles.macSection}>
@@ -315,6 +419,51 @@ const styles = StyleSheet.create({
     ...typography.bodyMedium,
     color: colors.textMuted,
     marginBottom: spacing.md,
+  },
+  tabRow: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    padding: 4,
+    marginBottom: spacing.md,
+    gap: 4,
+  },
+  tab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: radius.sm,
+  },
+  tabActive: {
+    backgroundColor: colors.accent,
+  },
+  tabText: {
+    ...typography.bodyMedium,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  tabTextActive: {
+    color: colors.white,
+  },
+  connectedNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.successMuted,
+    padding: spacing.sm,
+    borderRadius: radius.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.success,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  connectedNoteText: {
+    ...typography.bodySmall,
+    color: colors.success,
+    flex: 1,
   },
   inputWrapper: {
     flexDirection: 'row',

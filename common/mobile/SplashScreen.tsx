@@ -7,6 +7,7 @@ import {
   Dimensions,
   TouchableOpacity,
   StatusBar,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -166,8 +167,11 @@ export default function SplashScreen({ onDismiss }: SplashScreenProps) {
       {/* Branding and Copy */}
       <Animated.View style={[styles.brandingContainer, { opacity: fade3 }]}>
         <View style={styles.logoRow}>
-          <Ionicons name="sparkles" size={20} color="#71717A" style={{ marginRight: 6 }} />
-          <Text style={styles.logoText}>blinky</Text>
+          <Image
+            source={require('./assets/logo_text.png')}
+            style={styles.brandImage}
+            resizeMode="contain"
+          />
         </View>
 
         <Text style={styles.headlineTitle}>Delightful</Text>
@@ -204,8 +208,12 @@ export default function SplashScreen({ onDismiss }: SplashScreenProps) {
 
       {/* Initial Loading Overlay - Covers everything until phase switches to reveal */}
       <Animated.View style={[StyleSheet.absoluteFill, styles.loadingOverlay, { opacity: overlayOpacity }]} pointerEvents={phase === 'loading' ? 'auto' : 'none'}>
-        <Animated.View style={{ opacity: blinkAnim }}>
-          <Ionicons name="sparkles" size={80} color="#FF5A36" />
+        <Animated.View style={{ opacity: blinkAnim, alignItems: 'center' }}>
+          <Image
+            source={require('./assets/blinky-mascot-logo.png')}
+            style={styles.splashLogo}
+            resizeMode="contain"
+          />
         </Animated.View>
       </Animated.View>
 
@@ -230,6 +238,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 10,
     elevation: 10,
+  },
+  splashLogo: {
+    width: 120,
+    height: 120,
+    borderRadius: 28,
   },
   heroContainer: {
     flex: 1,
@@ -300,14 +313,15 @@ const styles = StyleSheet.create({
   logoRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-start',
+    alignSelf: 'flex-start',
+    marginLeft: -19,
     marginBottom: 16,
   },
-  logoText: {
-    fontFamily: 'System',
-    fontSize: 22,
-    fontWeight: '600',
-    color: '#A1A1AA',
-    letterSpacing: -0.5,
+  brandImage: {
+    width: 200,
+    aspectRatio: 3,
+    alignSelf: 'flex-start',
   },
   headlineTitle: {
     fontFamily: 'System',

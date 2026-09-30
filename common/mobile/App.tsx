@@ -20,6 +20,7 @@ import {
   Animated,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { File, UploadType } from 'expo-file-system';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import { Ionicons } from '@expo/vector-icons';
@@ -127,6 +128,45 @@ const getExpoHostIp = (): string | null => {
   return host || null;
 };
 
+interface DiscoveryResponse {
+  token: string;
+  certificate_pin?: string;
+  mode: string;
+  websocket_port: number;
+}
+
+const DISCOVERY_PORT = 9004;
+
+const fetchDiscoveryInfo = async (ip: string, port = 9001): Promise<DiscoveryResponse | null> => {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    // Try discovery port first
+    const res = await fetch(`http://${ip}:${DISCOVERY_PORT}/discover`, {
+      signal: controller.signal,
+      headers: { 'Accept': 'application/json' },
+    });
+    clearTimeout(timeout);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
+  // Fallback to WebSocket port
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(`http://${ip}:${port}/discover`, {
+      signal: controller.signal,
+      headers: { 'Accept': 'application/json' },
+    });
+    clearTimeout(timeout);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
+  return null;
+};
+
 const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 3000, certificatePin?: string): Promise<string> => {
   const clean = rawIp.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/+$/, '');
   const [ipOnly, customPort] = clean.includes(':') ? clean.split(':') : [clean, undefined];
@@ -135,7 +175,8 @@ const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 3000, certificat
 
   if (RELEASE_TRANSPORT) {
     const nativeModule = loadNativeSecureSocketModule();
-    if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative) || !certificatePin?.trim()) {
+    const pin = certificatePin?.trim();
+    if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative) || !pin) {
       return Promise.reject(new Error('Release discovery requires the secure socket module and certificate pin.'));
     }
     const socketId = `discovery-${ip}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -169,16 +210,18 @@ const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 3000, certificat
         subscriptions.forEach((subscription) => subscription.remove());
         void nativeModule.close(socketId).catch(() => undefined);
       };
-      void nativeModule.connect(socketId, `wss://${ip}:${targetPort}`, certificatePin.trim()).catch((error: any) => {
+      void nativeModule.connect(socketId, `wss://${ip}:${targetPort}`, pin).catch((error: any) => {
         finish();
         reject(error);
       });
     });
   }
 
-  return new Promise((resolve, reject) => {
+  // Development mode: first try HTTP discovery to get token, then use it for WS auth
+  return new Promise(async (resolve, reject) => {
     let ws: WebSocket | null = null;
     let isDone = false;
+    let discoveredToken: string | null = null;
 
     const cleanup = () => {
       if (isDone) return;
@@ -201,10 +244,23 @@ const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 3000, certificat
     }, timeoutMs);
 
     try {
+      // Try to fetch token from discovery endpoint first
+      const discovery = await fetchDiscoveryInfo(ip, targetPort);
+      if (discovery?.token) {
+        discoveredToken = discovery.token;
+        if (discovery.certificate_pin && !certificatePin) {
+          certificatePin = discovery.certificate_pin;
+        }
+      }
+
       ws = new WebSocket(`ws://${ip}:${targetPort}`);
       
       ws.onopen = () => {
         cleanup();
+        // Send auth token if we have one
+        if (discoveredToken) {
+          ws?.send(`auth:${discoveredToken}`);
+        }
         resolve(clean);
       };
       
@@ -587,9 +643,7 @@ export default function App() {
     latestResponse,
     systemInfo,
     latestPowerEvent,
-    antigravityApproval,
-    antigravityComplete,
-    antigravityProgress,
+    latestLightEvent,
     quickAccessFolders,
     currentDirectory,
     recentFiles,
@@ -605,6 +659,9 @@ export default function App() {
     readFileForMobile,
     clearFsFileData,
     resetDirectory,
+    antigravityApproval,
+    antigravityComplete,
+    antigravityProgress,
     fileTransferMessage,
     connect,
     disconnect,
@@ -616,7 +673,6 @@ export default function App() {
     dismissAntigravityComplete,
     sendFileTransferMessage,
     getFileTransferModule,
-    latestLightEvent,
   } = usePCWebSocket();
   const [macAddress, setMacAddress] = useState('');
   const [wolBroadcastIp, setWolBroadcastIp] = useState('255.255.255.255');
@@ -633,7 +689,6 @@ export default function App() {
   const [isLightOn, setIsLightOn] = useState<boolean>(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [discoveryProgress, setDiscoveryProgress] = useState<string | null>(null);
-  const [showFileTransfer, setShowFileTransfer] = useState(false);
   const fileTransferPanelRef = useRef<FileTransferPanelRef>(null);
   // Tracks the chat message ID showing live transfer status
   const transferStatusMsgIdRef = useRef<string | null>(null);
@@ -843,29 +898,35 @@ export default function App() {
   // Voice command states
   const [sarvamApiKey, setSarvamApiKey] = useState<string | null>(null);
   const [assemblyaiApiKey, setAssemblyaiApiKey] = useState<string | null>(null);
+  const [voiceProvider, setVoiceProvider] = useState<'assemblyai' | 'sarvam'>('assemblyai');
   const audioRecorderRef = useRef<any>(null);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const [isVoiceTranscribing, setIsVoiceTranscribing] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
 
   // Cleanup audio recorder on unmount
   useEffect(() => {
     return () => {
       if (audioRecorderRef.current) {
         try {
-          audioRecorderRef.current.stop();
+          void audioRecorderRef.current.stop().finally(() => audioRecorderRef.current?.release());
         } catch (_) {}
       }
     };
   }, []);
 
-  // Request AssemblyAI & Sarvam keys from PC when connected
+  // Request AssemblyAI & Sarvam keys and voice provider from PC when connected
   useEffect(() => {
     if (isConnected) {
+      console.log('Connected to PC, requesting voice configuration...');
       sendCommand('get_assemblyai_key' as any);
       sendCommand('get_sarvam_key' as any);
+      sendCommand('get_voice_provider' as any);
     } else {
+      console.log('Disconnected from PC, clearing voice configuration');
       setAssemblyaiApiKey(null);
       setSarvamApiKey(null);
+      setVoiceProvider('assemblyai');
     }
   }, [isConnected, sendCommand]);
 
@@ -918,12 +979,28 @@ export default function App() {
   useEffect(() => {
     if (latestResponse) {
       if (latestResponse.type === 'assemblyai_key') {
-        setAssemblyaiApiKey(latestResponse.key);
+        const key = latestResponse.key;
+        console.log('Received AssemblyAI key from PC:', key ? 'present' : 'missing');
+        setAssemblyaiApiKey(key);
         return;
       }
 
       if (latestResponse.type === 'sarvam_key') {
-        setSarvamApiKey(latestResponse.key);
+        const key = latestResponse.key;
+        console.log('Received Sarvam key from PC:', key ? 'present' : 'missing');
+        setSarvamApiKey(key);
+        return;
+      }
+
+      if (latestResponse.type === 'voice_provider') {
+        const provider = latestResponse.provider || 'assemblyai';
+        console.log('Received voice provider from PC:', provider);
+        if (provider === 'sarvam' || provider === 'assemblyai') {
+          setVoiceProvider(provider);
+        } else {
+          console.warn('Invalid voice provider received, defaulting to assemblyai:', provider);
+          setVoiceProvider('assemblyai');
+        }
         return;
       }
 
@@ -1092,42 +1169,32 @@ export default function App() {
     });
   };
 
-  /** Detect whether the query text is asking to send/upload a file to the PC. */
-  const detectSendToPCIntent = (text: string): boolean => {
-    return /send\s+(it\s+)?to\s+(pc|computer|laptop|desktop|blinky)/i.test(text) ||
-      /upload\s+(it\s+)?to\s+(pc|computer|blinky)/i.test(text) ||
-      /transfer\s+(it\s+)?to\s+(pc|computer|blinky)/i.test(text) ||
-      /\bsend\s+to\s+pc\b/i.test(text) ||
-      /\bsend\s+file\s+to\b/i.test(text);
-  };
-
-  /**
-   * Extract the AiCut instruction from a chat message that also requests a PC transfer.
-   * e.g. "trim from 3 to 20 seconds and send to pc" → "trim from 3 to 20 seconds"
-   */
-  const extractTransferInstruction = (text: string): string => {
-    return text
-      .replace(/,?\s*(and\s+)?((send|upload|transfer)\s+(it\s+)?to\s+(pc|computer|laptop|desktop|blinky))/gi, '')
-      .replace(/^,?\s*(and\s+)?/, '')
+  /** Keep media editing separate from the destination requested in chat. */
+  const extractTransferEdit = (text: string): string => {
+    const match = /\b(trim|cut|merge|crop|rotate|caption|subtitle|speed up|slow down|add background music|remove audio)\b/i.exec(text);
+    if (!match) return '';
+    return text.slice(match.index)
+      .replace(/\s+(?:and\s+)?(?:send|save|put|copy|transfer|upload)\b.*$/i, '')
       .trim();
   };
 
-  const handleQuery = (attachedFile?: AttachedFile | null) => {
+  const handleQuery = (attachedFiles: AttachedFile[] = []) => {
     let query = queryText.trim();
-    if (!query && !attachedFile) {
+    if (!query && attachedFiles.length === 0) {
       triggerHaptic('selection');
       Alert.alert('Empty query', 'Please enter a search/browsing query or attach a file first.');
       return;
     }
 
-    // --- "Send to PC" intent: start a file transfer silently from the chat bar ---
-    if (attachedFile && detectSendToPCIntent(query)) {
-      const instruction = extractTransferInstruction(query);
-      const fileToSend: SelectedFile = {
-        uri: attachedFile.uri,
-        name: attachedFile.name,
-        size: attachedFile.size ? Math.round(attachedFile.size * 1024 * 1024) : undefined,
-      };
+    // Attachments always use the verified streaming transfer path. The PC
+    // resolves the natural-language destination before accepting any bytes.
+    if (attachedFiles.length > 0) {
+      const instruction = extractTransferEdit(query);
+      const filesToSend: SelectedFile[] = attachedFiles.map(file => ({
+        uri: file.uri,
+        name: file.name,
+        size: file.size ? Math.round(file.size * 1024 * 1024) : undefined,
+      }));
 
       // Show a user message in chat
       const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1135,13 +1202,11 @@ export default function App() {
       const statusMsgId = generateUuid();
       transferStatusMsgIdRef.current = statusMsgId;
 
-      const displayText = instruction
-        ? `Sending ${attachedFile.name} to PC — ${instruction}`
-        : `Sending ${attachedFile.name} to PC…`;
+      const displayText = query || `Send ${attachedFiles.length} ${attachedFiles.length === 1 ? 'file' : 'files'} to PC`;
 
       setMessages(prev => [
         ...prev,
-        { id: userMsgId, sender: 'user' as const, text: displayText, timestamp: currentTime, attachedFile },
+        { id: userMsgId, sender: 'user' as const, text: displayText, timestamp: currentTime, attachedFiles },
         {
           id: statusMsgId,
           sender: 'blinky' as const,
@@ -1154,11 +1219,7 @@ export default function App() {
       setQueryText('');
       triggerHaptic('medium');
 
-      // Trigger the transfer in the background via the panel ref.
-      // Pass empty destination so the Rust backend resolves its own default
-      // absolute Downloads/Blinky path — sending a relative string like
-      // "Downloads/Blinky" causes the backend to reject it as non-absolute.
-      fileTransferPanelRef.current?.startTransfer([fileToSend], instruction, '');
+      fileTransferPanelRef.current?.startTransfer(filesToSend, instruction, '', query);
       return;
     }
 
@@ -1184,7 +1245,6 @@ export default function App() {
             sender: 'user',
             text: `⚡ Sent to Antigravity: "${prompt}"`,
             timestamp: currentTime,
-            attachedFile: attachedFile || undefined,
           },
           {
             id: agyMsgId,
@@ -1212,7 +1272,7 @@ export default function App() {
     } else if (query.startsWith('/ask ')) {
       query = query.replace(/^\/ask\s+/i, '').trim();
     }
-    const displayQuery = query || (attachedFile ? `Attached: ${attachedFile.name}` : '');
+    const displayQuery = query;
     setRunningQuery(displayQuery);
     setQueryText('');
     setAgentStatus('processing');
@@ -1232,7 +1292,6 @@ export default function App() {
         sender: 'user',
         text: displayQuery,
         timestamp: currentTime,
-        attachedFile: attachedFile || undefined,
       },
       {
         id: blinkyMsgId,
@@ -1247,21 +1306,7 @@ export default function App() {
       }
     ]);
 
-    const queryToSend = attachedFile
-      ? `[Referenced Files: ${attachedFile.name}] ${query}`.trim()
-      : query;
-    const attachedImage = (attachedFile?.type === 'image' && attachedFile.base64)
-      ? attachedFile.base64
-      : undefined;
-    const attachedFilePayload = attachedFile?.base64
-      ? {
-          name: attachedFile.name,
-          base64: attachedFile.base64,
-          mimeType: attachedFile.mimeType,
-          size: attachedFile.size,
-        }
-      : undefined;
-    const success = sendQuery(queryToSend, generateUuid(), attachedImage, attachedFilePayload);
+    const success = sendQuery(query, generateUuid());
     if (!success) {
       setAgentStatus('error');
       setMessages(prev => prev.map(m => {
@@ -1287,13 +1332,21 @@ export default function App() {
       Alert.alert('Not Connected', 'Please establish a link to your PC first.');
       return;
     }
+
+    // Check if we have at least one STT API key available
     if (!assemblyaiApiKey && !sarvamApiKey) {
       triggerHaptic('selection');
       Alert.alert('Configuration Missing', 'Waiting for voice AI keys from your PC...');
       sendCommand('get_assemblyai_key' as any);
       sendCommand('get_sarvam_key' as any);
+      sendCommand('get_voice_provider' as any);
       return;
     }
+
+    // Log the current voice provider configuration for debugging
+    console.log('Voice recording started with provider:', voiceProvider);
+    console.log('AssemblyAI key available:', !!assemblyaiApiKey);
+    console.log('Sarvam key available:', !!sarvamApiKey);
 
     try {
       const perm = await requestRecordingPermissionsAsync();
@@ -1307,12 +1360,18 @@ export default function App() {
         playsInSilentMode: true,
       });
 
-      const recorder = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
-      audioRecorderRef.current = recorder;
-      await recorder.prepareToRecordAsync();
-      recorder.record();
+      // expo-audio v57 exposes AudioRecorder as a SharedObject. Construct it
+      // with options, prepare it, then call record(); the old expo-av-style
+      // createAudioRecorderAsync/startAsync APIs are not available here.
+      console.log('Creating audio recorder with HIGH_QUALITY preset');
+      const recording = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+      audioRecorderRef.current = recording;
+      await recording.prepareToRecordAsync();
+      recording.record();
       triggerHaptic('heavy');
       setIsVoiceRecording(true);
+      setLiveTranscript('Listening...');
+      console.log('Recording started successfully');
     } catch (err) {
       console.error('Failed to start voice recording', err);
       Alert.alert('Error', 'Failed to start microphone recording.');
@@ -1324,14 +1383,20 @@ export default function App() {
     triggerHaptic('medium');
     setIsVoiceRecording(false);
     setIsVoiceTranscribing(true);
+    setLiveTranscript('Transcribing...');
     try {
       const recorder = audioRecorderRef.current;
       if (!recorder) {
         throw new Error('No active recorder found');
       }
+
+      // Stop recording and get the file URI
       await recorder.stop();
       const uri = recorder.uri;
       audioRecorderRef.current = null;
+      recorder.release();
+
+      console.log('Recording stopped, URI:', uri);
 
       if (!uri) {
         throw new Error('No recording URI found');
@@ -1339,20 +1404,31 @@ export default function App() {
 
       let transcript = '';
 
-      // Priority 1: AssemblyAI Universal-3 Pro
-      if (assemblyaiApiKey) {
+      // Use the voice provider set by desktop app, with fallback to available keys
+      if (voiceProvider === 'assemblyai' && assemblyaiApiKey) {
         try {
-          const fileBlob = await (await fetch(uri)).blob();
-          const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
-            method: 'POST',
-            headers: {
-              Authorization: assemblyaiApiKey,
-            },
-            body: fileBlob,
+          console.log('Starting AssemblyAI transcription...');
+          // React Native's fetch(uri).blob() can return the URI string as a
+          // tiny text/plain Blob instead of reading the local recording.
+          // Expo File uploads the native file bytes directly.
+          const audioFile = new File(uri);
+          console.log('Audio file size:', audioFile.size, 'bytes');
+          if (audioFile.size < 100) {
+            throw new Error('The recording file is empty or unreadable. Please record again.');
+          }
+
+          const uploadResult = await audioFile.upload('https://api.assemblyai.com/v2/upload', {
+            httpMethod: 'POST',
+            uploadType: UploadType.BINARY_CONTENT,
+            headers: { Authorization: assemblyaiApiKey },
+            mimeType: 'audio/mp4',
           });
 
-          if (uploadRes.ok) {
-            const { upload_url } = await uploadRes.json();
+          console.log('AssemblyAI upload response status:', uploadResult.status);
+
+          if (uploadResult.status >= 200 && uploadResult.status < 300) {
+            const { upload_url } = JSON.parse(uploadResult.body);
+            console.log('AssemblyAI upload URL received');
             if (upload_url) {
               const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
                 method: 'POST',
@@ -1368,8 +1444,12 @@ export default function App() {
                 }),
               });
 
+              console.log('AssemblyAI transcript request status:', transcriptRes.status);
+
               if (transcriptRes.ok) {
                 const { id: transcriptId } = await transcriptRes.json();
+                console.log('AssemblyAI transcript ID:', transcriptId);
+
                 for (let i = 0; i < 30; i++) {
                   await new Promise(r => setTimeout(r, 600));
                   const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
@@ -1377,8 +1457,10 @@ export default function App() {
                   });
                   if (pollRes.ok) {
                     const pollData = await pollRes.json();
+                    console.log(`AssemblyAI poll ${i}: status = ${pollData.status}`);
                     if (pollData.status === 'completed') {
                       transcript = (pollData.text || '').trim();
+                      console.log('AssemblyAI transcription completed, text length:', transcript.length);
                       break;
                     } else if (pollData.status === 'error') {
                       console.warn('AssemblyAI transcription reported error:', pollData.error);
@@ -1386,15 +1468,20 @@ export default function App() {
                     }
                   }
                 }
+              } else {
+                const errorText = await transcriptRes.text();
+                console.error('AssemblyAI transcript request failed:', transcriptRes.status, errorText);
               }
             }
+          } else {
+            console.error('AssemblyAI upload failed:', uploadResult.status, uploadResult.body);
           }
         } catch (aaiErr) {
-          console.warn('AssemblyAI mobile STT failed, falling back if available:', aaiErr);
+          console.error('AssemblyAI mobile STT failed with exception:', aaiErr);
         }
       }
 
-      // Priority 2: Fallback to Sarvam STT if AssemblyAI did not produce a transcript
+      // Fallback to Sarvam if AssemblyAI failed or key not available
       if (!transcript && sarvamApiKey) {
         const formData = new FormData();
         formData.append('file', {
@@ -1444,64 +1531,66 @@ export default function App() {
       }
 
       if (!transcript) {
-        throw new Error('Could not transcribe audio. Please check your AssemblyAI / Sarvam API key.');
+        const errorMsg = voiceProvider === 'assemblyai'
+          ? 'AssemblyAI transcription failed. Please check your API key configuration.'
+          : 'Sarvam transcription failed. Please check your API key configuration.';
+        console.error('STT failed:', errorMsg);
+        throw new Error(errorMsg);
       }
 
-      if (transcript) {
-        setQueryText(transcript);
-        setRunningQuery(transcript);
-        setAgentStatus('processing');
-        setTimerSeconds(0);
+      setLiveTranscript(null);
+      setQueryText(transcript);
+      setRunningQuery(transcript);
+      setAgentStatus('processing');
+      setTimerSeconds(0);
 
-        const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const userMsgId = generateUuid();
-        const blinkyMsgId = generateUuid();
-        
-        activeBlinkyMsgIdRef.current = blinkyMsgId;
+      const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const userMsgId = generateUuid();
+      const blinkyMsgId = generateUuid();
 
-        setMessages(prev => [
-          ...prev,
-          {
-            id: userMsgId,
-            sender: 'user',
-            text: transcript,
-            timestamp: currentTime,
-          },
-          {
-            id: blinkyMsgId,
-            sender: 'blinky',
-            text: "I'm on it. Locating the request...",
-            timestamp: currentTime,
-            progress: {
-              percent: 0,
-              statusText: 'Analyzing speech...',
-              duration: 0,
-            }
+      activeBlinkyMsgIdRef.current = blinkyMsgId;
+
+      setMessages(prev => [
+        ...prev,
+        {
+          id: userMsgId,
+          sender: 'user',
+          text: transcript,
+          timestamp: currentTime,
+        },
+        {
+          id: blinkyMsgId,
+          sender: 'blinky',
+          text: "I'm on it. Locating the request...",
+          timestamp: currentTime,
+          progress: {
+            percent: 0,
+            statusText: 'Analyzing speech...',
+            duration: 0,
           }
-        ]);
-
-        const success = sendQuery(transcript, generateUuid());
-        if (!success) {
-          setAgentStatus('error');
-          setMessages(prev => prev.map(m => {
-            if (m.id === blinkyMsgId) {
-              return {
-                ...m,
-                progress: {
-                  percent: 0,
-                  statusText: 'Failed to communicate with PC.',
-                  duration: 0,
-                }
-              };
-            }
-            return m;
-          }));
         }
-      } else {
-        Alert.alert('STT Result', 'Could not hear anything clearly.');
+      ]);
+
+      const success = sendQuery(transcript, generateUuid());
+      if (!success) {
+        setAgentStatus('error');
+        setMessages(prev => prev.map(m => {
+          if (m.id === blinkyMsgId) {
+            return {
+              ...m,
+              progress: {
+                percent: 0,
+                statusText: 'Failed to communicate with PC.',
+                duration: 0,
+              }
+            };
+          }
+          return m;
+        }));
       }
     } catch (err: any) {
       console.error('STT Voice error:', err);
+      setLiveTranscript(null);
       Alert.alert('Speech Recognition Failed', err.message || 'Error transcribing voice.');
     } finally {
       setIsVoiceTranscribing(false);
@@ -1729,6 +1818,31 @@ export default function App() {
       ]);
     } catch (e) {}
     connect(cleanedIp, remoteToken || undefined, certificatePin || undefined);
+  };
+
+  /** One-scan connect from the PC app's "Connect Mobile" QR code. */
+  const handleQrConnect = async (qr: { ip: string; token?: string; pin?: string; mode?: string }) => {
+    triggerHaptic('medium');
+    const cleanedIp = qr.ip.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/+$/, '');
+    if (!validateIp(cleanedIp)) {
+      Alert.alert('Invalid QR Code', 'This QR code does not contain a valid Blinky PC address. Scan the QR shown via the QR icon in the PC app header.');
+      return;
+    }
+    const token = (qr.token || '').trim();
+    const pin = (qr.pin || '').trim();
+    setIpAddress(cleanedIp);
+    if (token) setRemoteToken(token);
+    if (pin) setCertificatePin(pin);
+    try {
+      await Promise.all([
+        AsyncStorage.setItem(STORAGE_KEY, cleanedIp),
+        saveCredential('remote_token', TOKEN_STORAGE_KEY, token),
+        saveCredential('certificate_pin', CERTIFICATE_PIN_STORAGE_KEY, pin),
+      ]);
+    } catch (e) {}
+    // A release QR must stay on the pinned secure channel even in dev builds;
+    // a release build never downgrades regardless of QR mode (see connect()).
+    connect(cleanedIp, token || undefined, pin || undefined, { secure: qr.mode === 'release' });
   };
 
   const handleAutoDiscover = async () => {
@@ -2094,10 +2208,10 @@ export default function App() {
                   setPreviewImageUri(uri);
                 }}
                 onCaptureScreenshot={handleCaptureScreenshot}
-                onSendFilesToPC={() => setShowFileTransfer(true)}
                 isVoiceRecording={isVoiceRecording}
                 isVoiceTranscribing={isVoiceTranscribing}
                 onToggleVoice={toggleVoiceRecording}
+                liveTranscript={liveTranscript || undefined}
               />
             </View>
           )}
@@ -2186,6 +2300,7 @@ export default function App() {
             isDiscovering={isDiscovering}
             handleConnect={handleConnect}
             handleAutoDiscover={handleAutoDiscover}
+            handleQrConnect={handleQrConnect}
             disconnect={disconnect}
             discoveryProgress={discoveryProgress}
             errorMsg={errorMsg}
@@ -2352,7 +2467,7 @@ export default function App() {
           </Modal>
           <FileTransferPanel
             ref={fileTransferPanelRef}
-            visible={showFileTransfer}
+            visible={false}
             connected={isConnected}
             hostAddress={ipAddress}
             releaseTransport={RELEASE_TRANSPORT}
@@ -2360,7 +2475,7 @@ export default function App() {
             fileTransferMessage={fileTransferMessage}
             sendMessage={sendFileTransferMessage}
             getNativeModule={getFileTransferModule}
-            onClose={() => setShowFileTransfer(false)}
+            onClose={() => {}}
             onTransferStatusChange={(status) => {
               const msgId = transferStatusMsgIdRef.current;
               if (!msgId) return;

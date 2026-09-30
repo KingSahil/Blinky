@@ -256,8 +256,11 @@ def is_web_research_question(question: str) -> bool:
     research_indicators = [
         "contact number", "phone number", "phone numbers", "contact details", "address", "addresses",
         "best restaurant", "best restaurants", "best cafe", "best cafes", "top rated", "recommendations for",
-        "what is the price", "how much is", "weather in", "weather today", "weather forecast",
-        "who won", "latest news", "stock price", "reviews of", "reviews for"
+        "best ", "top ", "cheapest ", "compare ", "comparison ", "vs ", " versus ",
+        "what is the price", "how much is", "how much does", "price of ", "cost of ",
+        "weather in", "weather today", "weather forecast",
+        "who won", "latest news", "stock price", "reviews of", "reviews for",
+        "buy ", "purchase ", "shopping ", "deal ", "discount ", "offer ",
     ]
     return any(ind in norm for ind in research_indicators)
 

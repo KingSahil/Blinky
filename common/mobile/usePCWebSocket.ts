@@ -23,6 +23,7 @@ export type FileTransferMessage = {
   chunkSize?: number;
   expiresInSeconds?: number;
   destinationPath?: string;
+  destinationWarning?: string;
   complete?: boolean;
   editing?: boolean;
   edited?: boolean;
@@ -172,6 +173,7 @@ export type PowerCommand =
   | 'volume_mute'
   | 'get_sarvam_key'
   | 'get_assemblyai_key'
+  | 'get_voice_provider'
   | 'get_system_info'
   | 'screenshot';
 
@@ -197,8 +199,13 @@ export function usePCWebSocket() {
   const [fileTransferMessage, setFileTransferMessage] = useState<FileTransferMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const nativeRef = useRef<NativeSecureSocket | null>(null);
+  // Per-connection transport: true once a pinned native (wss) channel is in
+  // use. Mirrors RELEASE_TRANSPORT by default, but a scanned pairing payload
+  // can also request it (QR carries its own mode) — never the reverse.
+  const secureRef = useRef(false);
 
   const disconnect = useCallback((errorMessage?: string) => {
+    secureRef.current = false;
     if (nativeRef.current) {
       const nativeSocket = nativeRef.current;
       nativeRef.current = null;
@@ -223,7 +230,7 @@ export function usePCWebSocket() {
   }, []);
 
   /** Opens a WebSocket connection and authenticates it when a token is provided. */
-  const connect = useCallback((ipAddress: string, token?: string, certificatePin?: string) => {
+  const connect = useCallback(async (ipAddress: string, token?: string, certificatePin?: string, options?: { secure?: boolean }) => {
     disconnect();
     
     // Clean IP Address and default to port 9001 if no port is specified
@@ -243,11 +250,19 @@ export function usePCWebSocket() {
       formattedIp = `${formattedIp}:9001`;
     }
 
-    if (RELEASE_TRANSPORT) {
+    // Release builds never downgrade; a scanned QR can only upgrade a
+    // connection to the secure channel, never downgrade one.
+    const useSecure = RELEASE_TRANSPORT || options?.secure === true;
+    secureRef.current = useSecure;
+
+    if (useSecure) {
       const nativeModule = loadNativeSecureSocketModule();
       if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative)) {
+        secureRef.current = false;
         setStatus('error');
-        setErrorMsg('The release secure socket module is missing. Install a release/internal development build.');
+        setErrorMsg(!RELEASE_TRANSPORT
+          ? 'This pairing code requires the release build. Install the release APK to use QR pairing.'
+          : 'The release secure socket module is missing. Install a release/internal development build.');
         return;
       }
       if (!certificatePin?.trim()) {
@@ -393,6 +408,27 @@ export function usePCWebSocket() {
 
     try {
       console.log(`[WS] Connecting to ${wsUrl}`);
+      
+      // Fetch token from discovery endpoint if not provided
+      let authToken = token?.trim();
+      if (!authToken) {
+        try {
+          const res = await fetch(`http://${formattedIp.split(':')[0]}:9004/discover`, {
+            signal: AbortSignal.timeout(3000),
+            headers: { 'Accept': 'application/json' },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.token) {
+              authToken = data.token;
+              console.log('[WS] Retrieved token from discovery endpoint');
+            }
+          }
+        } catch (e) {
+          console.log('[WS] Discovery endpoint not available, connecting without token');
+        }
+      }
+
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -414,8 +450,8 @@ export function usePCWebSocket() {
           // Authenticate the remote connection before any commands are sent.
           // The desktop gateway denies all commands from non-loopback peers
           // unless the BLINKY_REMOTE_TOKEN is presented.
-          if (token && token.trim()) {
-            ws.send(`auth:${token.trim()}`);
+          if (authToken) {
+            ws.send(`auth:${authToken}`);
           }
           setStatus('connected');
           setErrorMsg(null);
@@ -528,7 +564,7 @@ export function usePCWebSocket() {
   }, [disconnect]);
 
   const sendCommand = useCallback((command: PowerCommand | string) => {
-    if (RELEASE_TRANSPORT) {
+    if (RELEASE_TRANSPORT || secureRef.current) {
       return sendNativeText(command);
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -544,7 +580,7 @@ export function usePCWebSocket() {
   }, [sendCommand]);
   const sendQuery = useCallback((query: string, requestId: string, attachedImage?: string, attachedFile?: { name: string; base64: string; mimeType?: string; size?: number }) => {
     const payload = JSON.stringify({ requestId, query, attachedImage, attachedFile });
-    if (RELEASE_TRANSPORT) {
+    if (RELEASE_TRANSPORT || secureRef.current) {
       return sendNativeText(payload);
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -556,7 +592,7 @@ export function usePCWebSocket() {
 
   const sendFileTransferMessage = useCallback((message: Record<string, unknown>) => {
     const payload = JSON.stringify(message);
-    if (RELEASE_TRANSPORT) return sendNativeText(payload);
+    if (RELEASE_TRANSPORT || secureRef.current) return sendNativeText(payload);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(payload);
       return true;

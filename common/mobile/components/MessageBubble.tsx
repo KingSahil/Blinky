@@ -14,6 +14,7 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message, formatTime, onEnlargeScreenshot }: MessageBubbleProps) {
   const isUser = message.sender === 'user';
+  const attachedFiles = message.attachedFiles || (message.attachedFile ? [message.attachedFile] : []);
 
   return (
     <View style={isUser ? styles.userRow : styles.blinkyRow}>
@@ -25,20 +26,21 @@ export function MessageBubble({ message, formatTime, onEnlargeScreenshot }: Mess
 
       <View style={isUser ? styles.userBubble : styles.blinkyBubble}>
         {/* Attached File/Photo Preview */}
-        {message.attachedFile && (
+        {attachedFiles.map((attachedFile, index) => (
           <TouchableOpacity
+            key={`${attachedFile.uri}-${index}`}
             style={styles.attachedCard}
-            activeOpacity={message.attachedFile.type === 'image' || message.attachedFile.mimeType?.startsWith('image') ? 0.8 : 1}
+            activeOpacity={attachedFile.type === 'image' || attachedFile.mimeType?.startsWith('image') ? 0.8 : 1}
             onPress={() => {
-              if (message.attachedFile?.type === 'image' || message.attachedFile?.mimeType?.startsWith('image')) {
+              if (attachedFile.type === 'image' || attachedFile.mimeType?.startsWith('image')) {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                onEnlargeScreenshot(message.attachedFile.uri);
+                onEnlargeScreenshot(attachedFile.uri);
               }
             }}
           >
-            {message.attachedFile.type === 'image' || message.attachedFile.mimeType?.startsWith('image') ? (
+            {attachedFile.type === 'image' || attachedFile.mimeType?.startsWith('image') ? (
               <View style={styles.attachedImageContainer}>
-                <Image source={{ uri: message.attachedFile.uri }} style={styles.attachedImage} />
+                <Image source={{ uri: attachedFile.uri }} style={styles.attachedImage} />
                 <View style={styles.attachedImageOverlay}>
                   <Ionicons name="expand-outline" size={12} color="#FFFFFF" style={{ marginRight: 4 }} />
                   <Text style={styles.attachedImageText}>Tap to peek</Text>
@@ -48,17 +50,17 @@ export function MessageBubble({ message, formatTime, onEnlargeScreenshot }: Mess
               <View style={styles.attachedFileRow}>
                 <Ionicons name="document-text" size={18} color={isUser ? "#FFFFFF" : colors.accent} style={{ marginRight: 6 }} />
                 <Text style={[styles.attachedFileName, isUser && { color: "#FFFFFF" }]} numberOfLines={1}>
-                  {message.attachedFile.name}
+                  {attachedFile.name}
                 </Text>
-                {message.attachedFile.size ? (
+                {attachedFile.size ? (
                   <Text style={[styles.attachedFileSize, isUser && { color: "rgba(255,255,255,0.7)" }]}>
-                    ({message.attachedFile.size} MB)
+                    ({attachedFile.size} MB)
                   </Text>
                 ) : null}
               </View>
             )}
           </TouchableOpacity>
-        )}
+        ))}
 
         <MarkdownRenderer content={message.text} isUser={isUser} />
 

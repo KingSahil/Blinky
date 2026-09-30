@@ -76,7 +76,8 @@ export function App() {
   const [sarvamApiKey, setSarvamApiKey] = useState('');
   const [assemblyaiApiKey, setAssemblyaiApiKey] = useState(defaultAaiKey);
   const [voiceProvider, setVoiceProvider] = useState<'assemblyai' | 'sarvam'>('assemblyai');
-  const [assemblyaiVoiceMode, setAssemblyaiVoiceMode] = useState<'agent' | 'realtime_stt'>('agent');
+  // Always realtime agent (thinks while you speak) — no mode toggle.
+  const [assemblyaiVoiceMode] = useState<'agent' | 'realtime_stt'>('agent');
   const [groqApiKey, setGroqApiKey] = useState('');
   const [deepseekApiKey, setDeepseekApiKey] = useState('');
   const [customUrl, setCustomUrl] = useState('');
@@ -505,8 +506,11 @@ export function App() {
       let height = formRect.height;
 
       if (showSettings && dropdownRef.current) {
-        const dropdownRect = dropdownRef.current.getBoundingClientRect();
-        height = Math.max(height, 52 + dropdownRect.height);
+        const dd = dropdownRef.current;
+        // Use scrollHeight (full content) instead of the capped visible rect,
+        // otherwise the window never grows enough and the menu gets cut off.
+        const dropdownHeight = Math.max(dd.scrollHeight, dd.getBoundingClientRect().height);
+        height = Math.max(height, 52 + dropdownHeight);
       }
 
       if (showWaModal) {
@@ -518,16 +522,22 @@ export function App() {
     };
 
     resizeWindow();
+    // Re-measure after layout/fonts settle so the full menu height is used.
+    const raf = requestAnimationFrame(resizeWindow);
 
     const observer = new ResizeObserver(() => {
       resizeWindow();
     });
 
     observer.observe(formElement);
+    if (showSettings && dropdownRef.current) {
+      observer.observe(dropdownRef.current);
+    }
     return () => {
+      cancelAnimationFrame(raf);
       observer.disconnect();
     };
-  }, [showSettings, showWaModal, waStatus]);
+  }, [showSettings, showWaModal, waStatus, provider, voiceProvider]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setQuestion(event.target.value);
@@ -750,7 +760,7 @@ export function App() {
                   className={`voice-provider-tab ${voiceProvider === 'assemblyai' ? 'active aai' : ''}`}
                   onClick={() => void updateVoiceProvider('assemblyai')}
                 >
-                  <span>⚡ AssemblyAI</span>
+                  <span>AssemblyAI</span>
                 </button>
                 <button
                   type="button"
@@ -775,24 +785,6 @@ export function App() {
                   onChange={(e) => void updateAssemblyaiApiKey(e.target.value)}
                   placeholder="Paste AssemblyAI API Key..."
                 />
-                <div className="voice-mode-selector">
-                  <button
-                    type="button"
-                    className={`voice-mode-btn ${assemblyaiVoiceMode === 'agent' ? 'active' : ''}`}
-                    onClick={() => setAssemblyaiVoiceMode('agent')}
-                    title="Real-time voice agent with VAD and tool calling"
-                  >
-                    Voice Agent API
-                  </button>
-                  <button
-                    type="button"
-                    className={`voice-mode-btn ${assemblyaiVoiceMode === 'realtime_stt' ? 'active' : ''}`}
-                    onClick={() => setAssemblyaiVoiceMode('realtime_stt')}
-                    title="Sub-second streaming speech-to-text"
-                  >
-                    Realtime STT API
-                  </button>
-                </div>
               </div>
             ) : (
               <div className="dropdown-section">

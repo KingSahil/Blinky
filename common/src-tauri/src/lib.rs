@@ -97,6 +97,16 @@ fn get_secure_transport_info(app: AppHandle) -> Result<serde_json::Value, String
 }
 
 #[tauri::command]
+fn get_mobile_pairing_payload(app: AppHandle) -> Result<serde_json::Value, String> {
+    websocket::mobile_pairing_payload(&app).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn regenerate_remote_token() -> Result<String, String> {
+    websocket::regenerate_remote_token().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn secure_socket_connect(
     app: AppHandle,
     socket_id: String,
@@ -178,6 +188,7 @@ fn show_overlay(app: AppHandle) -> Result<(), String> {
 fn hide_overlay(app: AppHandle) -> Result<(), String> {
     if let Some(overlay) = app.get_webview_window("overlay") {
         let _ = overlay.emit("blinky://guidance", serde_json::json!({ "steps": [] }));
+        overlay.hide().map_err(|err| err.to_string())?;
     }
     Ok(())
 }
@@ -943,7 +954,6 @@ fn start_wake_word_detector(app: &AppHandle) {
         .arg(script)
         .arg("--model")
         .arg(model_path)
-        .arg("--verbose")
         .current_dir(&root)
         .env("PYTHONWARNINGS", "ignore")
         .envs(read_env_file(&root))
@@ -1002,6 +1012,8 @@ pub fn run() {
             run_tutor,
             run_agent_query,
             get_secure_transport_info,
+            get_mobile_pairing_payload,
+            regenerate_remote_token,
             secure_socket_connect,
             secure_socket_send,
             secure_socket_close,
@@ -1061,13 +1073,13 @@ pub fn run() {
             if let Some(overlay) = app.get_webview_window("overlay") {
                 configure_overlay_passthrough(&overlay);
                 let _ = overlay.emit("blinky://guidance", serde_json::json!({ "steps": [] }));
-                let _ = overlay.show();
-                configure_overlay_passthrough(&overlay);
             }
 
-            if let Some(command) = app.get_webview_window("command") {
-                let _ = command.show();
-                let _ = command.set_focus();
+            if std::env::var("BLINKY_BACKGROUND_SERVER").ok().as_deref() != Some("1") {
+                if let Some(command) = app.get_webview_window("command") {
+                    let _ = command.show();
+                    let _ = command.set_focus();
+                }
             }
 
             let app_handle = app.handle().clone();

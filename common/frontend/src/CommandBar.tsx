@@ -16,7 +16,7 @@ import {
   shouldCompleteStepOnHighlightClick,
   shouldShowSummaryBubble,
 } from './lib/guidance';
-import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility, getSecureTransportInfo } from './lib/tauri';
+import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility, getSecureTransportInfo, getMobilePairingPayload, regenerateRemoteToken } from './lib/tauri';
 
 import { linkCitationMarkers, preprocessMarkdown } from './lib/citations';
 import { getSarvamErrorMessage } from './lib/tts';
@@ -30,7 +30,7 @@ import {
 } from './lib/assemblyaiVoice';
 import { AdaptiveTransportManager } from './lib/adaptiveTransport';
 import type { TutorConversationMessage, TutorProgress, TutorResult } from './lib/types';
-import type { SecureTransportInfo } from './lib/tauri';
+import type { SecureTransportInfo, MobilePairingPayload } from './lib/tauri';
 
 
 interface AttachedMedia {
@@ -234,7 +234,8 @@ export function CommandBar() {
   const assemblyaiApiKeyRef = useRef(defaultAaiKey);
   const [voiceProvider, setVoiceProvider] = useState<'assemblyai' | 'sarvam'>('assemblyai');
   const voiceProviderRef = useRef<'assemblyai' | 'sarvam'>('assemblyai');
-  const [assemblyaiVoiceMode, setAssemblyaiVoiceMode] = useState<'agent' | 'realtime_stt'>('agent');
+  // Always realtime agent (thinks while you speak) — no mode toggle.
+  const [assemblyaiVoiceMode] = useState<'agent' | 'realtime_stt'>('agent');
   const assemblyaiAgentRef = useRef<AssemblyAIVoiceAgent | null>(null);
   const assemblyaiSttRef = useRef<AssemblyAIRealtimeSTT | null>(null);
   const assemblyaiAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
@@ -316,6 +317,14 @@ export function CommandBar() {
   const [isWaActionLoading, setIsWaActionLoading] = useState(false);
   const [showWaModal, setShowWaModal] = useState(false);
   const waCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Mobile pairing (QR) states
+  const [showMobileModal, setShowMobileModal] = useState(false);
+  const [pairingPayload, setPairingPayload] = useState<MobilePairingPayload | null>(null);
+  const [pairingIp, setPairingIp] = useState('');
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [pairingError, setPairingError] = useState('');
+  const mobileCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const SESSION_ID = 'blinky-default-session';
   const PORTS_TO_SCAN = [3000, 3001, 3002, 3003, 3004, 3005];
@@ -412,6 +421,54 @@ export function CommandBar() {
     };
   }, []);
 
+  // Mobile pairing: load payload (LAN IPs + token) for the Connect-Mobile QR.
+  const loadPairingPayload = async () => {
+    setPairingLoading(true);
+    setPairingError('');
+    try {
+      const payload = await getMobilePairingPayload();
+      setPairingPayload(payload);
+      setPairingIp((current) => (
+        current && payload.ips.includes(current) ? current : (payload.ips[0] ?? '')
+      ));
+    } catch (err) {
+      setPairingError(err instanceof Error ? err.message : 'Could not load pairing info. Is the desktop backend running?');
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
+  const openMobileModal = () => {
+    setShowMobileModal(true);
+    void loadPairingPayload();
+  };
+
+  const handleRegenerateToken = async () => {
+    setPairingLoading(true);
+    setPairingError('');
+    try {
+      await regenerateRemoteToken();
+      await loadPairingPayload();
+    } catch (err) {
+      setPairingError(err instanceof Error ? err.message : 'Could not regenerate token.');
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
+  // Compact JSON the mobile app scans: full credentials for one-scan connect.
+  const pairingQrText = pairingPayload && pairingIp
+    ? JSON.stringify({
+      v: 1,
+      ip: pairingIp,
+      ws: pairingPayload.ws_port,
+      disc: pairingPayload.discovery_port,
+      token: pairingPayload.token,
+      pin: pairingPayload.certificate_pin,
+      mode: pairingPayload.mode,
+    })
+    : '';
+
   // Keep WhatsApp status fresh so startup state and logout state update without user interaction.
   useEffect(() => {
     let active = true;
@@ -470,6 +527,27 @@ export function CommandBar() {
       );
     }
   }, [waStatus, waQr]);
+
+  // Draw mobile-pairing QR code to canvas
+  useEffect(() => {
+    if (showMobileModal && pairingQrText && mobileCanvasRef.current) {
+      QRCode.toCanvas(
+        mobileCanvasRef.current,
+        pairingQrText,
+        {
+          width: 180,
+          margin: 2,
+          color: {
+            dark: '#140f13',
+            light: '#ffffff'
+          }
+        },
+        (error) => {
+          if (error) console.error('Failed to render pairing QR Code:', error);
+        }
+      );
+    }
+  }, [showMobileModal, pairingQrText]);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -824,6 +902,15 @@ export function CommandBar() {
         return;
       }
 
+      // Guard: don't send silence / empty clips to AssemblyAI.
+      // Universal-3-Pro with language detection fails on these with
+      // "language_detection cannot be performed on files with no spoken audio."
+      if (!blob || blob.size < 15000) {
+        setStatus('Could not hear anything clearly. Please speak louder and try again.');
+        void resumeWakeWord();
+        return;
+      }
+
       setStatus('Transcribing with AssemblyAI Universal-3 Pro...');
       try {
         const transcript = await transcribeAudioWithAssemblyAI(blob, aaiKey);
@@ -838,7 +925,13 @@ export function CommandBar() {
         }
       } catch (err: any) {
         console.error('AssemblyAI transcription error:', err);
-        setStatus(`AssemblyAI STT error: ${err?.message || err}`);
+        const rawMsg = err?.message || String(err);
+        // Map the known "no spoken audio" / language_detection failure to a friendly prompt.
+        if (/no spoken audio|language_detection|nothing.*speech|empty/i.test(rawMsg)) {
+          setStatus('No speech detected. Please speak clearly into the mic and try again.');
+        } else {
+          setStatus(`AssemblyAI STT error: ${rawMsg}`);
+        }
         void resumeWakeWord();
         return;
       }
@@ -974,8 +1067,8 @@ export function CommandBar() {
       const source = audioCtx.createMediaStreamSource(stream);
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
-      // Initialize AssemblyAI Voice Connection if key is present and provider is assemblyai
-      if (currentVP === 'assemblyai' && aaiKey && assemblyaiVoiceMode === 'agent') {
+      // Always use the realtime voice agent (thinks while you speak).
+      if (currentVP === 'assemblyai' && aaiKey) {
         const agent = new AssemblyAIVoiceAgent({
           apiKey: aaiKey,
           onAgentAudio: (base64Audio) => {
@@ -1033,23 +1126,6 @@ export function CommandBar() {
         });
         agent.connect();
         assemblyaiAgentRef.current = agent;
-      } else if (currentVP === 'assemblyai' && aaiKey && assemblyaiVoiceMode === 'realtime_stt') {
-        const stt = new AssemblyAIRealtimeSTT(
-          aaiKey,
-          (transcript, isFinal) => {
-            setQuestion(transcript);
-            if (isFinal) {
-              setStatus(`Searching for: "${transcript}"`);
-              void executeTutor(transcript, true);
-              stopRecording();
-            }
-          },
-          (err) => {
-            console.error('AssemblyAI Realtime STT error:', err);
-          }
-        );
-        stt.connect();
-        assemblyaiSttRef.current = stt;
       }
 
       let hasSpoken = false;
@@ -1109,8 +1185,16 @@ export function CommandBar() {
           stream.getTracks().forEach((track) => track.stop());
         }
         try { processor.disconnect(); source.disconnect(); } catch { }
-        // If real-time stream did not execute, run audio transcription
+        // If real-time stream did not execute, run audio transcription.
+        // Skip the REST fallback when VAD never heard speech — this is what
+        // previously produced "language_detection cannot be performed on
+        // files with no spoken audio."
         if (!assemblyaiAgentRef.current?.isConnected && !assemblyaiSttRef.current?.isConnected) {
+          if (!hasSpoken || audioChunks.length === 0) {
+            setStatus('No speech detected. Please speak clearly into the mic and try again.');
+            void resumeWakeWord();
+            return;
+          }
           const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
           void handleAudioTranscription(audioBlob);
         }
@@ -1628,9 +1712,14 @@ export function CommandBar() {
     };
   }, []);
 
-  // Synchronize wake word detector state with the application state centrally
+  // Synchronize wake word detector state with the application state centrally.
+  // Guarded by ref so we only send PAUSE/RESUME on real transitions —
+  // without this every re-render spams "[WakeWord] Resumed via stdin".
+  const lastWakePausedRef = useRef<boolean | null>(null);
   useEffect(() => {
     const shouldPause = isRunning || isRecording || isSpeaking || isTtsActive;
+    if (lastWakePausedRef.current === shouldPause) return;
+    lastWakePausedRef.current = shouldPause;
     if (shouldPause) {
       void pauseWakeWord();
     } else {
@@ -2063,12 +2152,19 @@ export function CommandBar() {
       let height = formRect.height;
 
       if (showSettings && dropdownRef.current) {
-        const dropdownRect = dropdownRef.current.getBoundingClientRect();
-        height = Math.max(height, 52 + dropdownRect.height);
+        const dd = dropdownRef.current;
+        // Use scrollHeight (full content) instead of the capped visible rect,
+        // otherwise the window never grows enough and the menu gets cut off.
+        const dropdownHeight = Math.max(dd.scrollHeight, dd.getBoundingClientRect().height);
+        height = Math.max(height, 52 + dropdownHeight);
       }
 
       if (showWaModal) {
         height = Math.max(height, 420);
+      }
+
+      if (showMobileModal) {
+        height = Math.max(height, 460);
       }
 
       const targetHeight = Math.ceil(height + 40);
@@ -2076,16 +2172,22 @@ export function CommandBar() {
     };
 
     resizeWindow();
+    // Re-measure after layout/fonts settle so the full menu height is used.
+    const raf = requestAnimationFrame(resizeWindow);
 
     const observer = new ResizeObserver(() => {
       resizeWindow();
     });
 
     observer.observe(formElement);
+    if (showSettings && dropdownRef.current) {
+      observer.observe(dropdownRef.current);
+    }
     return () => {
+      cancelAnimationFrame(raf);
       observer.disconnect();
     };
-  }, [showSettings, showWaModal, waStatus]);
+  }, [showSettings, showWaModal, showMobileModal, waStatus, provider, voiceProvider]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setQuestion(event.target.value);
@@ -2261,6 +2363,17 @@ export function CommandBar() {
           </div>
 
           <div className="command-actions">
+            {transportInfo?.mode === 'release' && (
+              <button
+                type="button"
+                className={`icon-action ${showMobileModal ? 'active' : ''}`}
+                aria-label="Connect Mobile"
+                title="Connect Mobile (show QR)"
+                onClick={openMobileModal}
+              >
+                <QrCode size={18} />
+              </button>
+            )}
             <button
               ref={toggleButtonRef}
               type="button"
@@ -2405,7 +2518,7 @@ export function CommandBar() {
                   className={`voice-provider-tab ${voiceProvider === 'assemblyai' ? 'active aai' : ''}`}
                   onClick={() => void updateVoiceProvider('assemblyai')}
                 >
-                  <span>⚡ AssemblyAI</span>
+                  <span>AssemblyAI</span>
                 </button>
                 <button
                   type="button"
@@ -2430,24 +2543,6 @@ export function CommandBar() {
                   onChange={(e) => void updateAssemblyaiApiKey(e.target.value)}
                   placeholder="Paste AssemblyAI API Key..."
                 />
-                <div className="voice-mode-selector">
-                  <button
-                    type="button"
-                    className={`voice-mode-btn ${assemblyaiVoiceMode === 'agent' ? 'active' : ''}`}
-                    onClick={() => setAssemblyaiVoiceMode('agent')}
-                    title="Real-time voice agent with VAD and tool calling"
-                  >
-                    Voice Agent API
-                  </button>
-                  <button
-                    type="button"
-                    className={`voice-mode-btn ${assemblyaiVoiceMode === 'realtime_stt' ? 'active' : ''}`}
-                    onClick={() => setAssemblyaiVoiceMode('realtime_stt')}
-                    title="Sub-second streaming speech-to-text"
-                  >
-                    Realtime STT API
-                  </button>
-                </div>
               </div>
             ) : (
               <div className="dropdown-section">
@@ -2650,34 +2745,6 @@ export function CommandBar() {
             />
             <div className="command-input-actions">
               <div className="command-input-actions-left">
-                {(assemblyaiApiKey || assemblyaiApiKeyRef.current) && (
-                  <button
-                    type="button"
-                    className={`command-aai-btn ${assemblyaiVoiceMode === 'agent' ? 'agent-mode' : 'stt-mode'}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setAssemblyaiVoiceMode(prev => prev === 'agent' ? 'realtime_stt' : 'agent');
-                    }}
-                    disabled={isRunning || isTranscribing}
-                    title={`AssemblyAI Mode: ${assemblyaiVoiceMode === 'agent' ? 'Voice Agent API (Universal-3 Pro + Tool Calling)' : 'Realtime STT API (Universal-3 Pro)'}. Click to switch.`}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      padding: '3px 8px',
-                      borderRadius: '12px',
-                      border: '1px solid rgba(59, 130, 246, 0.4)',
-                      background: assemblyaiVoiceMode === 'agent' ? 'rgba(59, 130, 246, 0.2)' : 'rgba(168, 85, 247, 0.2)',
-                      color: assemblyaiVoiceMode === 'agent' ? '#93c5fd' : '#d8b4fe',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <Sparkles size={12} />
-                    <span>{assemblyaiVoiceMode === 'agent' ? 'AAI Voice Agent' : 'AAI Realtime STT'}</span>
-                  </button>
-                )}
                 <button
                   type="button"
                   className={`command-attach-btn ${attachedFiles.length > 0 ? 'has-attachments' : ''}`}
@@ -2927,6 +2994,89 @@ export function CommandBar() {
 
       {showNotebookModal && (
         <NotebookView onClose={() => setShowNotebookModal(false)} />
+      )}
+
+      {showMobileModal && (
+        <div className="wa-modal-backdrop" onClick={() => setShowMobileModal(false)}>
+          <div className="wa-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="wa-modal-header">
+              <h3>Connect Mobile</h3>
+              <button
+                type="button"
+                className="wa-modal-close"
+                onClick={() => setShowMobileModal(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="wa-modal-content">
+              {pairingLoading && !pairingPayload && (
+                <div className="wa-disconnected">
+                  <div className="wa-loader">
+                    <Loader2 className="spin" size={16} />
+                    <span>Preparing pairing code...</span>
+                  </div>
+                </div>
+              )}
+
+              {pairingError && (
+                <div className="wa-error-container">
+                  <p className="wa-error-msg">{pairingError}</p>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-retry"
+                    onClick={() => loadPairingPayload()}
+                    disabled={pairingLoading}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {pairingPayload && !pairingError && (
+                <div className="wa-qr-container">
+                  <p className="wa-scan-instruction">Scan with the Blinky mobile app (QR tab):</p>
+                  {pairingPayload.ips.length > 1 && (
+                    <div className="pairing-ip-row">
+                      <span className="wa-help-text">PC IP:</span>
+                      <select
+                        className="pairing-ip-select"
+                        value={pairingIp}
+                        onChange={(e) => setPairingIp(e.target.value)}
+                      >
+                        {pairingPayload.ips.map((ip) => (
+                          <option key={ip} value={ip}>{ip}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className="wa-qr-canvas-wrapper">
+                    <canvas ref={mobileCanvasRef} className="wa-qr-canvas" />
+                    {pairingLoading && (
+                      <div className="wa-qr-overlay">
+                        <Loader2 className="spin" size={24} />
+                      </div>
+                    )}
+                  </div>
+                  {pairingPayload.ips.length === 0 ? (
+                    <p className="wa-error-msg">No LAN address detected. Enter the PC IP manually in the app (see ./setup-mobile.sh output).</p>
+                  ) : (
+                    <p className="wa-help-text">Or enter manually: IP {pairingIp} :{pairingPayload.ws_port}, then Establish Link.</p>
+                  )}
+                  <p className="wa-help-text pairing-warning">Anyone who scans this can control this PC on your LAN.</p>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-cancel"
+                    onClick={handleRegenerateToken}
+                    disabled={pairingLoading}
+                  >
+                    {pairingLoading ? <Loader2 className="spin" size={14} /> : 'Regenerate code'}
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </main>
   );

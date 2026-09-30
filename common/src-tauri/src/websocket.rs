@@ -225,6 +225,18 @@ fn trim_env_value(value: &str) -> String {
     value.to_string()
 }
 
+pub(crate) fn write_env_file(root: &PathBuf, envs: &[(String, String)]) -> std::io::Result<()> {
+    let env_path = root.join(".env");
+    let mut content = String::new();
+    for (k, v) in envs {
+        content.push_str(k);
+        content.push('=');
+        content.push_str(v);
+        content.push('\n');
+    }
+    std::fs::write(env_path, content)
+}
+
 static ACTIVE_CLIENTS: OnceLock<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<String>>>> = OnceLock::new();
 
 /// Returns the shared registry of connected WebSocket client senders.
@@ -359,6 +371,70 @@ async fn start_antigravity_hook_server(app: AppHandle) {
     }
 }
 
+async fn start_discovery_server(
+    app: AppHandle,
+    mode: crate::transport::TransportMode,
+    _tls_acceptor: Option<TlsAcceptor>,
+) {
+    use axum::{routing::get, Router, Json, http::HeaderMap};
+    use std::net::SocketAddr;
+    
+    let app_clone = app.clone();
+    let get_token = move || {
+        let token = crate::websocket::get_remote_token();
+        let cert_pin = if mode.is_release() {
+            if let Ok(identity) = crate::tls_identity::TlsIdentity::load_or_generate(&app_clone) {
+                Some(identity.public_key_pin().to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        (token, cert_pin)
+    };
+
+    let app_router = Router::new()
+        .route("/discover", get(move || {
+            let (token, cert_pin) = get_token();
+            async move {
+                let mut headers = HeaderMap::new();
+                headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+                headers.insert("Access-Control-Allow-Methods", "GET, OPTIONS".parse().unwrap());
+                headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
+                let resp = serde_json::json!({
+                    "token": token,
+                    "certificate_pin": cert_pin,
+                    "mode": format!("{:?}", mode),
+                    "websocket_port": 9001,
+                });
+                (headers, Json(resp))
+            }
+        }))
+        .route("/discover", axum::routing::options(|| async {
+            let mut headers = HeaderMap::new();
+            headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+            headers.insert("Access-Control-Allow-Methods", "GET, OPTIONS".parse().unwrap());
+            headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
+            (headers, "OK")
+        }));
+
+    let addr: SocketAddr = "0.0.0.0:9004".parse().unwrap();
+    println!("Discovery server listening on http://{}", addr);
+    
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to bind discovery server to {}: {}", addr, e);
+            return;
+        }
+    };
+    
+    if let Err(e) = axum::serve(listener, app_router).await {
+        eprintln!("Discovery server error: {}", e);
+    }
+}
+
 pub async fn start_websocket_server(app: AppHandle) {
     let addr = "0.0.0.0:9001";
     let listener = match TcpListener::bind(addr).await {
@@ -389,6 +465,14 @@ pub async fn start_websocket_server(app: AppHandle) {
         None
     };
     println!("WebSocket server listening on {} ({:?})", addr, mode);
+
+    // Discovery endpoint for mobile auto-connect (returns token + cert pin)
+    let mode_clone = mode;
+    let app_discovery = app.clone();
+    let tls_acceptor_discovery = tls_acceptor.clone();
+    tauri::async_runtime::spawn(async move {
+        start_discovery_server(app_discovery, mode_clone, tls_acceptor_discovery).await;
+    });
 
     let app_hook = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -450,6 +534,82 @@ pub fn secure_transport_info(
         },
         "certificate_pin": pin,
     }))
+}
+
+/// Non-loopback LAN IPv4 addresses of this PC, for the mobile-pairing QR.
+/// Dependency-free: a UDP `connect()` transmits nothing but reveals the local
+/// address the OS would route with. Works offline.
+pub fn local_lan_ips() -> Vec<String> {
+    let mut ips: Vec<String> = Vec::new();
+    for remote in ["8.8.8.8:80", "1.1.1.1:80"] {
+        if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if sock.connect(remote).is_ok() {
+                if let Ok(local) = sock.local_addr() {
+                    let ip = local.ip().to_string();
+                    if !ip.starts_with("127.") && ip != "::1" && !ips.contains(&ip) {
+                        ips.push(ip);
+                    }
+                }
+            }
+        }
+        if !ips.is_empty() {
+            break;
+        }
+    }
+    ips
+}
+
+/// Payload for the "Connect Mobile" QR shown in the desktop UI.
+/// Ensures a usable token exists (generates + persists one even in dev),
+/// so scanning the QR connects with zero typing.
+pub fn mobile_pairing_payload(
+    app: &AppHandle,
+) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    let mode = crate::transport::TransportMode::current();
+    let pin = if mode.is_release() {
+        Some(
+            crate::tls_identity::TlsIdentity::load_or_generate(app)?
+                .public_key_pin()
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    let mut token = get_remote_token();
+    if token.is_empty() {
+        token = generate_remote_token();
+        let root = project_root();
+        let mut envs = read_env_file(&root);
+        envs.retain(|(k, _)| k != "BLINKY_REMOTE_TOKEN");
+        envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
+        let _ = write_env_file(&root, &envs);
+    }
+
+    Ok(serde_json::json!({
+        "v": 1,
+        "ips": local_lan_ips(),
+        "ws_port": 9001,
+        "discovery_port": 9004,
+        "token": token,
+        "certificate_pin": pin,
+        "mode": if mode.is_release() { "release" } else { "development" },
+    }))
+}
+
+/// Regenerates `BLINKY_REMOTE_TOKEN` and persists it (old QR codes stop working).
+/// Also updates the process environment, since `get_remote_token()` prefers
+/// a nonempty `BLINKY_REMOTE_TOKEN` env var over `.env` — without this, a
+/// regenerate would leave the effective runtime credential unchanged.
+pub fn regenerate_remote_token() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let token = generate_remote_token();
+    let root = project_root();
+    let mut envs = read_env_file(&root);
+    envs.retain(|(k, _)| k != "BLINKY_REMOTE_TOKEN");
+    envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
+    write_env_file(&root, &envs).map_err(|err| format!("Failed to persist token: {err}"))?;
+    std::env::set_var("BLINKY_REMOTE_TOKEN", &token);
+    Ok(token)
 }
 
 pub async fn secure_socket_connect(
@@ -965,6 +1125,7 @@ where
                 crate::platform::execute_screenshot();
             } else if trimmed == "get_sarvam_key" {
                 let key = get_sarvam_api_key();
+                eprintln!("get_sarvam_key: key_present = {}", !key.is_empty());
                 let resp = serde_json::json!({
                     "type": "sarvam_key",
                     "key": key
@@ -978,9 +1139,24 @@ where
                     .await;
             } else if trimmed == "get_assemblyai_key" {
                 let key = get_assemblyai_api_key();
+                eprintln!("get_assemblyai_key: key_present = {}", !key.is_empty());
                 let resp = serde_json::json!({
                     "type": "assemblyai_key",
                     "key": key
+                });
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        resp.to_string().into(),
+                    ))
+                    .await;
+            } else if trimmed == "get_voice_provider" {
+                let provider = get_voice_provider();
+                eprintln!("get_voice_provider: provider = {}", provider);
+                let resp = serde_json::json!({
+                    "type": "voice_provider",
+                    "provider": provider
                 });
                 let _ = ws_sender
                     .lock()
@@ -1806,37 +1982,92 @@ mod tests {
 }
 
 fn get_sarvam_api_key() -> String {
+    if let Ok(val) = std::env::var("SARVAM_API_KEY") {
+        let trimmed = val.trim().to_string();
+        if !trimmed.is_empty() {
+            eprintln!("get_sarvam_api_key: found in env var SARVAM_API_KEY");
+            return trimmed;
+        }
+    }
+
     let root = project_root();
+    eprintln!("get_sarvam_api_key: project_root = {:?}", root);
     let envs = read_env_file(&root);
-    envs.into_iter()
+    eprintln!("get_sarvam_api_key: found {} env vars in .env", envs.len());
+
+    let key = envs
+        .into_iter()
         .find(|(k, _)| k == "SARVAM_API_KEY")
         .map(|(_, v)| v)
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    eprintln!("get_sarvam_api_key: key_present = {}", !key.is_empty());
+    key
 }
 
 fn get_assemblyai_api_key() -> String {
+    // First check environment variables
     if let Ok(val) = std::env::var("ASSEMBLY_AI_API_KEY") {
         let trimmed = val.trim().to_string();
         if !trimmed.is_empty() {
+            eprintln!("get_assemblyai_api_key: found in env var ASSEMBLY_AI_API_KEY");
             return trimmed;
         }
     }
     if let Ok(val) = std::env::var("ASSEMBLYAI_API_KEY") {
         let trimmed = val.trim().to_string();
         if !trimmed.is_empty() {
+            eprintln!("get_assemblyai_api_key: found in env var ASSEMBLYAI_API_KEY");
             return trimmed;
         }
     }
+
+    // Fall back to .env file
     let root = project_root();
+    eprintln!("get_assemblyai_api_key: project_root = {:?}", root);
     let envs = read_env_file(&root);
-    envs.into_iter()
+    eprintln!("get_assemblyai_api_key: found {} env vars in .env", envs.len());
+
+    let key = envs
+        .into_iter()
         .find(|(k, _)| k == "ASSEMBLY_AI_API_KEY" || k == "ASSEMBLYAI_API_KEY")
         .map(|(_, v)| v.trim().to_string())
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    eprintln!("get_assemblyai_api_key: key_present = {}", !key.is_empty());
+    key
+}
+
+fn get_voice_provider() -> String {
+    if let Ok(val) = std::env::var("BLINKY_VOICE_PROVIDER") {
+        let trimmed = val.trim().to_string();
+        if !trimmed.is_empty() {
+            eprintln!("get_voice_provider: found in env var BLINKY_VOICE_PROVIDER = {}", trimmed);
+            return trimmed;
+        }
+    }
+
+    let root = project_root();
+    eprintln!("get_voice_provider: project_root = {:?}", root);
+    let envs = read_env_file(&root);
+    eprintln!("get_voice_provider: found {} env vars in .env", envs.len());
+
+    let provider = envs
+        .into_iter()
+        .find(|(k, _)| k == "BLINKY_VOICE_PROVIDER")
+        .map(|(_, v)| v.trim().to_string())
+        .unwrap_or_else(|| {
+            eprintln!("get_voice_provider: not found, defaulting to assemblyai");
+            "assemblyai".to_string()
+        });
+
+    eprintln!("get_voice_provider: provider = {}", provider);
+    provider
 }
 
 /// Reads the remote token if explicitly configured by the user in environment or .env.
 /// Development may continue without one for compatibility; release remote peers then fail auth.
+/// In release mode, auto-generates and persists a token on first run.
 fn get_remote_token() -> String {
     if let Ok(val) = std::env::var("BLINKY_REMOTE_TOKEN") {
         let trimmed = val.trim().to_string();
@@ -1845,11 +2076,24 @@ fn get_remote_token() -> String {
         }
     }
     let root = project_root();
-    let envs = read_env_file(&root);
-    envs.iter()
-        .find(|(k, _)| k == "BLINKY_REMOTE_TOKEN")
-        .map(|(_, v)| v.trim().to_string())
-        .unwrap_or_default()
+    let mut envs = read_env_file(&root);
+    if let Some((_, v)) = envs.iter().find(|(k, _)| k == "BLINKY_REMOTE_TOKEN") {
+        let trimmed = v.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    // Auto-generate token for release mode if not configured
+    let mode = crate::transport::TransportMode::current();
+    if mode.is_release() {
+        let token = generate_remote_token();
+        // Persist to .env file
+        envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
+        let _ = write_env_file(&root, &envs);
+        println!("Generated and saved BLINKY_REMOTE_TOKEN to .env");
+        return token;
+    }
+    String::new()
 }
 
 /// Reject an unconfigured secret, then compare equal-length token bytes without early exit.
