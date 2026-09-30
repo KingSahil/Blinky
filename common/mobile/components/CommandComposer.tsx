@@ -38,6 +38,7 @@ interface CommandComposerProps {
   isVoiceTranscribing: boolean;
   onToggleVoice: () => void;
   recordingDuration?: number; // optionally pass in seconds
+  liveTranscript?: string; // optional live transcript for fading animation
 }
 
 export function CommandComposer({
@@ -51,11 +52,13 @@ export function CommandComposer({
   onCaptureScreenshot,
   isVoiceRecording,
   isVoiceTranscribing,
-  onToggleVoice
+  onToggleVoice,
+  liveTranscript
 }: CommandComposerProps) {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
 
   const attachAnim = useRef(new Animated.Value(0)).current;
 
@@ -80,6 +83,26 @@ export function CommandComposer({
     }
     return () => clearInterval(interval);
   }, [isVoiceRecording]);
+
+  // Fade animation for live transcript
+  useEffect(() => {
+    if (liveTranscript && isVoiceRecording) {
+      fadeAnim.setValue(0);
+      Animated.sequence([
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.delay(2000),
+        Animated.timing(fadeAnim, {
+          toValue: 0,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [liveTranscript, isVoiceRecording, fadeAnim]);
 
   const handleToggleAttach = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -288,7 +311,21 @@ export function CommandComposer({
                     <View key={i} style={[styles.waveLine, { height: h * 3 }]} />
                   ))}
                 </View>
-                <Text style={styles.recordingHint}>Slide to cancel &gt;</Text>
+                {liveTranscript ? (
+                  <Animated.Text
+                    style={[
+                      styles.liveTranscript,
+                      {
+                        opacity: fadeAnim,
+                      }
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {liveTranscript}
+                  </Animated.Text>
+                ) : (
+                  <Text style={styles.recordingHint}>Slide to cancel &gt;</Text>
+                )}
               </View>
             ) : (
               <TextInput
@@ -487,6 +524,13 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     color: colors.textMuted,
     fontSize: 11,
+  },
+  liveTranscript: {
+    ...typography.bodySmall,
+    color: colors.accent,
+    fontSize: 12,
+    marginLeft: 8,
+    maxWidth: 120,
   },
   recordingStopBtn: {
     width: 44,

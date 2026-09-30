@@ -173,6 +173,7 @@ export type PowerCommand =
   | 'volume_mute'
   | 'get_sarvam_key'
   | 'get_assemblyai_key'
+  | 'get_voice_provider'
   | 'get_system_info'
   | 'screenshot';
 
