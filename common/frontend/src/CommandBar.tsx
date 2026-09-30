@@ -2361,15 +2361,17 @@ export function CommandBar() {
           </div>
 
           <div className="command-actions">
-            <button
-              type="button"
-              className={`icon-action ${showMobileModal ? 'active' : ''}`}
-              aria-label="Connect Mobile"
-              title="Connect Mobile (show QR)"
-              onClick={openMobileModal}
-            >
-              <QrCode size={18} />
-            </button>
+            {transportInfo?.mode === 'release' && (
+              <button
+                type="button"
+                className={`icon-action ${showMobileModal ? 'active' : ''}`}
+                aria-label="Connect Mobile"
+                title="Connect Mobile (show QR)"
+                onClick={openMobileModal}
+              >
+                <QrCode size={18} />
+              </button>
+            )}
             <button
               ref={toggleButtonRef}
               type="button"

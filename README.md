@@ -232,13 +232,14 @@ AI query over WS `:9001`, file transfer, camera-roll sync. Phone + PC must
 be on the same Wi-Fi — or use USB mode (`-Usb` / `--usb`, then IP
 `localhost`). Full build notes: `common/mobile/README.md`.
 
-Two ways to link the phone (mobile app opens on the **QR** tab by default):
+Two ways to link the phone (release builds open on the **QR** tab by default;
+debug builds show the manual form):
 
-- **QR (fastest):** in the PC app, click the **QR icon** in the Blinky
-  header → a pairing code appears. In the mobile app's QR tab, scan it —
-  you connect instantly, no typing.
-- **Manual:** switch to the **Manual** tab, enter the PC IP (plus token /
-  cert pin for release builds), tap **Establish Link**.
+- **QR (release only, fastest):** in the release PC app, click the **QR icon**
+  in the Blinky header → a pairing code appears. In the mobile app's QR tab,
+  scan it — you connect instantly, no typing.
+- **Manual (all builds):** enter the PC IP (plus token / cert pin for release
+  builds), tap **Establish Link**.
 
 ---
 

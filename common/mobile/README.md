@@ -38,9 +38,10 @@ If the app shows `Cannot find native module 'ExponentImagePicker'`, the JavaScri
 
 ## Connecting to Blinky
 
-The link setup opens on the **QR** tab by default.
+Release builds open the link setup on the **QR** tab by default; debug builds
+show the manual form directly.
 
-**Option A — QR (fastest, recommended)**
+**Option A — QR (release builds only, fastest, recommended)**
 
 1. Make sure Blinky is running on your desktop PC (`bun run dev`).
 2. In the PC app, click the **QR icon** in the Blinky header to show the pairing code.

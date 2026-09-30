@@ -107,6 +107,10 @@ export function SettingsModal(props: SettingsModalProps) {
 
   if (!props.visible) return null;
 
+  // QR pairing is a release-build feature (release APK <-> release PC,
+  // wss + pinned cert). Dev builds use the manual flow below.
+  const qrAvailable = props.RELEASE_TRANSPORT;
+
   const handleQrScanned = (data: string) => {
     const parsed = parsePairingQr(data);
     if (!parsed) {
@@ -148,9 +152,10 @@ export function SettingsModal(props: SettingsModalProps) {
             <Text style={styles.connectionSubtitle}>
               {props.RELEASE_TRANSPORT
                 ? 'Scan the QR from the PC app, or enter the details manually below.'
-                : 'Scan the QR from the PC app (tap the QR icon in its header), or enter your PC\'s IP manually.'}
+                : 'Enter your PC\'s IP (e.g. 100.122.62.2) or tap "Auto-Discover" to automatically locate and connect to Blinky.'}
             </Text>
 
+            {qrAvailable && (
             <View style={styles.tabRow}>
               <TouchableOpacity
                 style={[styles.tab, linkTab === 'qr' && styles.tabActive]}
@@ -182,11 +187,12 @@ export function SettingsModal(props: SettingsModalProps) {
                   color={linkTab === 'manual' ? colors.white : colors.textSecondary}
                   style={{ marginRight: 6 }}
                 />
-                <Text style={[styles.tabText, linkTab === 'manual' && styles.tabTextActive]}>Manual</Text>
-              </TouchableOpacity>
+                  <Text style={[styles.tabText, linkTab === 'manual' && styles.tabTextActive]}>Manual</Text>
+                </TouchableOpacity>
             </View>
+            )}
 
-            {linkTab === 'qr' ? (
+            {qrAvailable && linkTab === 'qr' ? (
               props.status === 'connected' ? (
                 <View style={styles.connectedNote}>
                   <Ionicons name="checkmark-circle-outline" size={20} color={colors.success} />
