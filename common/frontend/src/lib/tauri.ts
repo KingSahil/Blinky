@@ -130,6 +130,10 @@ export async function resizeCommandWindow(height: number): Promise<void> {
   return invoke('resize_command_window', { height });
 }
 
+export async function setCommandWindowSize(width: number, height: number): Promise<void> {
+  return invoke('set_command_window_size', { width, height });
+}
+
 export async function resizeAndMoveCommandWindow(x: number, y: number, width: number, height: number): Promise<void> {
   return invoke('resize_and_move_command_window', { x, y, width, height });
 }
@@ -259,3 +263,16 @@ export async function getCursorPosition(): Promise<{ x: number; y: number }> {
   }
   return { x: 0, y: 0 };
 }
+
+export async function openNotebookWindow(): Promise<void> {
+  if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+    return invoke('open_notebook_window');
+  }
+}
+
+export async function closeNotebookWindow(): Promise<void> {
+  if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+    return invoke('close_notebook_window');
+  }
+}
+

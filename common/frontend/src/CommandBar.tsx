@@ -6,7 +6,6 @@ import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElem
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import QRCode from 'qrcode';
-import { NotebookView } from './NotebookView';
 import { runAutopilotLoop, extractTextToType, shouldPressEnterAfterTyping, isScrollAction, getScrollDirection, isClickInstruction, isSingleActionQuery, createEmptyTutorResult, getPhysicalClickablePoint } from './lib/autopilot';
 import {
   getCurrentGuideSteps,
@@ -16,7 +15,7 @@ import {
   shouldCompleteStepOnHighlightClick,
   shouldShowSummaryBubble,
 } from './lib/guidance';
-import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility, getSecureTransportInfo, getMobilePairingPayload, regenerateRemoteToken } from './lib/tauri';
+import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, setCommandWindowSize, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility, getSecureTransportInfo, getMobilePairingPayload, regenerateRemoteToken, openNotebookWindow } from './lib/tauri';
 
 import { linkCitationMarkers, preprocessMarkdown } from './lib/citations';
 import { getSarvamErrorMessage } from './lib/tts';
@@ -225,7 +224,6 @@ export function CommandBar() {
   const [steps, setSteps] = useState<any[]>([]);
   const [showGuideCompletionSummary, setShowGuideCompletionSummary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [showNotebookModal, setShowNotebookModal] = useState(false);
   const [provider, setProvider] = useState('groq');
   const [shortcut, setShortcut] = useState('Enter');
   const defaultAaiKey = (import.meta as any).env?.VITE_ASSEMBLY_AI_API_KEY || '';
@@ -2363,17 +2361,15 @@ export function CommandBar() {
           </div>
 
           <div className="command-actions">
-            {transportInfo?.mode === 'release' && (
-              <button
-                type="button"
-                className={`icon-action ${showMobileModal ? 'active' : ''}`}
-                aria-label="Connect Mobile"
-                title="Connect Mobile (show QR)"
-                onClick={openMobileModal}
-              >
-                <QrCode size={18} />
-              </button>
-            )}
+            <button
+              type="button"
+              className={`icon-action ${showMobileModal ? 'active' : ''}`}
+              aria-label="Connect Mobile"
+              title="Connect Mobile (show QR)"
+              onClick={openMobileModal}
+            >
+              <QrCode size={18} />
+            </button>
             <button
               ref={toggleButtonRef}
               type="button"
@@ -2794,7 +2790,7 @@ export function CommandBar() {
                   className="command-agent-btn"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setShowNotebookModal(true);
+                    void openNotebookWindow();
                   }}
                   disabled={isRunning || isTranscribing}
                   title="Open OKF Notebook Hub"
@@ -2990,10 +2986,6 @@ export function CommandBar() {
             </div>
           </div>
         </div>
-      )}
-
-      {showNotebookModal && (
-        <NotebookView onClose={() => setShowNotebookModal(false)} />
       )}
 
       {showMobileModal && (

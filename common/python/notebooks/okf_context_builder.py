@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 
 def build_okf_prompt_context(
@@ -36,8 +36,8 @@ def build_okf_prompt_context(
         "RULES:\n"
         "1. Every factual statement or summary MUST be grounded directly in the provided sources.\n"
         "2. Cite your sources using exact inline badges: [Source: filename.pdf] or [Source: filename.md].\n"
-        "3. If a question cannot be answered from the provided sources, explicitly state what information is missing.\n"
-        "4. Keep your formatting clean using Markdown headers, bullet points, and code blocks.\n"
+        "3. Provide your response as rich, conversational, beautifully styled Markdown with clear headings, bold highlights, and clean bullet points. Never dump raw dictionary keys.\n"
+        "4. Return a JSON object with an 'answer' field containing your full formatted markdown response: {\"answer\": \"Your clear formatted markdown answer here\"}\n"
     )
 
     user_prompt = (

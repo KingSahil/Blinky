@@ -288,6 +288,27 @@ def run(
     question = question.strip()
     question = re.sub(r"^(?:hey\s+)?blinky[\s,.:;!?]*", "", question, flags=re.IGNORECASE).strip()
 
+    # Deterministic intercept for RPC calls passed via question prefix
+    if question.startswith("[NOTEBOOK_RPC:"):
+        match = re.match(r"^\[NOTEBOOK_RPC:([^\]]+)\]\s*(.*)$", question, flags=re.DOTALL)
+        if match:
+            rpc_action = match.group(1).strip()
+            params_str = match.group(2).strip()
+            try:
+                rpc_params = json.loads(params_str) if params_str else {}
+            except Exception:
+                rpc_params = {}
+            res = handle_notebook_rpc(rpc_action, rpc_params)
+            return {"summary": json.dumps(res), "steps": [], "warnings": warnings}
+
+    # Deterministic intercept for Notebook Intelligence queries
+    notebook_match = re.match(r"^\[NOTEBOOK:([^\]]+)\]\s*(.*)$", question, flags=re.DOTALL)
+    if notebook_match:
+        nb_id = notebook_match.group(1).strip()
+        actual_query = notebook_match.group(2).strip()
+        LOGGER.info(f"Deterministic routing to Notebook Intelligence for notebook_id={nb_id}")
+        return run_notebook_intelligence(nb_id, actual_query, started, warnings, use_vector_search=True)
+
     if ignored_rects:
         from utils.window import set_ignored_overlay_rects
         set_ignored_overlay_rects(ignored_rects)
@@ -1271,17 +1292,39 @@ def run_notebook_intelligence(
     manager = NotebookManager()
     notebook = manager.get_notebook(notebook_id)
     if not notebook:
+        if notebook_id == "default":
+            notebook = manager.create_notebook("Default Knowledge Hub", "Personal research notes and uploaded documents")
+            notebook["id"] = "default"
+            manager.data["default"] = notebook
+            manager._save_store()
+        else:
+            return {
+                "summary": f"Notebook '{notebook_id}' not found.",
+                "steps": [],
+                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                "warnings": warnings + [f"Notebook {notebook_id} not found"],
+            }
+
+    active_sources = [s for s in notebook.get("sources", []) if s.get("active", True)]
+    if not active_sources:
         return {
-            "summary": f"Notebook '{notebook_id}' not found.",
+            "summary": "I don't have any active document sources in this Knowledge Hub yet. Please use '+ Add Source' on the left to upload your PDF, Markdown, or text files so I can ground my answers directly on them!",
             "steps": [],
+            "source_count": 0,
+            "use_vector_search": use_vector_search,
             "elapsed_ms": int((time.perf_counter() - started) * 1000),
-            "warnings": warnings + [f"Notebook {notebook_id} not found"],
+            "provider": get_provider_label(),
+            "warnings": warnings,
         }
 
     vector_matches = None
     if use_vector_search:
-        v_store = VectorStore()
-        vector_matches = v_store.search_top_k(notebook_id, question, top_k=5)
+        try:
+            v_store = VectorStore()
+            vector_matches = v_store.search_top_k(notebook_id, question, top_k=5)
+        except Exception as e:
+            LOGGER.warning(f"Vector search failed, falling back: {e}")
+            vector_matches = None
 
     context_payload = build_okf_prompt_context(notebook, question, vector_matches=vector_matches)
     system_prompt = context_payload["system_prompt"]
@@ -1289,7 +1332,33 @@ def run_notebook_intelligence(
 
     try:
         response = ask_text_model(f"{system_prompt}\n\n{user_prompt}")
-        answer = response.get("answer") or response.get("response") or str(response)
+        if isinstance(response, dict):
+            if response.get("answer"):
+                answer = response["answer"]
+            elif response.get("response"):
+                answer = response["response"]
+            elif response.get("summary"):
+                answer = response["summary"]
+            else:
+                # Convert raw dictionary fields into formatted Markdown
+                lines = []
+                for k, v in response.items():
+                    title = k.replace("_", " ").title()
+                    if k.lower() == "source":
+                        lines.append(f"**Source:** `[Source: {v}]`")
+                    elif isinstance(v, list):
+                        lines.append(f"### {title}")
+                        for item in v:
+                            lines.append(f"- {item}")
+                    elif isinstance(v, dict):
+                        lines.append(f"### {title}")
+                        for sub_k, sub_v in v.items():
+                            lines.append(f"- **{sub_k.replace('_', ' ').title()}:** {sub_v}")
+                    else:
+                        lines.append(f"**{title}:** {v}")
+                answer = "\n\n".join(lines)
+        else:
+            answer = str(response)
     except Exception as exc:
         answer = f"Error processing notebook query: {exc}"
 

@@ -58,6 +58,13 @@ class NotebookManager:
         return sorted(list(self.data.values()), key=lambda x: x.get("updated_at", 0), reverse=True)
 
     def get_notebook(self, notebook_id: str) -> Optional[Dict[str, Any]]:
+        if not notebook_id or notebook_id == "default":
+            if "default" in self.data:
+                return self.data["default"]
+            all_nbs = self.list_notebooks()
+            if all_nbs:
+                return all_nbs[0]
+            return self.create_notebook("Default Knowledge Hub", "Personal research notes and uploaded documents")
         return self.data.get(notebook_id)
 
     def add_source_to_notebook(
@@ -92,6 +99,17 @@ class NotebookManager:
         notebook["updated_at"] = int(time.time())
         self._save_store()
         LOGGER.info(f"Added source '{parsed['source_name']}' to notebook {notebook_id}")
+
+        # Automatically index chunks into SQLite VectorStore for fast vector retrieval
+        try:
+            from .vector_store import VectorStore
+            db_path = self.storage_dir / "vector_store.db" if self.storage_dir else None
+            v_store = VectorStore(db_path=db_path)
+            v_store.index_document(notebook_id, parsed["source_name"], parsed["raw_text"])
+            LOGGER.info(f"Indexed chunks for '{parsed['source_name']}' into VectorStore")
+        except Exception as e:
+            LOGGER.error(f"Failed indexing into VectorStore: {e}")
+
         return source_entry
 
     def toggle_source_active(self, notebook_id: str, source_id: str, active: bool) -> bool:

@@ -36,11 +36,13 @@ For small to medium documents, PDFs, notes, and application manuals (which fit i
 
 ---
 
-### Phase 3: Desktop UI Component (`NotebookView.tsx`)
-* [ ] **3-Column Workspace Interface:**
-  * **Left Column (Sources):** Upload PDFs/documents, toggle active sources, attach OKF app guides.
-  * **Center Column (Grounded Chat):** Interactive streaming chat with inline citation badges (`[Source: manual.pdf]`) and `▶ Execute on PC` action buttons.
-  * **Right Column (Studio Artifacts):** One-click artifact generators (*Executive Summary*, *FAQ*, *Study Guide*, *Action Checklist*).
+### Phase 3: Desktop UI Component (`NotebookView.tsx` & `styles.css`)
+* [x] **3-Column Glassmorphism Workspace Interface:**
+  * **Design System Overhaul:** Redesigned `.notebook-overlay`, `.notebook-container`, `.notebook-input-area`, `.send-btn`, and `.message-bubble` with sleek dark glassmorphism, responsive grid column bounds, and glowing focus states.
+  * **Typography Control:** Scoped heading bounds (`font-family: "Space Grotesk"`, `font-size: 16px`) to prevent overflow collisions.
+  * **Left Column (Sources):** Upload PDFs/documents, drag-and-drop zone, source toggle checkboxes with file meta indicators.
+  * **Center Column (Grounded Chat):** Interactive streaming chat with clear user/AI bubble gradients, dense vector RAG toggle pill, and styled input controls.
+  * **Right Column (Studio Artifacts):** One-click artifact generator cards (*Executive Summary*, *FAQ*, *Study Guide*, *Action Checklist*) with structured flex layouts.
 
 ---
 
