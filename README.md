@@ -1,6 +1,7 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/KingSahil/Blinky/main/common/src-tauri/icons/Square150x150Logo.png" alt="Blinky logo">
+<img src="https://raw.githubusercontent.com/KingSahil/Blinky/main/common/src-tauri/icons/Square150x150Logo.png" alt="Blinky logo" width="120">
+<img src="./common/mobile/assets/logo_text.png#gh-dark-mode-only" alt="Blinky" width="320">
 
 # Blinky
 
@@ -301,6 +302,7 @@ Blinky/
 | Sahil | Backend and Tauri Developer | [@KingSahil](https://github.com/KingSahil) |
 | FeV-06 | Mobile and Linux Developer | [@FeV-06](https://github.com/FeV-06) |
 | meharwanfr | Linux Developer | [@meharwanfr](https://github.com/meharwanfr) |
+| Boldbug | Full-Stack Developer | [@boldbug1](https://github.com/boldbug1) |
 
 ---
 
