@@ -5,6 +5,7 @@ export type FileOfferInput = {
   sha256: string;
   instruction: string;
   destinationPath: string;
+  destinationHint?: string;
 };
 
 export function transferIntent(instruction: string): 'upload' | 'edit' {
@@ -29,5 +30,6 @@ export function buildFileOffer(input: FileOfferInput): Record<string, unknown> {
     sha256: input.sha256,
     purpose: transferIntent(input.instruction),
     ...(destinationPath ? { destinationPath } : {}),
+    ...(input.destinationHint?.trim() ? { destinationHint: input.destinationHint.trim() } : {}),
   };
 }

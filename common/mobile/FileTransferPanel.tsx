@@ -83,7 +83,7 @@ export type FileTransferPanelRef = {
    * Start a transfer programmatically (e.g. from the chat bar).
    * The panel does NOT need to be visible — it runs silently in the background.
    */
-  startTransfer(files: SelectedFile[], instruction: string, destination?: string): void;
+  startTransfer(files: SelectedFile[], instruction: string, destination?: string, destinationHint?: string): void;
 };
 
 const CHUNK_SIZE = 16 * 1024 * 1024;
@@ -220,6 +220,10 @@ export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(functio
 
   // Listen to transfer progress events across all active transfers
   useEffect(() => {
+    // The chat transfer panel is mounted invisibly. Do not load the custom
+    // native socket module during app startup; initialize it only when the
+    // panel is opened or a chat transfer has created a session.
+    if (!visible && !sessionRef.current) return;
     const native = getNativeModule();
     if (!native) return;
     const subscription = native.addListener('onTransferProgress', event => {
@@ -242,9 +246,9 @@ export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(functio
       });
     });
     return () => subscription.remove();
-  }, [getNativeModule, updateSession]);
+  }, [getNativeModule, updateSession, visible, session?.phase]);
 
-  const chatTransferQueueRef = useRef<{ files: SelectedFile[]; instruction: string; destination: string } | null>(null);
+  const chatTransferQueueRef = useRef<{ files: SelectedFile[]; instruction: string; destination: string; destinationHint: string } | null>(null);
   // Stable ref so that useImperativeHandle can call the latest startBatchTransferDirect
   const startBatchTransferDirectRef = useRef<typeof startBatchTransferDirect | null>(null);
 
@@ -297,6 +301,7 @@ export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(functio
     filesToSend: SelectedFile[],
     instructionText: string,
     destPath: string,
+    destinationHint = '',
   ) => {
     if (!connected) {
       if (onTransferDone) onTransferDone(false, 'Not connected to PC.');
@@ -321,7 +326,8 @@ export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(functio
     }
 
     const withEdit = transferIntent(instructionText) === 'edit';
-    const batchDestination = destPath.trim();
+    let batchDestination = destPath.trim();
+    let destinationWarning = '';
 
     abortRef.current = false;
 
@@ -391,7 +397,7 @@ export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(functio
           const timer = setTimeout(() => {
             pendingOfferResolvers.current.delete(offerReqId);
             reject(new Error(`Timed out waiting for PC to accept ${currentItem.file.name}.`));
-          }, 30000);
+          }, 75000);
           pendingOfferResolvers.current.set(offerReqId, msg => {
             clearTimeout(timer);
             resolve(msg);
@@ -405,6 +411,7 @@ export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(functio
           sha256: digest.sha256,
           instruction: instructionText,
           destinationPath: batchDestination,
+          destinationHint,
         }));
         if (!sent) throw new Error('Could not send file offer. Check PC connection.');
 
@@ -412,7 +419,9 @@ export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(functio
         const offerResult = await offerPromise;
         if (offerResult.destinationPath) {
           updateSession(curr => ({ ...curr, destinationPath: offerResult.destinationPath! }));
+          batchDestination = offerResult.destinationPath;
         }
+        if (offerResult.destinationWarning) destinationWarning = offerResult.destinationWarning;
         if (!offerResult.transferId || !offerResult.temporaryToken) {
           throw new Error(offerResult.message || `PC rejected transfer of ${currentItem.file.name}.`);
         }
@@ -532,7 +541,7 @@ export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(functio
 
         updateSession(s => ({ ...s, phase: 'done', output: outputMeta, localUri, error: undefined }));
         onTransferStatusChange?.(null);
-        onTransferDone?.(true, `✅ Transfer & edit complete — ${outputMeta.name} saved to your device.`);
+        onTransferDone?.(true, `✅ Transfer & edit complete — ${outputMeta.name} saved on PC in ${sessionRef.current?.destinationPath || batchDestination} and copied to your device.${destinationWarning ? ` ${destinationWarning}` : ''}`);
       } else {
         updateSession(s => ({ ...s, phase: 'done', error: undefined }));
         onTransferStatusChange?.(null);
@@ -540,7 +549,7 @@ export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(functio
         const label = filesToSend.length > 1
           ? `✅ ${filesToSend.length} files sent to PC (${dest})`
           : `✅ ${filesToSend[0]?.name} sent to PC (${dest})`;
-        onTransferDone?.(true, label);
+        onTransferDone?.(true, destinationWarning ? `${label}. ${destinationWarning}` : label);
       }
     } catch (err: any) {
       updateSession(s => ({ ...s, phase: 'error', error: err?.message || 'Transfer failed.' }));
@@ -571,7 +580,7 @@ export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(functio
   // Expose imperative startTransfer for chat-bar triggered transfers.
   // The panel does NOT need to be visible — the transfer runs silently.
   useImperativeHandle(ref, () => ({
-    startTransfer(files: SelectedFile[], instruction: string, destination?: string) {
+    startTransfer(files: SelectedFile[], instruction: string, destination?: string, destinationHint = '') {
       if (!files.length) return;
       setSelectedFiles(files);
       setInstruction(instruction);
@@ -579,12 +588,12 @@ export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(functio
       setSession(null);
       sessionRef.current = null;
       // Enqueue the transfer data and kick it off after React flushes state
-      chatTransferQueueRef.current = { files, instruction, destination: destination || '' };
+      chatTransferQueueRef.current = { files, instruction, destination: destination || '', destinationHint };
       setTimeout(() => {
         const q = chatTransferQueueRef.current;
         if (q) {
           chatTransferQueueRef.current = null;
-          void startBatchTransferDirectRef.current?.(q.files, q.instruction, q.destination);
+          void startBatchTransferDirectRef.current?.(q.files, q.instruction, q.destination, q.destinationHint);
         }
       }, 0);
     },

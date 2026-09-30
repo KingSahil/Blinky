@@ -12,7 +12,7 @@ mock.module('react', () => ({
 mock.module('react-native', () => {
   const View = 'View';
   return {
-    View, Text: 'Text', TextInput: 'TextInput', TouchableOpacity: 'TouchableOpacity', Image: 'Image',
+    View, Text: 'Text', TextInput: 'TextInput', TouchableOpacity: 'TouchableOpacity', Image: 'Image', ScrollView: 'ScrollView',
     StyleSheet: { create: (styles: unknown) => styles },
     Animated: {
       Value: class { interpolate() { return 0; } },
@@ -26,35 +26,30 @@ mock.module('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 mock.module('expo-haptics', () => ({ ImpactFeedbackStyle: { Light: 'light', Medium: 'medium' }, impactAsync() {} }));
 mock.module('expo-image-picker', () => ({}));
 mock.module('expo-document-picker', () => ({}));
-mock.module('../lib/fileTransfer', () => ({ readUriAsBase64() {} }));
 
 const { CommandComposer } = await import('../components/CommandComposer');
 
-function findSendToPC(element: any): any {
-  if (!element || typeof element !== 'object') return null;
-  if (element.props?.accessibilityLabel === 'Send files to PC') return element;
+function findText(element: any, target: string): boolean {
+  if (element === target) return true;
+  if (!element || typeof element !== 'object') return false;
+  if (typeof element.type === 'function') return findText(element.type(element.props), target);
   const children = element.props?.children;
   for (const child of Array.isArray(children) ? children : [children]) {
-    const found = findSendToPC(child);
-    if (found) return found;
+    if (findText(child, target)) return true;
   }
-  return null;
+  return false;
 }
 
-test('attachment menu opens the native PC file transfer panel', () => {
+test('attachment menu keeps four chat choices without a separate transfer entry', () => {
   stateIndex = 0;
-  let opens = 0;
-  let submits = 0;
   const tree = CommandComposer({
-    queryText: '', setQueryText() {}, onSubmit() { submits++; }, onStop() {},
+    queryText: '', setQueryText() {}, onSubmit() {}, onStop() {},
     status: 'idle', isConnected: true, isVoiceRecording: false,
     isVoiceTranscribing: false, onToggleVoice() {},
-    onSendFilesToPC() { opens++; },
   });
 
-  const action = findSendToPC(tree);
-  expect(action).not.toBeNull();
-  action.props.onPress();
-  expect(opens).toBe(1);
-  expect(submits).toBe(0);
+  for (const label of ['File', 'Image', 'Camera', 'Screenshot']) {
+    expect(findText(tree, label)).toBe(true);
+  }
+  expect(findText(tree, 'Send files to PC')).toBe(false);
 });

@@ -17,9 +17,11 @@ test('an explicit edit instruction marks every file offer for an AiCut batch', (
   expect(buildFileOffer({
     requestId: 'offer-2', name: 'clip.mp4', size: 50, sha256: 'b'.repeat(64),
     instruction: 'trim from 1 to 3 seconds', destinationPath: ' ',
+    destinationHint: 'send this to downloads/blinky folder and trim to 2 seconds',
   })).toEqual({
     type: 'file_offer', requestId: 'offer-2', name: 'clip.mp4', size: 50,
     sha256: 'b'.repeat(64), purpose: 'edit',
+    destinationHint: 'send this to downloads/blinky folder and trim to 2 seconds',
   });
 });
 

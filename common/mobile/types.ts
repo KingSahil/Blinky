@@ -21,6 +21,7 @@ export interface Message {
   };
   screenshot_b64?: string;
   attachedFile?: AttachedFile;
+  attachedFiles?: AttachedFile[];
   steps?: any[];
 }
 
