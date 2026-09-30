@@ -38,11 +38,23 @@ If the app shows `Cannot find native module 'ExponentImagePicker'`, the JavaScri
 
 ## Connecting to Blinky
 
+Release builds open the link setup on the **QR** tab by default; debug builds
+show the manual form directly.
+
+**Option A — QR (release builds only, fastest, recommended)**
+
+1. Make sure Blinky is running on your desktop PC (`bun run dev`).
+2. In the PC app, click the **QR icon** in the Blinky header to show the pairing code.
+3. In the mobile app's **QR** tab, point the camera at the code — you connect instantly, no typing.
+
+**Option B — Manual**
+
 1. Make sure Blinky is running on your desktop PC (`bun run dev`).
 2. Obtain your computer's local IP address.
    * **Linux**: Run `ip route get 1.1.1.1 | awk '{print $7}'` in terminal.
    * **Windows**: Run `ipconfig` in Command Prompt and check your IPv4 address under your wireless adapter.
-3. In the mobile application screen, input your PC's IP address (e.g., `192.168.1.15`).
+3. Switch to the **Manual** tab, input your PC's IP address (e.g., `192.168.1.15`).
+   Release builds also need the remote token and certificate pin (shown in the PC app).
 4. Tap **Establish Link** to connect.
 5. Use the control buttons on your phone to trigger actions on your PC, or send an agent query from the mobile UI.
 

@@ -536,6 +536,82 @@ pub fn secure_transport_info(
     }))
 }
 
+/// Non-loopback LAN IPv4 addresses of this PC, for the mobile-pairing QR.
+/// Dependency-free: a UDP `connect()` transmits nothing but reveals the local
+/// address the OS would route with. Works offline.
+pub fn local_lan_ips() -> Vec<String> {
+    let mut ips: Vec<String> = Vec::new();
+    for remote in ["8.8.8.8:80", "1.1.1.1:80"] {
+        if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if sock.connect(remote).is_ok() {
+                if let Ok(local) = sock.local_addr() {
+                    let ip = local.ip().to_string();
+                    if !ip.starts_with("127.") && ip != "::1" && !ips.contains(&ip) {
+                        ips.push(ip);
+                    }
+                }
+            }
+        }
+        if !ips.is_empty() {
+            break;
+        }
+    }
+    ips
+}
+
+/// Payload for the "Connect Mobile" QR shown in the desktop UI.
+/// Ensures a usable token exists (generates + persists one even in dev),
+/// so scanning the QR connects with zero typing.
+pub fn mobile_pairing_payload(
+    app: &AppHandle,
+) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    let mode = crate::transport::TransportMode::current();
+    let pin = if mode.is_release() {
+        Some(
+            crate::tls_identity::TlsIdentity::load_or_generate(app)?
+                .public_key_pin()
+                .to_string(),
+        )
+    } else {
+        None
+    };
+
+    let mut token = get_remote_token();
+    if token.is_empty() {
+        token = generate_remote_token();
+        let root = project_root();
+        let mut envs = read_env_file(&root);
+        envs.retain(|(k, _)| k != "BLINKY_REMOTE_TOKEN");
+        envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
+        let _ = write_env_file(&root, &envs);
+    }
+
+    Ok(serde_json::json!({
+        "v": 1,
+        "ips": local_lan_ips(),
+        "ws_port": 9001,
+        "discovery_port": 9004,
+        "token": token,
+        "certificate_pin": pin,
+        "mode": if mode.is_release() { "release" } else { "development" },
+    }))
+}
+
+/// Regenerates `BLINKY_REMOTE_TOKEN` and persists it (old QR codes stop working).
+/// Also updates the process environment, since `get_remote_token()` prefers
+/// a nonempty `BLINKY_REMOTE_TOKEN` env var over `.env` — without this, a
+/// regenerate would leave the effective runtime credential unchanged.
+pub fn regenerate_remote_token() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let token = generate_remote_token();
+    let root = project_root();
+    let mut envs = read_env_file(&root);
+    envs.retain(|(k, _)| k != "BLINKY_REMOTE_TOKEN");
+    envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
+    write_env_file(&root, &envs).map_err(|err| format!("Failed to persist token: {err}"))?;
+    std::env::set_var("BLINKY_REMOTE_TOKEN", &token);
+    Ok(token)
+}
+
 pub async fn secure_socket_connect(
     app: AppHandle,
     socket_id: String,

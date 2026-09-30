@@ -1,6 +1,7 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/KingSahil/Blinky/main/common/src-tauri/icons/Square150x150Logo.png" alt="Blinky logo">
+<img src="https://raw.githubusercontent.com/KingSahil/Blinky/main/common/src-tauri/icons/Square150x150Logo.png" alt="Blinky logo" width="120">
+<img src="./common/mobile/assets/logo_text.png#gh-dark-mode-only" alt="Blinky" width="320">
 
 # Blinky
 
@@ -162,25 +163,40 @@ flowchart LR
 | Ollama | Latest | For local offline inference |
 | Docker | Latest | For local SearXNG search |
 
-### 1. Set up the desktop core
+### 1. Set up the desktop core (one click)
 
-The setup script checks your toolchain, installs packages, builds the Python `.venv`, installs Playwright browsers, and creates your `.env`.
+The setup script checks your toolchain, auto-installs what's missing (Bun,
+Rust, Python), installs JS + Python packages, Playwright browsers, mobile
+deps, and creates your `.env`. Every failure prints a clear error with the
+exact fix command. Safe to re-run anytime.
 
 **Windows (recommended)**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File setup.ps1
-# or
-bun run setup
+# setup + immediately launch the app:
+powershell -ExecutionPolicy Bypass -File setup.ps1 -Run
 ```
 
 **Linux**
 
 ```bash
 chmod +x setup.sh && ./setup.sh
+# setup + immediately launch the app:
+./setup.sh --run
 ```
 
-### 2. Run Blinky
+### 2. Run Blinky (one click)
+
+```powershell
+.\run.ps1     # Windows: validates setup, clears stale ports, picks docker/no-docker
+```
+
+```bash
+./run.sh      # Linux: same one-click run
+```
+
+Or directly with Bun:
 
 ```bash
 bun run dev
@@ -197,20 +213,34 @@ Optional local search engine:
 docker compose -f common/docker-compose.yml up -d
 ```
 
-### 3. Run the mobile companion
+### 3. Run the mobile companion (one click, QR included)
 
-```bash
-cd common/mobile
-bun install
-bun run start
+Start the desktop app first (`.\run.ps1` / `./run.sh`), then:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup-mobile.ps1   # Windows
 ```
 
-Scan the QR code with Expo Go, or use a connected Android phone:
-
 ```bash
-connect_usb.bat    # USB port forwarding
-install_apk.bat    # install the standalone APK
+./setup-mobile.sh   # Linux
 ```
+
+The script installs mobile deps, prints your PC's LAN IP, checks the
+desktop backend on port 9001, then starts Expo so the QR code prints in
+your terminal. Scan it with Expo Go (or your Blinky dev build), enter the
+PC IP in the app, tap **Establish Link**, and test: power actions, remote
+AI query over WS `:9001`, file transfer, camera-roll sync. Phone + PC must
+be on the same Wi-Fi — or use USB mode (`-Usb` / `--usb`, then IP
+`localhost`). Full build notes: `common/mobile/README.md`.
+
+Two ways to link the phone (release builds open on the **QR** tab by default;
+debug builds show the manual form):
+
+- **QR (release only, fastest):** in the release PC app, click the **QR icon**
+  in the Blinky header → a pairing code appears. In the mobile app's QR tab,
+  scan it — you connect instantly, no typing.
+- **Manual (all builds):** enter the PC IP (plus token / cert pin for release
+  builds), tap **Establish Link**.
 
 ---
 
@@ -272,6 +302,7 @@ Blinky/
 | Sahil | Backend and Tauri Developer | [@KingSahil](https://github.com/KingSahil) |
 | FeV-06 | Mobile and Linux Developer | [@FeV-06](https://github.com/FeV-06) |
 | meharwanfr | Linux Developer | [@meharwanfr](https://github.com/meharwanfr) |
+| Boldbug | Full-Stack Developer | [@boldbug1](https://github.com/boldbug1) |
 
 ---
 

@@ -167,6 +167,24 @@ test('disconnect clears pending timeout and unmount closes the socket', () => {
   expect(timers.size).toBe(0);
 });
 
+test('QR secure flag keeps the pinned native channel (no ws downgrade)', async () => {
+  render().connect('192.168.0.105', 'test-token', 'sha256/test-pin', { secure: true });
+  await flush();
+  expect(connectNative).toHaveBeenCalled();
+  const [, url, pin] = connectNative.mock.calls.at(-1)!;
+  expect(url).toBe('wss://192.168.0.105:9001');
+  expect(pin).toBe('sha256/test-pin');
+});
+
+test('secure connection routes follow-up sends over the native socket', async () => {
+  const id = start(); emit('onOpen', id);
+  emit('onMessage', id, { data: JSON.stringify({ type: 'auth_result', ok: true }) });
+  expect(render().sendQuery('hello', 'req-1')).toBe(true);
+  await flush();
+  const [, sent] = sendText.mock.calls.at(-1)!;
+  expect(JSON.parse(sent as string)).toMatchObject({ requestId: 'req-1', query: 'hello' });
+});
+
 // The mode is captured on module import; restore the process for other tests.
 if (originalMode === undefined) delete process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE;
 else process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE = originalMode;

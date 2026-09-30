@@ -1820,6 +1820,31 @@ export default function App() {
     connect(cleanedIp, remoteToken || undefined, certificatePin || undefined);
   };
 
+  /** One-scan connect from the PC app's "Connect Mobile" QR code. */
+  const handleQrConnect = async (qr: { ip: string; token?: string; pin?: string; mode?: string }) => {
+    triggerHaptic('medium');
+    const cleanedIp = qr.ip.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/+$/, '');
+    if (!validateIp(cleanedIp)) {
+      Alert.alert('Invalid QR Code', 'This QR code does not contain a valid Blinky PC address. Scan the QR shown via the QR icon in the PC app header.');
+      return;
+    }
+    const token = (qr.token || '').trim();
+    const pin = (qr.pin || '').trim();
+    setIpAddress(cleanedIp);
+    if (token) setRemoteToken(token);
+    if (pin) setCertificatePin(pin);
+    try {
+      await Promise.all([
+        AsyncStorage.setItem(STORAGE_KEY, cleanedIp),
+        saveCredential('remote_token', TOKEN_STORAGE_KEY, token),
+        saveCredential('certificate_pin', CERTIFICATE_PIN_STORAGE_KEY, pin),
+      ]);
+    } catch (e) {}
+    // A release QR must stay on the pinned secure channel even in dev builds;
+    // a release build never downgrades regardless of QR mode (see connect()).
+    connect(cleanedIp, token || undefined, pin || undefined, { secure: qr.mode === 'release' });
+  };
+
   const handleAutoDiscover = async () => {
     triggerHaptic('medium');
     setIsDiscovering(true);
@@ -2275,6 +2300,7 @@ export default function App() {
             isDiscovering={isDiscovering}
             handleConnect={handleConnect}
             handleAutoDiscover={handleAutoDiscover}
+            handleQrConnect={handleQrConnect}
             disconnect={disconnect}
             discoveryProgress={discoveryProgress}
             errorMsg={errorMsg}

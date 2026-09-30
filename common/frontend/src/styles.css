@@ -2626,6 +2626,28 @@ h3 {
   width: 100%;
 }
 
+/* Mobile-pairing modal extras (reuses wa-modal-* layout) */
+.pairing-ip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.pairing-ip-select {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.pairing-warning {
+  color: #ffb020;
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;

@@ -168,11 +168,10 @@ export default function SplashScreen({ onDismiss }: SplashScreenProps) {
       <Animated.View style={[styles.brandingContainer, { opacity: fade3 }]}>
         <View style={styles.logoRow}>
           <Image
-            source={require('./assets/blinky-mascot-logo.png')}
-            style={styles.logoRowImage}
+            source={require('./assets/logo_text.png')}
+            style={styles.brandImage}
             resizeMode="contain"
           />
-          <Text style={styles.logoText}>blinky</Text>
         </View>
 
         <Text style={styles.headlineTitle}>Delightful</Text>
@@ -241,9 +240,9 @@ const styles = StyleSheet.create({
     elevation: 10,
   },
   splashLogo: {
-    width: 140,
-    height: 140,
-    borderRadius: 32,
+    width: 120,
+    height: 120,
+    borderRadius: 28,
   },
   heroContainer: {
     flex: 1,
@@ -314,20 +313,15 @@ const styles = StyleSheet.create({
   logoRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'flex-start',
+    alignSelf: 'flex-start',
+    marginLeft: -19,
     marginBottom: 16,
   },
-  logoRowImage: {
-    width: 26,
-    height: 26,
-    borderRadius: 7,
-    marginRight: 8,
-  },
-  logoText: {
-    fontFamily: 'System',
-    fontSize: 22,
-    fontWeight: '600',
-    color: '#A1A1AA',
-    letterSpacing: -0.5,
+  brandImage: {
+    width: 200,
+    aspectRatio: 3,
+    alignSelf: 'flex-start',
   },
   headlineTitle: {
     fontFamily: 'System',
