@@ -20,6 +20,7 @@ import {
   Animated,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { File, UploadType } from 'expo-file-system';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import { Ionicons } from '@expo/vector-icons';
@@ -842,29 +843,35 @@ export default function App() {
   // Voice command states
   const [sarvamApiKey, setSarvamApiKey] = useState<string | null>(null);
   const [assemblyaiApiKey, setAssemblyaiApiKey] = useState<string | null>(null);
+  const [voiceProvider, setVoiceProvider] = useState<'assemblyai' | 'sarvam'>('assemblyai');
   const audioRecorderRef = useRef<any>(null);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const [isVoiceTranscribing, setIsVoiceTranscribing] = useState(false);
+  const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
 
   // Cleanup audio recorder on unmount
   useEffect(() => {
     return () => {
       if (audioRecorderRef.current) {
         try {
-          audioRecorderRef.current.stop();
+          void audioRecorderRef.current.stop().finally(() => audioRecorderRef.current?.release());
         } catch (_) {}
       }
     };
   }, []);
 
-  // Request AssemblyAI & Sarvam keys from PC when connected
+  // Request AssemblyAI & Sarvam keys and voice provider from PC when connected
   useEffect(() => {
     if (isConnected) {
+      console.log('Connected to PC, requesting voice configuration...');
       sendCommand('get_assemblyai_key' as any);
       sendCommand('get_sarvam_key' as any);
+      sendCommand('get_voice_provider' as any);
     } else {
+      console.log('Disconnected from PC, clearing voice configuration');
       setAssemblyaiApiKey(null);
       setSarvamApiKey(null);
+      setVoiceProvider('assemblyai');
     }
   }, [isConnected, sendCommand]);
 
@@ -917,12 +924,28 @@ export default function App() {
   useEffect(() => {
     if (latestResponse) {
       if (latestResponse.type === 'assemblyai_key') {
-        setAssemblyaiApiKey(latestResponse.key);
+        const key = latestResponse.key;
+        console.log('Received AssemblyAI key from PC:', key ? 'present' : 'missing');
+        setAssemblyaiApiKey(key);
         return;
       }
 
       if (latestResponse.type === 'sarvam_key') {
-        setSarvamApiKey(latestResponse.key);
+        const key = latestResponse.key;
+        console.log('Received Sarvam key from PC:', key ? 'present' : 'missing');
+        setSarvamApiKey(key);
+        return;
+      }
+
+      if (latestResponse.type === 'voice_provider') {
+        const provider = latestResponse.provider || 'assemblyai';
+        console.log('Received voice provider from PC:', provider);
+        if (provider === 'sarvam' || provider === 'assemblyai') {
+          setVoiceProvider(provider);
+        } else {
+          console.warn('Invalid voice provider received, defaulting to assemblyai:', provider);
+          setVoiceProvider('assemblyai');
+        }
         return;
       }
 
@@ -1254,13 +1277,21 @@ export default function App() {
       Alert.alert('Not Connected', 'Please establish a link to your PC first.');
       return;
     }
+
+    // Check if we have at least one STT API key available
     if (!assemblyaiApiKey && !sarvamApiKey) {
       triggerHaptic('selection');
       Alert.alert('Configuration Missing', 'Waiting for voice AI keys from your PC...');
       sendCommand('get_assemblyai_key' as any);
       sendCommand('get_sarvam_key' as any);
+      sendCommand('get_voice_provider' as any);
       return;
     }
+
+    // Log the current voice provider configuration for debugging
+    console.log('Voice recording started with provider:', voiceProvider);
+    console.log('AssemblyAI key available:', !!assemblyaiApiKey);
+    console.log('Sarvam key available:', !!sarvamApiKey);
 
     try {
       const perm = await requestRecordingPermissionsAsync();
@@ -1274,12 +1305,18 @@ export default function App() {
         playsInSilentMode: true,
       });
 
-      const recorder = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
-      audioRecorderRef.current = recorder;
-      await recorder.prepareToRecordAsync();
-      recorder.record();
+      // expo-audio v57 exposes AudioRecorder as a SharedObject. Construct it
+      // with options, prepare it, then call record(); the old expo-av-style
+      // createAudioRecorderAsync/startAsync APIs are not available here.
+      console.log('Creating audio recorder with HIGH_QUALITY preset');
+      const recording = new AudioModule.AudioRecorder(RecordingPresets.HIGH_QUALITY);
+      audioRecorderRef.current = recording;
+      await recording.prepareToRecordAsync();
+      recording.record();
       triggerHaptic('heavy');
       setIsVoiceRecording(true);
+      setLiveTranscript('Listening...');
+      console.log('Recording started successfully');
     } catch (err) {
       console.error('Failed to start voice recording', err);
       Alert.alert('Error', 'Failed to start microphone recording.');
@@ -1291,14 +1328,20 @@ export default function App() {
     triggerHaptic('medium');
     setIsVoiceRecording(false);
     setIsVoiceTranscribing(true);
+    setLiveTranscript('Transcribing...');
     try {
       const recorder = audioRecorderRef.current;
       if (!recorder) {
         throw new Error('No active recorder found');
       }
+
+      // Stop recording and get the file URI
       await recorder.stop();
       const uri = recorder.uri;
       audioRecorderRef.current = null;
+      recorder.release();
+
+      console.log('Recording stopped, URI:', uri);
 
       if (!uri) {
         throw new Error('No recording URI found');
@@ -1306,20 +1349,31 @@ export default function App() {
 
       let transcript = '';
 
-      // Priority 1: AssemblyAI Universal-3 Pro
-      if (assemblyaiApiKey) {
+      // Use the voice provider set by desktop app, with fallback to available keys
+      if (voiceProvider === 'assemblyai' && assemblyaiApiKey) {
         try {
-          const fileBlob = await (await fetch(uri)).blob();
-          const uploadRes = await fetch('https://api.assemblyai.com/v2/upload', {
-            method: 'POST',
-            headers: {
-              Authorization: assemblyaiApiKey,
-            },
-            body: fileBlob,
+          console.log('Starting AssemblyAI transcription...');
+          // React Native's fetch(uri).blob() can return the URI string as a
+          // tiny text/plain Blob instead of reading the local recording.
+          // Expo File uploads the native file bytes directly.
+          const audioFile = new File(uri);
+          console.log('Audio file size:', audioFile.size, 'bytes');
+          if (audioFile.size < 100) {
+            throw new Error('The recording file is empty or unreadable. Please record again.');
+          }
+
+          const uploadResult = await audioFile.upload('https://api.assemblyai.com/v2/upload', {
+            httpMethod: 'POST',
+            uploadType: UploadType.BINARY_CONTENT,
+            headers: { Authorization: assemblyaiApiKey },
+            mimeType: 'audio/mp4',
           });
 
-          if (uploadRes.ok) {
-            const { upload_url } = await uploadRes.json();
+          console.log('AssemblyAI upload response status:', uploadResult.status);
+
+          if (uploadResult.status >= 200 && uploadResult.status < 300) {
+            const { upload_url } = JSON.parse(uploadResult.body);
+            console.log('AssemblyAI upload URL received');
             if (upload_url) {
               const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
                 method: 'POST',
@@ -1335,8 +1389,12 @@ export default function App() {
                 }),
               });
 
+              console.log('AssemblyAI transcript request status:', transcriptRes.status);
+
               if (transcriptRes.ok) {
                 const { id: transcriptId } = await transcriptRes.json();
+                console.log('AssemblyAI transcript ID:', transcriptId);
+
                 for (let i = 0; i < 30; i++) {
                   await new Promise(r => setTimeout(r, 600));
                   const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
@@ -1344,8 +1402,10 @@ export default function App() {
                   });
                   if (pollRes.ok) {
                     const pollData = await pollRes.json();
+                    console.log(`AssemblyAI poll ${i}: status = ${pollData.status}`);
                     if (pollData.status === 'completed') {
                       transcript = (pollData.text || '').trim();
+                      console.log('AssemblyAI transcription completed, text length:', transcript.length);
                       break;
                     } else if (pollData.status === 'error') {
                       console.warn('AssemblyAI transcription reported error:', pollData.error);
@@ -1353,15 +1413,20 @@ export default function App() {
                     }
                   }
                 }
+              } else {
+                const errorText = await transcriptRes.text();
+                console.error('AssemblyAI transcript request failed:', transcriptRes.status, errorText);
               }
             }
+          } else {
+            console.error('AssemblyAI upload failed:', uploadResult.status, uploadResult.body);
           }
         } catch (aaiErr) {
-          console.warn('AssemblyAI mobile STT failed, falling back if available:', aaiErr);
+          console.error('AssemblyAI mobile STT failed with exception:', aaiErr);
         }
       }
 
-      // Priority 2: Fallback to Sarvam STT if AssemblyAI did not produce a transcript
+      // Fallback to Sarvam if AssemblyAI failed or key not available
       if (!transcript && sarvamApiKey) {
         const formData = new FormData();
         formData.append('file', {
@@ -1411,64 +1476,66 @@ export default function App() {
       }
 
       if (!transcript) {
-        throw new Error('Could not transcribe audio. Please check your AssemblyAI / Sarvam API key.');
+        const errorMsg = voiceProvider === 'assemblyai'
+          ? 'AssemblyAI transcription failed. Please check your API key configuration.'
+          : 'Sarvam transcription failed. Please check your API key configuration.';
+        console.error('STT failed:', errorMsg);
+        throw new Error(errorMsg);
       }
 
-      if (transcript) {
-        setQueryText(transcript);
-        setRunningQuery(transcript);
-        setAgentStatus('processing');
-        setTimerSeconds(0);
+      setLiveTranscript(null);
+      setQueryText(transcript);
+      setRunningQuery(transcript);
+      setAgentStatus('processing');
+      setTimerSeconds(0);
 
-        const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const userMsgId = generateUuid();
-        const blinkyMsgId = generateUuid();
-        
-        activeBlinkyMsgIdRef.current = blinkyMsgId;
+      const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const userMsgId = generateUuid();
+      const blinkyMsgId = generateUuid();
 
-        setMessages(prev => [
-          ...prev,
-          {
-            id: userMsgId,
-            sender: 'user',
-            text: transcript,
-            timestamp: currentTime,
-          },
-          {
-            id: blinkyMsgId,
-            sender: 'blinky',
-            text: "I'm on it. Locating the request...",
-            timestamp: currentTime,
-            progress: {
-              percent: 0,
-              statusText: 'Analyzing speech...',
-              duration: 0,
-            }
+      activeBlinkyMsgIdRef.current = blinkyMsgId;
+
+      setMessages(prev => [
+        ...prev,
+        {
+          id: userMsgId,
+          sender: 'user',
+          text: transcript,
+          timestamp: currentTime,
+        },
+        {
+          id: blinkyMsgId,
+          sender: 'blinky',
+          text: "I'm on it. Locating the request...",
+          timestamp: currentTime,
+          progress: {
+            percent: 0,
+            statusText: 'Analyzing speech...',
+            duration: 0,
           }
-        ]);
-
-        const success = sendQuery(transcript, generateUuid());
-        if (!success) {
-          setAgentStatus('error');
-          setMessages(prev => prev.map(m => {
-            if (m.id === blinkyMsgId) {
-              return {
-                ...m,
-                progress: {
-                  percent: 0,
-                  statusText: 'Failed to communicate with PC.',
-                  duration: 0,
-                }
-              };
-            }
-            return m;
-          }));
         }
-      } else {
-        Alert.alert('STT Result', 'Could not hear anything clearly.');
+      ]);
+
+      const success = sendQuery(transcript, generateUuid());
+      if (!success) {
+        setAgentStatus('error');
+        setMessages(prev => prev.map(m => {
+          if (m.id === blinkyMsgId) {
+            return {
+              ...m,
+              progress: {
+                percent: 0,
+                statusText: 'Failed to communicate with PC.',
+                duration: 0,
+              }
+            };
+          }
+          return m;
+        }));
       }
     } catch (err: any) {
       console.error('STT Voice error:', err);
+      setLiveTranscript(null);
       Alert.alert('Speech Recognition Failed', err.message || 'Error transcribing voice.');
     } finally {
       setIsVoiceTranscribing(false);
@@ -2064,6 +2131,7 @@ export default function App() {
                 isVoiceRecording={isVoiceRecording}
                 isVoiceTranscribing={isVoiceTranscribing}
                 onToggleVoice={toggleVoiceRecording}
+                liveTranscript={liveTranscript || undefined}
               />
             </View>
           )}

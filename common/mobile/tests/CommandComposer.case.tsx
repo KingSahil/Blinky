@@ -45,7 +45,7 @@ test('attachment menu keeps four chat choices without a separate transfer entry'
   const tree = CommandComposer({
     queryText: '', setQueryText() {}, onSubmit() {}, onStop() {},
     status: 'idle', isConnected: true, isVoiceRecording: false,
-    isVoiceTranscribing: false, onToggleVoice() {},
+    isVoiceTranscribing: false, onToggleVoice() {}, liveTranscript: undefined,
   });
 
   for (const label of ['File', 'Image', 'Camera', 'Screenshot']) {

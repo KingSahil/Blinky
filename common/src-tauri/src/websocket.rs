@@ -965,6 +965,7 @@ where
                 crate::platform::execute_screenshot();
             } else if trimmed == "get_sarvam_key" {
                 let key = get_sarvam_api_key();
+                eprintln!("get_sarvam_key: key_present = {}", !key.is_empty());
                 let resp = serde_json::json!({
                     "type": "sarvam_key",
                     "key": key
@@ -978,9 +979,24 @@ where
                     .await;
             } else if trimmed == "get_assemblyai_key" {
                 let key = get_assemblyai_api_key();
+                eprintln!("get_assemblyai_key: key_present = {}", !key.is_empty());
                 let resp = serde_json::json!({
                     "type": "assemblyai_key",
                     "key": key
+                });
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        resp.to_string().into(),
+                    ))
+                    .await;
+            } else if trimmed == "get_voice_provider" {
+                let provider = get_voice_provider();
+                eprintln!("get_voice_provider: provider = {}", provider);
+                let resp = serde_json::json!({
+                    "type": "voice_provider",
+                    "provider": provider
                 });
                 let _ = ws_sender
                     .lock()
@@ -1806,33 +1822,87 @@ mod tests {
 }
 
 fn get_sarvam_api_key() -> String {
+    if let Ok(val) = std::env::var("SARVAM_API_KEY") {
+        let trimmed = val.trim().to_string();
+        if !trimmed.is_empty() {
+            eprintln!("get_sarvam_api_key: found in env var SARVAM_API_KEY");
+            return trimmed;
+        }
+    }
+
     let root = project_root();
+    eprintln!("get_sarvam_api_key: project_root = {:?}", root);
     let envs = read_env_file(&root);
-    envs.into_iter()
+    eprintln!("get_sarvam_api_key: found {} env vars in .env", envs.len());
+
+    let key = envs
+        .into_iter()
         .find(|(k, _)| k == "SARVAM_API_KEY")
         .map(|(_, v)| v)
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    eprintln!("get_sarvam_api_key: key_present = {}", !key.is_empty());
+    key
 }
 
 fn get_assemblyai_api_key() -> String {
+    // First check environment variables
     if let Ok(val) = std::env::var("ASSEMBLY_AI_API_KEY") {
         let trimmed = val.trim().to_string();
         if !trimmed.is_empty() {
+            eprintln!("get_assemblyai_api_key: found in env var ASSEMBLY_AI_API_KEY");
             return trimmed;
         }
     }
     if let Ok(val) = std::env::var("ASSEMBLYAI_API_KEY") {
         let trimmed = val.trim().to_string();
         if !trimmed.is_empty() {
+            eprintln!("get_assemblyai_api_key: found in env var ASSEMBLYAI_API_KEY");
             return trimmed;
         }
     }
+
+    // Fall back to .env file
     let root = project_root();
+    eprintln!("get_assemblyai_api_key: project_root = {:?}", root);
     let envs = read_env_file(&root);
-    envs.into_iter()
+    eprintln!("get_assemblyai_api_key: found {} env vars in .env", envs.len());
+
+    let key = envs
+        .into_iter()
         .find(|(k, _)| k == "ASSEMBLY_AI_API_KEY" || k == "ASSEMBLYAI_API_KEY")
         .map(|(_, v)| v.trim().to_string())
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    eprintln!("get_assemblyai_api_key: key_present = {}", !key.is_empty());
+    key
+}
+
+fn get_voice_provider() -> String {
+    if let Ok(val) = std::env::var("BLINKY_VOICE_PROVIDER") {
+        let trimmed = val.trim().to_string();
+        if !trimmed.is_empty() {
+            eprintln!("get_voice_provider: found in env var BLINKY_VOICE_PROVIDER = {}", trimmed);
+            return trimmed;
+        }
+    }
+
+    let root = project_root();
+    eprintln!("get_voice_provider: project_root = {:?}", root);
+    let envs = read_env_file(&root);
+    eprintln!("get_voice_provider: found {} env vars in .env", envs.len());
+
+    let provider = envs
+        .into_iter()
+        .find(|(k, _)| k == "BLINKY_VOICE_PROVIDER")
+        .map(|(_, v)| v.trim().to_string())
+        .unwrap_or_else(|| {
+            eprintln!("get_voice_provider: not found, defaulting to assemblyai");
+            "assemblyai".to_string()
+        });
+
+    eprintln!("get_voice_provider: provider = {}", provider);
+    provider
 }
 
 /// Reads the remote token if explicitly configured by the user in environment or .env.
