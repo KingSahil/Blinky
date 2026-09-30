@@ -1013,6 +1013,18 @@ def classify_request(
             }
     except Exception as exc:
         LOGGER.debug("Fast-path ESP32 light resolution failed: %s", exc)
+    try:
+        from tools.pdf_tool import resolve_pdf_request
+        pdf_match = resolve_pdf_request(question)
+        if pdf_match:
+            return {
+                "intent": "PDF_ENGINE",
+                "needs_screen": False,
+                "is_continuation": False,
+                "extracted_params": pdf_match,
+            }
+    except Exception as exc:
+        LOGGER.debug("Fast-path PDF resolution failed: %s", exc)
 
 
     try:

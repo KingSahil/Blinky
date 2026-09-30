@@ -148,8 +148,73 @@ def handle_pdf_action(action: str, params: dict) -> Dict[str, Any]:
             raise ValueError("No PDF file provided or highlighted in File Explorer.")
         output_pdf = params.get("output_pdf") or pdf_path
         res_path = ocr_scanned_pdf(pdf_path, output_pdf)
+        if params.get("open_in_explorer", True):
+            highlight_in_explorer(res_path)
         return {"success": True, "output_path": str(res_path), "action": "ocr"}
 
     else:
         raise ValueError(f"Unknown PDF tool action: {action}")
+
+
+def highlight_in_explorer(file_path: str | Path) -> None:
+    """Selects and visually highlights the target output file in Windows File Explorer."""
+    try:
+        import subprocess
+        p = Path(file_path).resolve()
+        if p.exists() and os.name == "nt":
+            subprocess.Popen(["explorer.exe", f"/select,{p}"])
+    except Exception as exc:
+        LOGGER.warning(f"Could not highlight file in Explorer: {exc}")
+
+
+def resolve_pdf_request(question: str) -> Optional[Dict[str, Any]]:
+    """Deterministic intent matcher for PDF operations."""
+    q = question.lower().strip()
+    if not any(k in q for k in ["pdf", "docx", "word document", "table to csv", "extract table"]):
+        return None
+
+    if any(k in q for k in ["merge", "combine"]) and "pdf" in q:
+        return {"pdf_action": "merge"}
+
+    if any(k in q for k in ["split", "extract page", "extract pages"]) and "pdf" in q:
+        import re
+        m = re.search(r"pages?\s+([\d\s,-]+)", q)
+        page_range = m.group(1).strip() if m else None
+        return {"pdf_action": "split", "page_range": page_range}
+
+    if "rotate" in q and "pdf" in q:
+        deg = 90
+        if "180" in q:
+            deg = 180
+        elif "270" in q:
+            deg = 270
+        return {"pdf_action": "rotate", "degrees": deg}
+
+    if "watermark" in q or "stamp" in q:
+        import re
+        m = re.search(r"(?:watermark|stamp)\s+(?:['\"](.*?)['\"]|([A-Za-z0-9_-]+))", question, re.IGNORECASE)
+        text = (m.group(1) or m.group(2) or "CONFIDENTIAL") if m else "CONFIDENTIAL"
+        return {"pdf_action": "watermark", "text": text}
+
+    if "page number" in q or "page numbers" in q:
+        return {"pdf_action": "page_numbers"}
+
+    if any(k in q for k in ["extract table", "extract tables", "table to csv"]):
+        return {"pdf_action": "extract_tables"}
+
+    if any(k in q for k in ["redact", "blackout", "black out"]):
+        return {"pdf_action": "redact"}
+
+    if any(k in q for k in ["ocr", "make searchable", "searchable pdf"]):
+        return {"pdf_action": "ocr"}
+
+    if "convert" in q or "turn" in q or "export" in q:
+        target_fmt = "pdf"
+        if "to docx" in q or "to word" in q:
+            target_fmt = "docx"
+        elif "to png" in q or "to image" in q or "to images" in q or "to jpg" in q:
+            target_fmt = "png"
+        return {"pdf_action": "convert", "target_format": target_fmt}
+
+    return None
 

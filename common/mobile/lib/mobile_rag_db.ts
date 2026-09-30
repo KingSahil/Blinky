@@ -32,7 +32,7 @@ export interface MobileVectorMatch {
 /**
  * Tokenizes text into lowercase alphanumeric words.
  */
-export function simpleTokenize(text: str | string): string[] {
+export function simpleTokenize(text: string): string[] {
   return (text || '').toLowerCase().match(/\b\w+\b/g) || [];
 }
 
@@ -269,4 +269,61 @@ export function buildMobileOkfContext(
     `--- USER QUERY ---\n${query.trim()}`;
 
   return { systemPrompt, userPrompt, matchCount };
+}
+
+/**
+ * Syncs notebooks and sources pulled from Desktop Blinky into local device storage.
+ */
+export async function syncPcNotebooks(pcData: any): Promise<void> {
+  try {
+    if (!pcData) return;
+    const existing = await listMobileNotebooks();
+    const existingMap = new Map<string, MobileNotebook>();
+    for (const nb of existing) {
+      existingMap.set(nb.id, nb);
+    }
+
+    const pcNotebookList: any[] = Array.isArray(pcData)
+      ? pcData
+      : typeof pcData === 'object'
+      ? Object.values(pcData)
+      : [];
+
+    for (const rawNb of pcNotebookList) {
+      if (!rawNb || typeof rawNb !== 'object' || !rawNb.id) continue;
+
+      const convertedSources: MobileSource[] = (rawNb.sources || []).map((s: any) => {
+        const ext = s.file_type || (s.source_name || s.name || '').split('.').pop()?.toLowerCase() || 'txt';
+        const content = s.raw_text || s.content || s.okf_content || '';
+        const name = s.source_name || s.name || 'document.txt';
+        return {
+          id: s.id || `msrc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          source_name: name,
+          file_type: ext,
+          word_count: s.word_count || Math.round(content.length / 5),
+          content: content,
+          okf_block: s.okf_content || `### SOURCE: ${name}\nType: ${ext.toUpperCase()}\n\n${content}\n`,
+          active: s.active !== false,
+          created_at: s.created_at || Date.now(),
+        };
+      });
+
+      const mergedNb: MobileNotebook = {
+        id: rawNb.id,
+        title: rawNb.title || 'Synced PC Hub',
+        description: rawNb.description || '',
+        created_at: rawNb.created_at || Date.now(),
+        updated_at: rawNb.updated_at || Date.now(),
+        sources: convertedSources,
+      };
+
+      existingMap.set(rawNb.id, mergedNb);
+    }
+
+    const mergedList = Array.from(existingMap.values());
+    await saveMobileNotebooks(mergedList);
+    console.log(`[MobileRAG] Successfully synced ${pcNotebookList.length} PC notebooks.`);
+  } catch (err) {
+    console.warn('[MobileRAG] Failed to sync PC notebooks:', err);
+  }
 }

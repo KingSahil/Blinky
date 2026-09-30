@@ -124,11 +124,20 @@ export const NotebookScreen: React.FC = () => {
             temperature: 0.2,
           }),
         });
-        const data = await resp.json();
-        const responseText = data?.choices?.[0]?.message?.content || 'No response from Groq.';
-        answer = `[Vector Match Mode: ${useVectorSearch ? 'Top-K Mobile Search' : 'Full Context'} (${matchCount} chunk matches)]\n\n${responseText}`;
+        const data: any = await resp.json();
+        if (data?.error) {
+          const errMsg = JSON.stringify(data.error).toLowerCase();
+          if (errMsg.includes('rate_limit') || errMsg.includes('tpm') || resp.status === 429) {
+            answer = "⚠️ **Groq Rate Limit Exceeded (TPM Exhausted)**: If you are on the free tier, please try again in a few moments, reduce active document context, or upgrade your plan.";
+          } else {
+            answer = `Groq API Error: ${data.error.message || 'Request failed'}`;
+          }
+        } else {
+          const responseText = data?.choices?.[0]?.message?.content || 'No response from Groq.';
+          answer = `[Vector Match Mode: ${useVectorSearch ? 'Top-K Mobile Search' : 'Full Context'} (${matchCount} chunk matches)]\n\n${responseText}`;
+        }
       } else {
-        answer = `[Local Mobile Vector RAG Result]\nMode: ${useVectorSearch ? 'Top-K Vector Cosine Similarity' : 'Full Context'}\nMatched ${matchCount} chunks for "${q}". Connect to PC Blinky to sync cloud keys!`;
+        answer = `[Offline Mobile Mode]\nMode: ${useVectorSearch ? 'Top-K Vector Cosine Similarity' : 'Full Context'}\nMatched ${matchCount} local chunks for "${q}". Connect to PC Blinky on Wi-Fi once to sync your Groq/Gemini API keys for full offline cloud intelligence!`;
       }
 
       const aiMsg: ChatMessage = { id: `ai_${Date.now()}`, sender: 'ai', text: answer };

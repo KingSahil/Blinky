@@ -1,5 +1,9 @@
-import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+let SecureStore: any = null;
+try {
+  SecureStore = require('expo-secure-store');
+} catch (_) {}
 
 export const SECURE_KEYS_STORAGE_KEY = 'blinky_mobile_api_keys_v2';
 export const ASYNC_KEYS_FALLBACK_KEY = '@blinky_mobile_api_keys';

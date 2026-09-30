@@ -29,6 +29,9 @@ def build_okf_prompt_context(
         for src in active_sources:
             okf_source_blocks.append(src.get("okf_content", ""))
         sources_payload = "\n\n".join(okf_source_blocks) if okf_source_blocks else "[No active notebook sources selected]"
+        # Token protection for free-tier TPM limits
+        if len(sources_payload) > 9000:
+            sources_payload = sources_payload[:9000] + "\n\n...[Document context truncated to preserve TPM limits. Use Top-K vector search for larger queries]..."
 
     system_prompt = (
         "You are Blinky Notebook AI, a grounded research tutor and document intelligence assistant.\n"

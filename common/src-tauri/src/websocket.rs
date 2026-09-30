@@ -1165,6 +1165,54 @@ where
                         resp.to_string().into(),
                     ))
                     .await;
+            } else if trimmed == "get_api_keys" || trimmed == "{\"type\":\"get_api_keys\"}" {
+                let root = project_root();
+                let envs = read_env_file(&root);
+                let find_env = |key: &str| -> String {
+                    envs.iter()
+                        .find(|(k, _)| k == key)
+                        .map(|(_, v)| v.clone())
+                        .or_else(|| std::env::var(key).ok())
+                        .unwrap_or_default()
+                };
+                let resp = serde_json::json!({
+                    "type": "api_keys_sync",
+                    "keys": {
+                        "groq_key": find_env("GROQ_API_KEY"),
+                        "openai_key": find_env("OPENAI_API_KEY"),
+                        "gemini_key": find_env("GEMINI_API_KEY"),
+                        "deepseek_key": find_env("DEEPSEEK_API_KEY"),
+                    }
+                });
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        resp.to_string().into(),
+                    ))
+                    .await;
+            } else if trimmed == "notebook_sync_pull" || trimmed == "{\"type\":\"notebook_sync_pull\"}" {
+                let root = project_root();
+                let store_path = root.join("tmp").join("notebooks").join("notebooks_store.json");
+                let notebooks_json: serde_json::Value = if store_path.exists() {
+                    match std::fs::read_to_string(&store_path) {
+                        Ok(content) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
+                        Err(_) => serde_json::json!({}),
+                    }
+                } else {
+                    serde_json::json!({})
+                };
+                let resp = serde_json::json!({
+                    "type": "notebook_sync_data",
+                    "notebooks": notebooks_json
+                });
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        resp.to_string().into(),
+                    ))
+                    .await;
             } else if trimmed.starts_with("query:") || trimmed.starts_with("{") {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
                     let msg_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -1210,6 +1258,56 @@ where
                                     .await;
                             });
                         }
+                        continue;
+                    } else if msg_type == "get_api_keys" {
+                        let root = project_root();
+                        let envs = read_env_file(&root);
+                        let find_env = |key: &str| -> String {
+                            envs.iter()
+                                .find(|(k, _)| k == key)
+                                .map(|(_, v)| v.clone())
+                                .or_else(|| std::env::var(key).ok())
+                                .unwrap_or_default()
+                        };
+                        let resp = serde_json::json!({
+                            "type": "api_keys_sync",
+                            "keys": {
+                                "groq_key": find_env("GROQ_API_KEY"),
+                                "openai_key": find_env("OPENAI_API_KEY"),
+                                "gemini_key": find_env("GEMINI_API_KEY"),
+                                "deepseek_key": find_env("DEEPSEEK_API_KEY"),
+                            }
+                        });
+                        let _ = ws_sender
+                            .lock()
+                            .await
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                resp.to_string().into(),
+                            ))
+                            .await;
+                        continue;
+                    } else if msg_type == "notebook_sync_pull" {
+                        let root = project_root();
+                        let store_path = root.join("tmp").join("notebooks").join("notebooks_store.json");
+                        let notebooks_json: serde_json::Value = if store_path.exists() {
+                            match std::fs::read_to_string(&store_path) {
+                                Ok(content) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
+                                Err(_) => serde_json::json!({}),
+                            }
+                        } else {
+                            serde_json::json!({})
+                        };
+                        let resp = serde_json::json!({
+                            "type": "notebook_sync_data",
+                            "notebooks": notebooks_json
+                        });
+                        let _ = ws_sender
+                            .lock()
+                            .await
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                resp.to_string().into(),
+                            ))
+                            .await;
                         continue;
                     } else if msg_type == "fs_get_quick_access" {
                         let folders = crate::platform::fs_sync::get_quick_access_folders();

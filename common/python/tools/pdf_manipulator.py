@@ -12,8 +12,8 @@ def merge_pdfs(pdf_paths: List[str | Path], output_pdf: str | Path) -> Path:
     """Combines multiple PDF documents into a single output PDF."""
     try:
         import pypdf
-        merger = pypdf.PdfMerger()
-    except ImportError:
+        merger = getattr(pypdf, "PdfMerger", pypdf.PdfWriter)()
+    except Exception:
         from PyPDF2 import PdfMerger
         merger = PdfMerger()
 

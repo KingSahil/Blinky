@@ -86,8 +86,16 @@ def extract_text_with_layout(pdf_path: str | Path) -> str:
             for idx, page in enumerate(reader.pages):
                 pages_text.append(f"--- Page {idx + 1} ---\n{page.extract_text() or ''}")
             return "\n\n".join(pages_text)
-        except Exception as exc:
-            raise RuntimeError(f"Failed extracting text with layout: {exc}")
+        except Exception:
+            try:
+                import PyPDF2
+                reader = PyPDF2.PdfReader(str(pdf_file))
+                pages_text = []
+                for idx, page in enumerate(reader.pages):
+                    pages_text.append(f"--- Page {idx + 1} ---\n{page.extract_text() or ''}")
+                return "\n\n".join(pages_text)
+            except Exception as exc:
+                raise RuntimeError(f"Failed extracting text with layout: {exc}")
 
 
 def ocr_scanned_pdf(pdf_path: str | Path, output_pdf: str | Path) -> Path:
