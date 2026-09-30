@@ -598,6 +598,9 @@ pub fn mobile_pairing_payload(
 }
 
 /// Regenerates `BLINKY_REMOTE_TOKEN` and persists it (old QR codes stop working).
+/// Also updates the process environment, since `get_remote_token()` prefers
+/// a nonempty `BLINKY_REMOTE_TOKEN` env var over `.env` — without this, a
+/// regenerate would leave the effective runtime credential unchanged.
 pub fn regenerate_remote_token() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let token = generate_remote_token();
     let root = project_root();
@@ -605,6 +608,7 @@ pub fn regenerate_remote_token() -> Result<String, Box<dyn std::error::Error + S
     envs.retain(|(k, _)| k != "BLINKY_REMOTE_TOKEN");
     envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
     write_env_file(&root, &envs).map_err(|err| format!("Failed to persist token: {err}"))?;
+    std::env::set_var("BLINKY_REMOTE_TOKEN", &token);
     Ok(token)
 }
 
