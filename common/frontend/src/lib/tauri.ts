@@ -47,6 +47,24 @@ export function getSecureTransportInfo(): Promise<SecureTransportInfo> {
   return invoke<SecureTransportInfo>('get_secure_transport_info');
 }
 
+export interface MobilePairingPayload {
+  v: number;
+  ips: string[];
+  ws_port: number;
+  discovery_port: number;
+  token: string;
+  certificate_pin: string | null;
+  mode: 'development' | 'release';
+}
+
+export function getMobilePairingPayload(): Promise<MobilePairingPayload> {
+  return invoke<MobilePairingPayload>('get_mobile_pairing_payload');
+}
+
+export function regenerateRemoteToken(): Promise<string> {
+  return invoke<string>('regenerate_remote_token');
+}
+
 export function connectSecureSocket(
   socketId: string,
   url: string,

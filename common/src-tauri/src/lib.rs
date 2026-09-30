@@ -97,6 +97,16 @@ fn get_secure_transport_info(app: AppHandle) -> Result<serde_json::Value, String
 }
 
 #[tauri::command]
+fn get_mobile_pairing_payload(app: AppHandle) -> Result<serde_json::Value, String> {
+    websocket::mobile_pairing_payload(&app).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn regenerate_remote_token() -> Result<String, String> {
+    websocket::regenerate_remote_token().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn secure_socket_connect(
     app: AppHandle,
     socket_id: String,
@@ -1002,6 +1012,8 @@ pub fn run() {
             run_tutor,
             run_agent_query,
             get_secure_transport_info,
+            get_mobile_pairing_payload,
+            regenerate_remote_token,
             secure_socket_connect,
             secure_socket_send,
             secure_socket_close,
