@@ -199,8 +199,13 @@ export function usePCWebSocket() {
   const [fileTransferMessage, setFileTransferMessage] = useState<FileTransferMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const nativeRef = useRef<NativeSecureSocket | null>(null);
+  // Per-connection transport: true once a pinned native (wss) channel is in
+  // use. Mirrors RELEASE_TRANSPORT by default, but a scanned pairing payload
+  // can also request it (QR carries its own mode) — never the reverse.
+  const secureRef = useRef(false);
 
   const disconnect = useCallback((errorMessage?: string) => {
+    secureRef.current = false;
     if (nativeRef.current) {
       const nativeSocket = nativeRef.current;
       nativeRef.current = null;
@@ -225,7 +230,7 @@ export function usePCWebSocket() {
   }, []);
 
   /** Opens a WebSocket connection and authenticates it when a token is provided. */
-  const connect = useCallback(async (ipAddress: string, token?: string, certificatePin?: string) => {
+  const connect = useCallback(async (ipAddress: string, token?: string, certificatePin?: string, options?: { secure?: boolean }) => {
     disconnect();
     
     // Clean IP Address and default to port 9001 if no port is specified
@@ -245,11 +250,19 @@ export function usePCWebSocket() {
       formattedIp = `${formattedIp}:9001`;
     }
 
-    if (RELEASE_TRANSPORT) {
+    // Release builds never downgrade; a scanned QR can only upgrade a
+    // connection to the secure channel, never downgrade one.
+    const useSecure = RELEASE_TRANSPORT || options?.secure === true;
+    secureRef.current = useSecure;
+
+    if (useSecure) {
       const nativeModule = loadNativeSecureSocketModule();
       if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative)) {
+        secureRef.current = false;
         setStatus('error');
-        setErrorMsg('The release secure socket module is missing. Install a release/internal development build.');
+        setErrorMsg(!RELEASE_TRANSPORT
+          ? 'This pairing code requires the release build. Install the release APK to use QR pairing.'
+          : 'The release secure socket module is missing. Install a release/internal development build.');
         return;
       }
       if (!certificatePin?.trim()) {
@@ -551,7 +564,7 @@ export function usePCWebSocket() {
   }, [disconnect]);
 
   const sendCommand = useCallback((command: PowerCommand | string) => {
-    if (RELEASE_TRANSPORT) {
+    if (RELEASE_TRANSPORT || secureRef.current) {
       return sendNativeText(command);
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -567,7 +580,7 @@ export function usePCWebSocket() {
   }, [sendCommand]);
   const sendQuery = useCallback((query: string, requestId: string, attachedImage?: string, attachedFile?: { name: string; base64: string; mimeType?: string; size?: number }) => {
     const payload = JSON.stringify({ requestId, query, attachedImage, attachedFile });
-    if (RELEASE_TRANSPORT) {
+    if (RELEASE_TRANSPORT || secureRef.current) {
       return sendNativeText(payload);
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -579,7 +592,7 @@ export function usePCWebSocket() {
 
   const sendFileTransferMessage = useCallback((message: Record<string, unknown>) => {
     const payload = JSON.stringify(message);
-    if (RELEASE_TRANSPORT) return sendNativeText(payload);
+    if (RELEASE_TRANSPORT || secureRef.current) return sendNativeText(payload);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(payload);
       return true;

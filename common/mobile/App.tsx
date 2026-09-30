@@ -1821,7 +1821,7 @@ export default function App() {
   };
 
   /** One-scan connect from the PC app's "Connect Mobile" QR code. */
-  const handleQrConnect = async (qr: { ip: string; token?: string; pin?: string }) => {
+  const handleQrConnect = async (qr: { ip: string; token?: string; pin?: string; mode?: string }) => {
     triggerHaptic('medium');
     const cleanedIp = qr.ip.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/+$/, '');
     if (!validateIp(cleanedIp)) {
@@ -1840,7 +1840,9 @@ export default function App() {
         saveCredential('certificate_pin', CERTIFICATE_PIN_STORAGE_KEY, pin),
       ]);
     } catch (e) {}
-    connect(cleanedIp, token || undefined, pin || undefined);
+    // A release QR must stay on the pinned secure channel even in dev builds;
+    // a release build never downgrades regardless of QR mode (see connect()).
+    connect(cleanedIp, token || undefined, pin || undefined, { secure: qr.mode === 'release' });
   };
 
   const handleAutoDiscover = async () => {

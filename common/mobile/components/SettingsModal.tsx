@@ -25,6 +25,7 @@ export interface QrConnectInfo {
   ip: string;
   token?: string;
   pin?: string;
+  mode?: string;
 }
 
 export interface SettingsModalProps {
@@ -122,6 +123,7 @@ export function SettingsModal(props: SettingsModalProps) {
       ip: parsed.ip,
       token: parsed.token,
       pin: parsed.pin ?? undefined,
+      mode: parsed.mode,
     });
   };
 
