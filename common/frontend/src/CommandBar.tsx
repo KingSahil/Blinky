@@ -232,7 +232,8 @@ export function CommandBar() {
   const assemblyaiApiKeyRef = useRef(defaultAaiKey);
   const [voiceProvider, setVoiceProvider] = useState<'assemblyai' | 'sarvam'>('assemblyai');
   const voiceProviderRef = useRef<'assemblyai' | 'sarvam'>('assemblyai');
-  const [assemblyaiVoiceMode, setAssemblyaiVoiceMode] = useState<'agent' | 'realtime_stt'>('agent');
+  // Always realtime agent (thinks while you speak) — no mode toggle.
+  const [assemblyaiVoiceMode] = useState<'agent' | 'realtime_stt'>('agent');
   const assemblyaiAgentRef = useRef<AssemblyAIVoiceAgent | null>(null);
   const assemblyaiSttRef = useRef<AssemblyAIRealtimeSTT | null>(null);
   const assemblyaiAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
@@ -972,8 +973,8 @@ export function CommandBar() {
       const source = audioCtx.createMediaStreamSource(stream);
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
-      // Initialize AssemblyAI Voice Connection if key is present and provider is assemblyai
-      if (currentVP === 'assemblyai' && aaiKey && assemblyaiVoiceMode === 'agent') {
+      // Always use the realtime voice agent (thinks while you speak).
+      if (currentVP === 'assemblyai' && aaiKey) {
         const agent = new AssemblyAIVoiceAgent({
           apiKey: aaiKey,
           onAgentAudio: (base64Audio) => {
@@ -1031,23 +1032,6 @@ export function CommandBar() {
         });
         agent.connect();
         assemblyaiAgentRef.current = agent;
-      } else if (currentVP === 'assemblyai' && aaiKey && assemblyaiVoiceMode === 'realtime_stt') {
-        const stt = new AssemblyAIRealtimeSTT(
-          aaiKey,
-          (transcript, isFinal) => {
-            setQuestion(transcript);
-            if (isFinal) {
-              setStatus(`Searching for: "${transcript}"`);
-              void executeTutor(transcript, true);
-              stopRecording();
-            }
-          },
-          (err) => {
-            console.error('AssemblyAI Realtime STT error:', err);
-          }
-        );
-        stt.connect();
-        assemblyaiSttRef.current = stt;
       }
 
       let hasSpoken = false;
@@ -2412,7 +2396,7 @@ export function CommandBar() {
                   className={`voice-provider-tab ${voiceProvider === 'assemblyai' ? 'active aai' : ''}`}
                   onClick={() => void updateVoiceProvider('assemblyai')}
                 >
-                  <span>⚡ AssemblyAI</span>
+                  <span>AssemblyAI</span>
                 </button>
                 <button
                   type="button"
@@ -2437,24 +2421,6 @@ export function CommandBar() {
                   onChange={(e) => void updateAssemblyaiApiKey(e.target.value)}
                   placeholder="Paste AssemblyAI API Key..."
                 />
-                <div className="voice-mode-selector">
-                  <button
-                    type="button"
-                    className={`voice-mode-btn ${assemblyaiVoiceMode === 'agent' ? 'active' : ''}`}
-                    onClick={() => setAssemblyaiVoiceMode('agent')}
-                    title="Real-time voice agent with VAD and tool calling"
-                  >
-                    Voice Agent API
-                  </button>
-                  <button
-                    type="button"
-                    className={`voice-mode-btn ${assemblyaiVoiceMode === 'realtime_stt' ? 'active' : ''}`}
-                    onClick={() => setAssemblyaiVoiceMode('realtime_stt')}
-                    title="Sub-second streaming speech-to-text"
-                  >
-                    Realtime STT API
-                  </button>
-                </div>
               </div>
             ) : (
               <div className="dropdown-section">
@@ -2657,34 +2623,6 @@ export function CommandBar() {
             />
             <div className="command-input-actions">
               <div className="command-input-actions-left">
-                {(assemblyaiApiKey || assemblyaiApiKeyRef.current) && (
-                  <button
-                    type="button"
-                    className={`command-aai-btn ${assemblyaiVoiceMode === 'agent' ? 'agent-mode' : 'stt-mode'}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setAssemblyaiVoiceMode(prev => prev === 'agent' ? 'realtime_stt' : 'agent');
-                    }}
-                    disabled={isRunning || isTranscribing}
-                    title={`AssemblyAI Mode: ${assemblyaiVoiceMode === 'agent' ? 'Voice Agent API (Universal-3 Pro + Tool Calling)' : 'Realtime STT API (Universal-3 Pro)'}. Click to switch.`}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      padding: '3px 8px',
-                      borderRadius: '12px',
-                      border: '1px solid rgba(59, 130, 246, 0.4)',
-                      background: assemblyaiVoiceMode === 'agent' ? 'rgba(59, 130, 246, 0.2)' : 'rgba(168, 85, 247, 0.2)',
-                      color: assemblyaiVoiceMode === 'agent' ? '#93c5fd' : '#d8b4fe',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <Sparkles size={12} />
-                    <span>{assemblyaiVoiceMode === 'agent' ? 'AAI Voice Agent' : 'AAI Realtime STT'}</span>
-                  </button>
-                )}
                 <button
                   type="button"
                   className={`command-attach-btn ${attachedFiles.length > 0 ? 'has-attachments' : ''}`}
