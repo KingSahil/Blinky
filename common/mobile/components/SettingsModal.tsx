@@ -236,7 +236,8 @@ export function SettingsModal(props: SettingsModalProps) {
                 autoCorrect={false}
               />
             </View>
-            
+
+            {props.RELEASE_TRANSPORT && (
             <View style={styles.inputWrapper}>
               <Ionicons name="key-outline" size={20} color={colors.textSecondary} style={styles.inputIcon} />
               <TextInput
@@ -251,6 +252,7 @@ export function SettingsModal(props: SettingsModalProps) {
                 autoCorrect={false}
               />
             </View>
+            )}
             
             {props.RELEASE_TRANSPORT && (
               <View style={styles.inputWrapper}>
