@@ -944,7 +944,6 @@ fn start_wake_word_detector(app: &AppHandle) {
         .arg(script)
         .arg("--model")
         .arg(model_path)
-        .arg("--verbose")
         .current_dir(&root)
         .env("PYTHONWARNINGS", "ignore")
         .envs(read_env_file(&root))

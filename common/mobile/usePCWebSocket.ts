@@ -224,7 +224,7 @@ export function usePCWebSocket() {
   }, []);
 
   /** Opens a WebSocket connection and authenticates it when a token is provided. */
-  const connect = useCallback((ipAddress: string, token?: string, certificatePin?: string) => {
+  const connect = useCallback(async (ipAddress: string, token?: string, certificatePin?: string) => {
     disconnect();
     
     // Clean IP Address and default to port 9001 if no port is specified
@@ -394,6 +394,27 @@ export function usePCWebSocket() {
 
     try {
       console.log(`[WS] Connecting to ${wsUrl}`);
+      
+      // Fetch token from discovery endpoint if not provided
+      let authToken = token?.trim();
+      if (!authToken) {
+        try {
+          const res = await fetch(`http://${formattedIp.split(':')[0]}:9004/discover`, {
+            signal: AbortSignal.timeout(3000),
+            headers: { 'Accept': 'application/json' },
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.token) {
+              authToken = data.token;
+              console.log('[WS] Retrieved token from discovery endpoint');
+            }
+          }
+        } catch (e) {
+          console.log('[WS] Discovery endpoint not available, connecting without token');
+        }
+      }
+
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -415,8 +436,8 @@ export function usePCWebSocket() {
           // Authenticate the remote connection before any commands are sent.
           // The desktop gateway denies all commands from non-loopback peers
           // unless the BLINKY_REMOTE_TOKEN is presented.
-          if (token && token.trim()) {
-            ws.send(`auth:${token.trim()}`);
+          if (authToken) {
+            ws.send(`auth:${authToken}`);
           }
           setStatus('connected');
           setErrorMsg(null);

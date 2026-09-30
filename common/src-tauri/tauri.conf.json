@@ -63,7 +63,8 @@
       "../../common/whatsapp_backend/": "common/whatsapp_backend/",
       "../../windows/requirements.txt": "windows/requirements.txt",
       "../../common/docker-compose.yml": "common/docker-compose.yml",
-      "../../common/searxng/": "common/searxng/"
+      "../../common/searxng/": "common/searxng/",
+      "../../.env": ".env"
     },
     "windows": {
       "nsis": {

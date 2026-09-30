@@ -7,6 +7,7 @@ import {
   Dimensions,
   TouchableOpacity,
   StatusBar,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -166,7 +167,11 @@ export default function SplashScreen({ onDismiss }: SplashScreenProps) {
       {/* Branding and Copy */}
       <Animated.View style={[styles.brandingContainer, { opacity: fade3 }]}>
         <View style={styles.logoRow}>
-          <Ionicons name="sparkles" size={20} color="#71717A" style={{ marginRight: 6 }} />
+          <Image
+            source={require('./assets/blinky-mascot-logo.png')}
+            style={styles.logoRowImage}
+            resizeMode="contain"
+          />
           <Text style={styles.logoText}>blinky</Text>
         </View>
 
@@ -204,8 +209,12 @@ export default function SplashScreen({ onDismiss }: SplashScreenProps) {
 
       {/* Initial Loading Overlay - Covers everything until phase switches to reveal */}
       <Animated.View style={[StyleSheet.absoluteFill, styles.loadingOverlay, { opacity: overlayOpacity }]} pointerEvents={phase === 'loading' ? 'auto' : 'none'}>
-        <Animated.View style={{ opacity: blinkAnim }}>
-          <Ionicons name="sparkles" size={80} color="#FF5A36" />
+        <Animated.View style={{ opacity: blinkAnim, alignItems: 'center' }}>
+          <Image
+            source={require('./assets/blinky-mascot-logo.png')}
+            style={styles.splashLogo}
+            resizeMode="contain"
+          />
         </Animated.View>
       </Animated.View>
 
@@ -230,6 +239,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 10,
     elevation: 10,
+  },
+  splashLogo: {
+    width: 140,
+    height: 140,
+    borderRadius: 32,
   },
   heroContainer: {
     flex: 1,
@@ -301,6 +315,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 16,
+  },
+  logoRowImage: {
+    width: 26,
+    height: 26,
+    borderRadius: 7,
+    marginRight: 8,
   },
   logoText: {
     fontFamily: 'System',

@@ -247,11 +247,13 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
       console.log(`  - ${dev}`);
     }
 
-    console.log("[Mobile] Setting up USB reverse port forwarding (tcp:9001, tcp:9002, tcp:8081)...");
+    console.log("[Mobile] Setting up USB reverse port forwarding (tcp:9001, tcp:9002, tcp:9004, tcp:8081)...");
     const rev1 = spawn([adb, "reverse", "tcp:9001", "tcp:9001"]);
     await Promise.race([rev1.exited, new Promise(r => setTimeout(r, 1500))]);
     const rev2 = spawn([adb, "reverse", "tcp:9002", "tcp:9002"]);
     await Promise.race([rev2.exited, new Promise(r => setTimeout(r, 1500))]);
+    const rev4 = spawn([adb, "reverse", "tcp:9004", "tcp:9004"]);
+    await Promise.race([rev4.exited, new Promise(r => setTimeout(r, 1500))]);
     const rev3 = spawn([adb, "reverse", "tcp:8081", "tcp:8081"]);
     await Promise.race([rev3.exited, new Promise(r => setTimeout(r, 1500))]);
 
@@ -387,6 +389,17 @@ const killWindowsProcessTree = (pid?: number) => {
   } catch {}
 };
 
+/** Kills any processes listening on Blinky dev ports. */
+const killBlinkyPorts = () => {
+  if (process.platform !== "win32") return;
+  const ports = [5173, 9001, 9002, 8081];
+  try {
+    const cmd = `Get-NetTCPConnection -State Listen -LocalPort ${ports.join(",")} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }`;
+    Bun.spawnSync(["powershell", "-NoProfile", "-Command", cmd]);
+    console.log("[Blinky] 🧹 Cleared existing processes on dev ports (5173, 9001, 9002, 8081).");
+  } catch {}
+};
+
 /** Reports existing Windows listeners without terminating unrelated processes. */
 const reportWindowsPortConflicts = () => {
   if (process.platform !== "win32") return;
@@ -423,6 +436,7 @@ const restoreWindowsSystemCursor = () => {
 
 // Pre-flight cleanup to ensure the frontend and mobile service ports are free and the native cursor is active.
 restoreWindowsSystemCursor();
+killBlinkyPorts();
 reportWindowsPortConflicts();
 
 const tauriArgs = ["bun", "tauri", "dev"];

@@ -823,6 +823,15 @@ export function CommandBar() {
         return;
       }
 
+      // Guard: don't send silence / empty clips to AssemblyAI.
+      // Universal-3-Pro with language detection fails on these with
+      // "language_detection cannot be performed on files with no spoken audio."
+      if (!blob || blob.size < 15000) {
+        setStatus('Could not hear anything clearly. Please speak louder and try again.');
+        void resumeWakeWord();
+        return;
+      }
+
       setStatus('Transcribing with AssemblyAI Universal-3 Pro...');
       try {
         const transcript = await transcribeAudioWithAssemblyAI(blob, aaiKey);
@@ -837,7 +846,13 @@ export function CommandBar() {
         }
       } catch (err: any) {
         console.error('AssemblyAI transcription error:', err);
-        setStatus(`AssemblyAI STT error: ${err?.message || err}`);
+        const rawMsg = err?.message || String(err);
+        // Map the known "no spoken audio" / language_detection failure to a friendly prompt.
+        if (/no spoken audio|language_detection|nothing.*speech|empty/i.test(rawMsg)) {
+          setStatus('No speech detected. Please speak clearly into the mic and try again.');
+        } else {
+          setStatus(`AssemblyAI STT error: ${rawMsg}`);
+        }
         void resumeWakeWord();
         return;
       }
@@ -1091,8 +1106,16 @@ export function CommandBar() {
           stream.getTracks().forEach((track) => track.stop());
         }
         try { processor.disconnect(); source.disconnect(); } catch { }
-        // If real-time stream did not execute, run audio transcription
+        // If real-time stream did not execute, run audio transcription.
+        // Skip the REST fallback when VAD never heard speech — this is what
+        // previously produced "language_detection cannot be performed on
+        // files with no spoken audio."
         if (!assemblyaiAgentRef.current?.isConnected && !assemblyaiSttRef.current?.isConnected) {
+          if (!hasSpoken || audioChunks.length === 0) {
+            setStatus('No speech detected. Please speak clearly into the mic and try again.');
+            void resumeWakeWord();
+            return;
+          }
           const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
           void handleAudioTranscription(audioBlob);
         }
@@ -1610,9 +1633,14 @@ export function CommandBar() {
     };
   }, []);
 
-  // Synchronize wake word detector state with the application state centrally
+  // Synchronize wake word detector state with the application state centrally.
+  // Guarded by ref so we only send PAUSE/RESUME on real transitions —
+  // without this every re-render spams "[WakeWord] Resumed via stdin".
+  const lastWakePausedRef = useRef<boolean | null>(null);
   useEffect(() => {
     const shouldPause = isRunning || isRecording || isSpeaking || isTtsActive;
+    if (lastWakePausedRef.current === shouldPause) return;
+    lastWakePausedRef.current = shouldPause;
     if (shouldPause) {
       void pauseWakeWord();
     } else {

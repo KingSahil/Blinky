@@ -511,7 +511,10 @@ export async function transcribeAudioWithAssemblyAI(
     throw new Error('AssemblyAI upload did not return an upload_url');
   }
 
-  // 2. Request transcription with Universal-3 Pro
+  // 2. Request transcription with Universal-3 Pro.
+  // NOTE: language_code is set explicitly (and language_detection disabled)
+  // so silent / very short clips fail gracefully instead of raising
+  // "language_detection cannot be performed on files with no spoken audio."
   const transcriptRes = await fetch('https://api.assemblyai.com/v2/transcript', {
     method: 'POST',
     headers: {
@@ -521,6 +524,8 @@ export async function transcribeAudioWithAssemblyAI(
     body: JSON.stringify({
       audio_url: upload_url,
       speech_models: ['universal-3-5-pro'],
+      language_code: 'en',
+      language_detection: false,
       punctuate: true,
       format_text: true,
     }),

@@ -127,6 +127,45 @@ const getExpoHostIp = (): string | null => {
   return host || null;
 };
 
+interface DiscoveryResponse {
+  token: string;
+  certificate_pin?: string;
+  mode: string;
+  websocket_port: number;
+}
+
+const DISCOVERY_PORT = 9004;
+
+const fetchDiscoveryInfo = async (ip: string, port = 9001): Promise<DiscoveryResponse | null> => {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    // Try discovery port first
+    const res = await fetch(`http://${ip}:${DISCOVERY_PORT}/discover`, {
+      signal: controller.signal,
+      headers: { 'Accept': 'application/json' },
+    });
+    clearTimeout(timeout);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
+  // Fallback to WebSocket port
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000);
+    const res = await fetch(`http://${ip}:${port}/discover`, {
+      signal: controller.signal,
+      headers: { 'Accept': 'application/json' },
+    });
+    clearTimeout(timeout);
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch {}
+  return null;
+};
+
 const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 3000, certificatePin?: string): Promise<string> => {
   const clean = rawIp.trim().replace(/^https?:\/\//i, '').replace(/^wss?:\/\//i, '').replace(/\/+$/, '');
   const [ipOnly, customPort] = clean.includes(':') ? clean.split(':') : [clean, undefined];
@@ -176,9 +215,11 @@ const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 3000, certificat
     });
   }
 
-  return new Promise((resolve, reject) => {
+  // Development mode: first try HTTP discovery to get token, then use it for WS auth
+  return new Promise(async (resolve, reject) => {
     let ws: WebSocket | null = null;
     let isDone = false;
+    let discoveredToken: string | null = null;
 
     const cleanup = () => {
       if (isDone) return;
@@ -201,10 +242,23 @@ const checkIpAddress = (rawIp: string, port = 9001, timeoutMs = 3000, certificat
     }, timeoutMs);
 
     try {
+      // Try to fetch token from discovery endpoint first
+      const discovery = await fetchDiscoveryInfo(ip, targetPort);
+      if (discovery?.token) {
+        discoveredToken = discovery.token;
+        if (discovery.certificate_pin && !certificatePin) {
+          certificatePin = discovery.certificate_pin;
+        }
+      }
+
       ws = new WebSocket(`ws://${ip}:${targetPort}`);
       
       ws.onopen = () => {
         cleanup();
+        // Send auth token if we have one
+        if (discoveredToken) {
+          ws?.send(`auth:${discoveredToken}`);
+        }
         resolve(clean);
       };
       

@@ -225,6 +225,18 @@ fn trim_env_value(value: &str) -> String {
     value.to_string()
 }
 
+pub(crate) fn write_env_file(root: &PathBuf, envs: &[(String, String)]) -> std::io::Result<()> {
+    let env_path = root.join(".env");
+    let mut content = String::new();
+    for (k, v) in envs {
+        content.push_str(k);
+        content.push('=');
+        content.push_str(v);
+        content.push('\n');
+    }
+    std::fs::write(env_path, content)
+}
+
 static ACTIVE_CLIENTS: OnceLock<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<String>>>> = OnceLock::new();
 
 /// Returns the shared registry of connected WebSocket client senders.
@@ -359,6 +371,70 @@ async fn start_antigravity_hook_server(app: AppHandle) {
     }
 }
 
+async fn start_discovery_server(
+    app: AppHandle,
+    mode: crate::transport::TransportMode,
+    _tls_acceptor: Option<TlsAcceptor>,
+) {
+    use axum::{routing::get, Router, Json, http::HeaderMap};
+    use std::net::SocketAddr;
+    
+    let app_clone = app.clone();
+    let get_token = move || {
+        let token = crate::websocket::get_remote_token();
+        let cert_pin = if mode.is_release() {
+            if let Ok(identity) = crate::tls_identity::TlsIdentity::load_or_generate(&app_clone) {
+                Some(identity.public_key_pin().to_string())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        (token, cert_pin)
+    };
+
+    let app_router = Router::new()
+        .route("/discover", get(move || {
+            let (token, cert_pin) = get_token();
+            async move {
+                let mut headers = HeaderMap::new();
+                headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+                headers.insert("Access-Control-Allow-Methods", "GET, OPTIONS".parse().unwrap());
+                headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
+                let resp = serde_json::json!({
+                    "token": token,
+                    "certificate_pin": cert_pin,
+                    "mode": format!("{:?}", mode),
+                    "websocket_port": 9001,
+                });
+                (headers, Json(resp))
+            }
+        }))
+        .route("/discover", axum::routing::options(|| async {
+            let mut headers = HeaderMap::new();
+            headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+            headers.insert("Access-Control-Allow-Methods", "GET, OPTIONS".parse().unwrap());
+            headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
+            (headers, "OK")
+        }));
+
+    let addr: SocketAddr = "0.0.0.0:9004".parse().unwrap();
+    println!("Discovery server listening on http://{}", addr);
+    
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to bind discovery server to {}: {}", addr, e);
+            return;
+        }
+    };
+    
+    if let Err(e) = axum::serve(listener, app_router).await {
+        eprintln!("Discovery server error: {}", e);
+    }
+}
+
 pub async fn start_websocket_server(app: AppHandle) {
     let addr = "0.0.0.0:9001";
     let listener = match TcpListener::bind(addr).await {
@@ -389,6 +465,14 @@ pub async fn start_websocket_server(app: AppHandle) {
         None
     };
     println!("WebSocket server listening on {} ({:?})", addr, mode);
+
+    // Discovery endpoint for mobile auto-connect (returns token + cert pin)
+    let mode_clone = mode;
+    let app_discovery = app.clone();
+    let tls_acceptor_discovery = tls_acceptor.clone();
+    tauri::async_runtime::spawn(async move {
+        start_discovery_server(app_discovery, mode_clone, tls_acceptor_discovery).await;
+    });
 
     let app_hook = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -1837,6 +1921,7 @@ fn get_assemblyai_api_key() -> String {
 
 /// Reads the remote token if explicitly configured by the user in environment or .env.
 /// Development may continue without one for compatibility; release remote peers then fail auth.
+/// In release mode, auto-generates and persists a token on first run.
 fn get_remote_token() -> String {
     if let Ok(val) = std::env::var("BLINKY_REMOTE_TOKEN") {
         let trimmed = val.trim().to_string();
@@ -1845,11 +1930,24 @@ fn get_remote_token() -> String {
         }
     }
     let root = project_root();
-    let envs = read_env_file(&root);
-    envs.iter()
-        .find(|(k, _)| k == "BLINKY_REMOTE_TOKEN")
-        .map(|(_, v)| v.trim().to_string())
-        .unwrap_or_default()
+    let mut envs = read_env_file(&root);
+    if let Some((_, v)) = envs.iter().find(|(k, _)| k == "BLINKY_REMOTE_TOKEN") {
+        let trimmed = v.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    // Auto-generate token for release mode if not configured
+    let mode = crate::transport::TransportMode::current();
+    if mode.is_release() {
+        let token = generate_remote_token();
+        // Persist to .env file
+        envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
+        let _ = write_env_file(&root, &envs);
+        println!("Generated and saved BLINKY_REMOTE_TOKEN to .env");
+        return token;
+    }
+    String::new()
 }
 
 /// Reject an unconfigured secret, then compare equal-length token bytes without early exit.
