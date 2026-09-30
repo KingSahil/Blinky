@@ -1,7 +1,7 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/KingSahil/Blinky/main/common/src-tauri/icons/Square150x150Logo.png" alt="Blinky logo" width="120">
-<img src="./common/mobile/assets/logo_text.png#gh-dark-mode-only" alt="Blinky" width="320">
+
+<img src="./common/mobile/assets/blinky-mascot-logo.png" alt="Blinky-logo" width="320">
 
 # Blinky
 
