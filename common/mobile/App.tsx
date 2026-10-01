@@ -749,6 +749,8 @@ export default function App() {
   ]);
   
   const activeBlinkyMsgIdRef = useRef<string | null>(null);
+  const activeBlinkySessionIdRef = useRef<string | null>(null);
+  const currentSessionIdRef = useRef<string | null>(null);
   const activeAntigravityMsgIdRef = useRef<string | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -762,6 +764,7 @@ export default function App() {
 
   // Persistent Chat Sessions state
   const [currentSession, setCurrentSession] = useState<BlinkyChatSession | null>(null);
+  currentSessionIdRef.current = currentSession?.id || null;
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [sessionsList, setSessionsList] = useState<BlinkyChatSession[]>([]);
   const [chatMode, setChatMode] = useState<'autopilot' | 'grounded'>('autopilot');
@@ -791,7 +794,7 @@ export default function App() {
         messages,
       });
     }
-  }, [messages, chatMode]);
+  }, [currentSession, messages, chatMode]);
 
   useEffect(() => {
     let mounted = true;
@@ -953,6 +956,7 @@ export default function App() {
     const blinkyMsgId = generateUuid();
 
     activeBlinkyMsgIdRef.current = blinkyMsgId;
+    activeBlinkySessionIdRef.current = currentSessionIdRef.current;
 
     setMessages(prev => [
       ...prev,
@@ -1090,6 +1094,16 @@ export default function App() {
       const { status: respStatus, data, error } = latestResponse;
       const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const currentActiveId = activeBlinkyMsgIdRef.current;
+      const isMatchingSession = !activeBlinkySessionIdRef.current || activeBlinkySessionIdRef.current === currentSessionIdRef.current;
+
+      if (!currentActiveId || !isMatchingSession) {
+        if (respStatus === 'success' || respStatus === 'error') {
+          setAgentStatus('idle');
+          activeBlinkyMsgIdRef.current = null;
+          activeBlinkySessionIdRef.current = null;
+        }
+        return;
+      }
 
       if (respStatus === 'processing') {
         setAgentStatus('processing');
@@ -1155,6 +1169,7 @@ export default function App() {
           }));
         }
         activeBlinkyMsgIdRef.current = null;
+        activeBlinkySessionIdRef.current = null;
 
         // Append final response bubble
         setMessages(prev => [
@@ -1188,6 +1203,7 @@ export default function App() {
           }));
         }
         activeBlinkyMsgIdRef.current = null;
+        activeBlinkySessionIdRef.current = null;
 
         setMessages(prev => [
           ...prev,
@@ -1415,6 +1431,7 @@ export default function App() {
       const userMsgId = generateUuid();
       const blinkyMsgId = generateUuid();
       activeBlinkyMsgIdRef.current = blinkyMsgId;
+      activeBlinkySessionIdRef.current = currentSessionIdRef.current;
       setMessages(prev => [
         ...prev,
         { id: userMsgId, sender: 'user' as const, text: explainQuery, timestamp: currentTime, attachedFiles },
@@ -1554,6 +1571,7 @@ export default function App() {
     
     // Save reference of the active Blinky card to update later
     activeBlinkyMsgIdRef.current = blinkyMsgId;
+    activeBlinkySessionIdRef.current = currentSessionIdRef.current;
 
     setMessages(prev => [
       ...prev,
@@ -1820,6 +1838,7 @@ export default function App() {
       const blinkyMsgId = generateUuid();
 
       activeBlinkyMsgIdRef.current = blinkyMsgId;
+      activeBlinkySessionIdRef.current = currentSessionIdRef.current;
 
       setMessages(prev => [
         ...prev,
@@ -1902,6 +1921,7 @@ export default function App() {
       }));
     }
     activeBlinkyMsgIdRef.current = null;
+    activeBlinkySessionIdRef.current = null;
   };
 
   const formatTime = (totalSecs: number) => {
@@ -2394,11 +2414,17 @@ export default function App() {
             sessions={sessionsList}
             activeSessionId={currentSession?.id || ''}
             onSelectSession={(sess) => {
+              activeBlinkyMsgIdRef.current = null;
+              activeBlinkySessionIdRef.current = null;
+              setAgentStatus('idle');
               setCurrentSession(sess);
               setMessages(sess.messages);
               setChatMode(sess.mode === 'grounded' ? 'grounded' : 'autopilot');
             }}
             onNewSession={async () => {
+              activeBlinkyMsgIdRef.current = null;
+              activeBlinkySessionIdRef.current = null;
+              setAgentStatus('idle');
               const fresh = await createNewSession(chatMode === 'grounded' ? 'grounded' : 'general');
               setCurrentSession(fresh);
               setMessages(fresh.messages);
@@ -2406,6 +2432,9 @@ export default function App() {
               setSessionsList(updated);
             }}
             onDeleteSession={async (id) => {
+              activeBlinkyMsgIdRef.current = null;
+              activeBlinkySessionIdRef.current = null;
+              setAgentStatus('idle');
               const next = await deleteSession(id);
               setCurrentSession(next);
               setMessages(next.messages);
@@ -2413,6 +2442,9 @@ export default function App() {
               setSessionsList(updated);
             }}
             onClearAllSessions={async () => {
+              activeBlinkyMsgIdRef.current = null;
+              activeBlinkySessionIdRef.current = null;
+              setAgentStatus('idle');
               const fresh = await clearAllSessions();
               setCurrentSession(fresh);
               setMessages(fresh.messages);
