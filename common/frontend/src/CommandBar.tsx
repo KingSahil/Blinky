@@ -30,6 +30,7 @@ import {
 import { AdaptiveTransportManager } from './lib/adaptiveTransport';
 import type { TutorConversationMessage, TutorProgress, TutorResult } from './lib/types';
 import type { SecureTransportInfo, MobilePairingPayload } from './lib/tauri';
+import { pingModel, type PingResult } from './lib/modelPing';
 
 
 interface AttachedMedia {
@@ -243,6 +244,28 @@ export function CommandBar() {
   const [customModel, setCustomModel] = useState('');
   const [customApiKey, setCustomApiKey] = useState('');
   const [transportInfo, setTransportInfo] = useState<SecureTransportInfo | null>(null);
+  const [pingTesting, setPingTesting] = useState(false);
+  const [pingResult, setPingResult] = useState<PingResult | null>(null);
+
+  const handleTestPing = async (prov: string, key: string, model?: string, url?: string) => {
+    setPingTesting(true);
+    setPingResult(null);
+    try {
+      const res = await pingModel(prov, key, model, url);
+      setPingResult(res);
+    } catch (e: any) {
+      setPingResult({
+        ok: false,
+        provider: prov,
+        model: model || 'unknown',
+        latency_ms: 0,
+        status_code: 0,
+        error: e?.message || 'Ping failed',
+      });
+    } finally {
+      setPingTesting(false);
+    }
+  };
   const sarvamApiKeyRef = useRef('');
 
   useEffect(() => {
@@ -2501,7 +2524,30 @@ export function CommandBar() {
 
             {provider.toLowerCase().trim() === 'groq' && (
               <div className="dropdown-section">
-                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> Groq API Key</h4>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> Groq API Key</h4>
+                  <button
+                    type="button"
+                    onClick={() => handleTestPing('groq', groqApiKey, 'qwen/qwen3.8-27b')}
+                    disabled={pingTesting}
+                    style={{
+                      background: 'rgba(255, 90, 54, 0.15)',
+                      border: '1px solid rgba(255, 90, 54, 0.3)',
+                      color: '#FF5A36',
+                      borderRadius: '6px',
+                      padding: '2px 8px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: pingTesting ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    {pingTesting ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+                    {pingTesting ? 'Testing...' : 'Test Ping ⚡'}
+                  </button>
+                </div>
                 <input
                   type="password"
                   className="settings-input"
@@ -2509,12 +2555,48 @@ export function CommandBar() {
                   onChange={(e) => updateGroqApiKey(e.target.value)}
                   placeholder="Paste API Key..."
                 />
+                {pingResult && pingResult.provider === 'groq' && (
+                  <div style={{
+                    marginTop: '6px',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    background: pingResult.ok ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                    color: pingResult.ok ? '#22c55e' : '#ef4444',
+                    border: `1px solid ${pingResult.ok ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                  }}>
+                    {pingResult.ok ? `✓ Online (${pingResult.latency_ms}ms) • ${pingResult.model}` : `✗ ${pingResult.error}`}
+                  </div>
+                )}
               </div>
             )}
 
             {provider.toLowerCase().trim() === 'deepseek' && (
               <div className="dropdown-section">
-                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> DeepSeek API Key</h4>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> DeepSeek API Key</h4>
+                  <button
+                    type="button"
+                    onClick={() => handleTestPing('deepseek', deepseekApiKey, 'deepseek-chat')}
+                    disabled={pingTesting}
+                    style={{
+                      background: 'rgba(255, 90, 54, 0.15)',
+                      border: '1px solid rgba(255, 90, 54, 0.3)',
+                      color: '#FF5A36',
+                      borderRadius: '6px',
+                      padding: '2px 8px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: pingTesting ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    {pingTesting ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+                    {pingTesting ? 'Testing...' : 'Test Ping ⚡'}
+                  </button>
+                </div>
                 <input
                   type="password"
                   className="settings-input"
@@ -2522,13 +2604,49 @@ export function CommandBar() {
                   onChange={(e) => updateDeepseekApiKey(e.target.value)}
                   placeholder="Paste API Key..."
                 />
+                {pingResult && pingResult.provider === 'deepseek' && (
+                  <div style={{
+                    marginTop: '6px',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    background: pingResult.ok ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                    color: pingResult.ok ? '#22c55e' : '#ef4444',
+                    border: `1px solid ${pingResult.ok ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                  }}>
+                    {pingResult.ok ? `✓ Online (${pingResult.latency_ms}ms) • ${pingResult.model}` : `✗ ${pingResult.error}`}
+                  </div>
+                )}
               </div>
             )}
 
             {provider.toLowerCase().trim() === 'custom' && (
               <>
                 <div className="dropdown-section">
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Globe size={14} /> Custom API URL</h4>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Globe size={14} /> Custom API URL</h4>
+                    <button
+                      type="button"
+                      onClick={() => handleTestPing('custom', customApiKey, customModel, customUrl)}
+                      disabled={pingTesting}
+                      style={{
+                        background: 'rgba(255, 90, 54, 0.15)',
+                        border: '1px solid rgba(255, 90, 54, 0.3)',
+                        color: '#FF5A36',
+                        borderRadius: '6px',
+                        padding: '2px 8px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: pingTesting ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                    >
+                      {pingTesting ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+                      {pingTesting ? 'Testing...' : 'Test Ping ⚡'}
+                    </button>
+                  </div>
                   <input
                     type="text"
                     className="settings-input"
@@ -2557,6 +2675,19 @@ export function CommandBar() {
                     placeholder="Paste API Key..."
                   />
                 </div>
+                {pingResult && pingResult.provider === 'custom' && (
+                  <div style={{
+                    marginTop: '6px',
+                    padding: '4px 8px',
+                    borderRadius: '4px',
+                    fontSize: '11px',
+                    background: pingResult.ok ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                    color: pingResult.ok ? '#22c55e' : '#ef4444',
+                    border: `1px solid ${pingResult.ok ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                  }}>
+                    {pingResult.ok ? `✓ Online (${pingResult.latency_ms}ms) • ${pingResult.model}` : `✗ ${pingResult.error}`}
+                  </div>
+                )}
               </>
             )}
 

@@ -58,6 +58,54 @@ The names of models are symbolic implementation details; the user's primary ment
     - Full persistence across mobile app relaunches, backgrounding, and reconnections.
     - Optional export/purge of session history for privacy.
 
+### 2.3. Is Chat History Accessible in the PC Version? (Current State vs Target Architecture)
+
+#### 🔴 Current Reality: NO, PC Has Zero Persistent Chat History
+* In the PC desktop app (`common/frontend/src/CommandBar.tsx`):
+  - History is stored in a temporary in-memory React ref: `conversationHistoryRef.current.slice(-8)`.
+  - It only retains the last 8 messages in RAM to supply context to the LLM during the current active task.
+  - **The moment you press `Escape`, close the CommandBar, or restart the PC app, all chat and command history is permanently destroyed.**
+  - There is currently **no history sidebar, no past session log, and no way to review prior tasks** on the desktop.
+
+#### 🟢 The Unified Solution: Cross-Platform Session Store (PC + Mobile)
+We are introducing a shared session schema so both PC and Mobile have full, persistent chat history:
+
+```typescript
+export interface BlinkyChatSession {
+  id: string;               // e.g. "session_1738392019_abc"
+  title: string;            // Auto-generated from 1st prompt: e.g. "Redact Tax PDF"
+  createdAt: number;        // Epoch ms
+  updatedAt: number;        // Epoch ms
+  mode: 'general' | 'grounded';
+  linkedNotebookId?: string;// If linked to a Notebook for RAG
+  messages: Array<{
+    id: string;
+    sender: 'user' | 'blinky' | 'system';
+    text: string;
+    timestamp: string;
+    steps?: any[];          // Action steps executed on PC
+    status?: string;
+  }>;
+}
+```
+
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                      CROSS-PLATFORM SESSION SYNC                       │
+├───────────────────────────────────┬────────────────────────────────────┤
+│ 📱 MOBILE (Android / iOS)         │ 💻 PC DESKTOP (Tauri Spotlight)    │
+├───────────────────────────────────┼────────────────────────────────────┤
+│ • Local storage: AsyncStorage     │ • Local storage: localStorage      │
+│ • UI: Header "☰ History" Drawer   │ • UI: CommandBar "<Clock/> History"│
+│ • [+ New Chat] button             │ • [+ New Session] shortcut (Ctrl+N)│
+│ • Auto-titles from first prompt   │ • Restores full execution steps    │
+├───────────────────────────────────┴────────────────────────────────────┤
+│ 🔄 Real-time WebSocket Sync (Port 9001/9002):                          │
+│   Commands issued on Phone appear immediately in PC Desktop History.  │
+│   Tasks run on PC are viewable and resumeable on Mobile!               │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## 3. 🔍 How RAG Works & The Missing Local Embedding Model
@@ -163,9 +211,9 @@ graph TD
 | Phase | Milestone | Deliverable | Status |
 | :--- | :--- | :--- | :---: |
 | **Phase 1** | **CodeRabbit Remediation** | Fix PDF regex redaction, fix Explorer selection, strip `/discover` token, secure mobile AsyncStorage, clippy warnings. | ✅ **COMPLETED** |
-| **Phase 2** | **Active Model Update & Ping Check** | Update mobile/desktop Groq default to `qwen/qwen3.8-27b`, add live 1-token test check to Settings modal. | ⏳ Next |
-| **Phase 3** | **Neural Local RAG** | Replace raw TF keyword math in `vector_store.py` with `fastembed` local embeddings ($0 cost, 80MB). | ⏳ Scheduled |
-| **Phase 4** | **Single-Window Mobile & Per-Agent UI** | Unify mobile chat into 1 window with document grounding, add session history drawer, and per-agent model routing. | ⏳ Scheduled |
+| **Phase 2** | **Active Model Update & Ping Check** | Update mobile/desktop Groq default to `qwen/qwen3.8-27b`, add live 1-token test check to Settings modal & CommandBar. | ✅ **COMPLETED** |
+| **Phase 3** | **Neural Local RAG** | Replace raw TF keyword math in `vector_store.py` with `fastembed` local embeddings ($0 cost, 80MB). | ⏳ Next |
+| **Phase 4** | **Single-Window Mobile & Cross-Platform History** | Unify mobile chat into 1 window with document grounding, add session history drawer on Mobile & PC, and per-agent model routing. | ⏳ Scheduled |
 
 > [!TIP]
 > 💬 **Feedback & Next Action:**

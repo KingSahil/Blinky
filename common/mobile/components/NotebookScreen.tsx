@@ -42,6 +42,7 @@ export const NotebookScreen: React.FC = () => {
   ]);
   const [queryInput, setQueryInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [pinging, setPinging] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
 
@@ -152,6 +153,62 @@ export const NotebookScreen: React.FC = () => {
         },
       ]
     );
+  };
+
+  const handlePingAi = async () => {
+    setPinging(true);
+    try {
+      const keys = await getSyncedApiKeys();
+      if (!keys.groq_key && !keys.gemini_key) {
+        Alert.alert('No API Keys', 'Please pair with PC Blinky to sync your Groq or Gemini API key.');
+        return;
+      }
+      const t0 = Date.now();
+      if (keys.groq_key) {
+        const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${keys.groq_key}`,
+          },
+          body: JSON.stringify({
+            model: 'qwen/qwen3.8-27b',
+            messages: [{ role: 'user', content: 'ping' }],
+            max_tokens: 1,
+          }),
+        });
+        const latency = Date.now() - t0;
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok) {
+          Alert.alert('Groq Online ⚡', `Connection OK (${latency}ms)!\nActive Model: qwen/qwen3.8-27b`);
+        } else {
+          Alert.alert('Groq Ping Error', data?.error?.message || `HTTP ${resp.status}`);
+        }
+      } else if (keys.gemini_key) {
+        const resp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(keys.gemini_key)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: 'ping' }] }],
+              generationConfig: { maxOutputTokens: 1 },
+            }),
+          }
+        );
+        const latency = Date.now() - t0;
+        if (resp.ok) {
+          Alert.alert('Gemini Online ⚡', `Connection OK (${latency}ms)!\nActive Model: gemini-2.5-flash`);
+        } else {
+          const data = await resp.json().catch(() => ({}));
+          Alert.alert('Gemini Ping Error', data?.error?.message || `HTTP ${resp.status}`);
+        }
+      }
+    } catch (e: any) {
+      Alert.alert('Ping Error', e?.message || 'Network connection failed.');
+    } finally {
+      setPinging(false);
+    }
   };
 
   const handleSendQuery = async () => {
@@ -285,6 +342,9 @@ export const NotebookScreen: React.FC = () => {
             <TouchableOpacity style={styles.attachBtn} onPress={handlePickDocument}>
               <Text style={styles.attachBtnText}>📎 File</Text>
             </TouchableOpacity>
+            <TouchableOpacity style={styles.pingBtn} onPress={handlePingAi} disabled={pinging}>
+              <Text style={styles.pingBtnText}>{pinging ? '⏳' : '⚡ Ping'}</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.resetBtn} onPress={handleResetSession}>
               <Text style={styles.resetBtnText}>🔄 Reset</Text>
             </TouchableOpacity>
@@ -358,6 +418,8 @@ const styles = StyleSheet.create({
   toggleBtnText: { color: '#ffffff', fontSize: 11, fontWeight: '600' },
   attachBtn: { backgroundColor: '#0284c7', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, marginRight: 8 },
   attachBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '600' },
+  pingBtn: { backgroundColor: '#f59e0b', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginRight: 8 },
+  pingBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '600' },
   resetBtn: { backgroundColor: '#ef4444', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
   resetBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '600' },
   chatStream: { flex: 1 },
