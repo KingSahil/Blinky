@@ -1,7 +1,7 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen, Cpu, Zap, Brain, Cloud, Wrench, Key, Smartphone, MessageSquare, Command, Palette, Info } from 'lucide-react';
+import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen, Cpu, Zap, Brain, Cloud, Wrench, Key, Smartphone, MessageSquare, Command, Palette, Info, Clock, Trash2, Plus } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -31,6 +31,17 @@ import { AdaptiveTransportManager } from './lib/adaptiveTransport';
 import type { TutorConversationMessage, TutorProgress, TutorResult } from './lib/types';
 import type { SecureTransportInfo, MobilePairingPayload } from './lib/tauri';
 import { pingModel, type PingResult } from './lib/modelPing';
+import {
+  listPcChatSessions,
+  getActivePcSession,
+  savePcChatSession,
+  createPcChatSession,
+  deletePcChatSession,
+  clearAllPcChatSessions,
+  switchPcChatSession,
+  generatePcSessionTitle,
+  type PcChatSession,
+} from './lib/sessionStorage';
 
 
 interface AttachedMedia {
@@ -225,6 +236,23 @@ export function CommandBar() {
   const [steps, setSteps] = useState<any[]>([]);
   const [showGuideCompletionSummary, setShowGuideCompletionSummary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [pcSessions, setPcSessions] = useState<PcChatSession[]>([]);
+  const [activePcSession, setActivePcSession] = useState<PcChatSession | null>(null);
+  const historyDropdownRef = useRef<HTMLDivElement | null>(null);
+  const historyToggleRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    const initial = getActivePcSession();
+    setActivePcSession(initial);
+    setPcSessions(listPcChatSessions());
+    if (initial.messages.length > 0) {
+      conversationHistoryRef.current = initial.messages.slice(-8).map((m) => ({
+        role: m.role === 'user' ? 'student' : 'blinky',
+        content: m.text,
+      }));
+    }
+  }, []);
   const [provider, setProvider] = useState('groq');
   const [shortcut, setShortcut] = useState('Enter');
   const defaultAaiKey = (import.meta as any).env?.VITE_ASSEMBLY_AI_API_KEY || '';
@@ -1586,6 +1614,33 @@ export function CommandBar() {
         ...conversationHistoryRef.current,
         ...newHistoryEntries,
       ].slice(-10);
+
+      if (activePcSession) {
+        const isDefaultTitle =
+          activePcSession.title === 'New Conversation' ||
+          activePcSession.title === 'Initial Session' ||
+          activePcSession.title === 'Current Session';
+        const updatedTitle = isDefaultTitle ? generatePcSessionTitle(effectiveQuery) : activePcSession.title;
+        const updatedSession: PcChatSession = {
+          ...activePcSession,
+          title: updatedTitle,
+          messages: [
+            ...activePcSession.messages,
+            { role: 'user', text: effectiveQuery, timestamp: Date.now() },
+            {
+              role: 'assistant',
+              text: result.summary || (result as any).solution || (result as any).explanation || 'Completed instruction.',
+              timestamp: Date.now(),
+              steps: (currentGuideSteps || []).map((s: any) =>
+                typeof s === 'string' ? s : s.instruction || s.title || ''
+              ),
+            },
+          ],
+        };
+        savePcChatSession(updatedSession);
+        setActivePcSession(updatedSession);
+        setPcSessions(listPcChatSessions());
+      }
       setShowGuideCompletionSummary(
         (hasCompletedProgress && currentGuideSteps.length === 0 && Boolean(result.summary))
         || Boolean(result.computer_use)
@@ -2183,7 +2238,7 @@ export function CommandBar() {
 
 
 
-  // Handle clicking outside settings dropdown and window focus change/blur
+  // Handle clicking outside settings/history dropdown and window focus change/blur
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (
@@ -2194,10 +2249,20 @@ export function CommandBar() {
       ) {
         setShowSettings(false);
       }
+
+      if (
+        historyDropdownRef.current &&
+        !historyDropdownRef.current.contains(event.target as Node) &&
+        historyToggleRef.current &&
+        !historyToggleRef.current.contains(event.target as Node)
+      ) {
+        setShowHistory(false);
+      }
     }
 
     const handleBlur = () => {
       setShowSettings(false);
+      setShowHistory(false);
     };
 
     document.addEventListener('mousedown', handleClickOutside);
@@ -2207,6 +2272,7 @@ export function CommandBar() {
     const unlistenPromise = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       if (!focused) {
         setShowSettings(false);
+        setShowHistory(false);
       }
     });
 
@@ -2234,6 +2300,12 @@ export function CommandBar() {
         height = Math.max(height, 52 + dropdownHeight);
       }
 
+      if (showHistory && historyDropdownRef.current) {
+        const hd = historyDropdownRef.current;
+        const historyHeight = Math.max(hd.scrollHeight, hd.getBoundingClientRect().height);
+        height = Math.max(height, 52 + historyHeight);
+      }
+
       if (showWaModal) {
         height = Math.max(height, 420);
       }
@@ -2258,11 +2330,14 @@ export function CommandBar() {
     if (showSettings && dropdownRef.current) {
       observer.observe(dropdownRef.current);
     }
+    if (showHistory && historyDropdownRef.current) {
+      observer.observe(historyDropdownRef.current);
+    }
     return () => {
       cancelAnimationFrame(raf);
       observer.disconnect();
     };
-  }, [showSettings, showWaModal, showMobileModal, waStatus, provider, voiceProvider]);
+  }, [showSettings, showHistory, showWaModal, showMobileModal, waStatus, provider, voiceProvider]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setQuestion(event.target.value);
@@ -2439,6 +2514,21 @@ export function CommandBar() {
 
           <div className="command-actions">
             <button
+              ref={historyToggleRef}
+              type="button"
+              className={`icon-action command-history-toggle ${showHistory ? 'active' : ''}`}
+              aria-label="History"
+              title="Command & Chat History"
+              onClick={() => {
+                setShowHistory(!showHistory);
+                if (!showHistory) {
+                  setPcSessions(listPcChatSessions());
+                }
+              }}
+            >
+              <Clock size={18} />
+            </button>
+            <button
               type="button"
               className={`icon-action ${showMobileModal ? 'active' : ''}`}
               aria-label="Connect Mobile"
@@ -2475,9 +2565,173 @@ export function CommandBar() {
           </div>
         </div>
 
+        {/* Persistent Chat & Command History Dropdown */}
+        {showHistory && (
+          <div ref={historyDropdownRef} className="command-history-dropdown">
+            <div className="history-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '13px', color: '#fff' }}>
+                <Clock size={15} style={{ color: 'var(--accent-color, #ff5a36)' }} />
+                <span>Command & Chat History</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="history-new-btn"
+                  onClick={() => {
+                    const newSess = createPcChatSession();
+                    setActivePcSession(newSess);
+                    setPcSessions(listPcChatSessions());
+                    conversationHistoryRef.current = [];
+                    setQuestion('');
+                    setSteps([]);
+                    setShowHistory(false);
+                  }}
+                  title="Start a new chat session"
+                >
+                  <Plus size={13} />
+                  <span>New Chat</span>
+                </button>
+                <button
+                  type="button"
+                  className="icon-action"
+                  onClick={() => setShowHistory(false)}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            </div>
+
+            <div className="history-list">
+              {pcSessions.length === 0 ? (
+                <div className="history-empty">
+                  <Clock size={28} style={{ opacity: 0.3, marginBottom: '6px' }} />
+                  <div>No saved sessions yet</div>
+                  <div style={{ fontSize: '11px', opacity: 0.6 }}>Your commands and conversations will appear here.</div>
+                </div>
+              ) : (
+                pcSessions.map((s) => {
+                  const isActive = activePcSession?.id === s.id;
+                  const formatTime = (ms: number) => {
+                    const sec = Math.floor((Date.now() - ms) / 1000);
+                    if (sec < 60) return 'Just now';
+                    if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+                    if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+                    return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
+                  };
+                  return (
+                    <div
+                      key={s.id}
+                      className={`history-item ${isActive ? 'active' : ''}`}
+                      onClick={() => {
+                        const switched = switchPcChatSession(s.id);
+                        if (switched) {
+                          setActivePcSession(switched);
+                          conversationHistoryRef.current = switched.messages.slice(-8).map((m) => ({
+                            role: m.role === 'user' ? 'student' : 'blinky',
+                            content: m.text,
+                          }));
+                          if (switched.messages.length > 0) {
+                            const lastUser = [...switched.messages].reverse().find((m) => m.role === 'user');
+                            if (lastUser) setQuestion(lastUser.text);
+                          }
+                          setShowHistory(false);
+                        }
+                      }}
+                    >
+                      <div className="history-item-left">
+                        <div className="history-item-title">{s.title}</div>
+                        <div className="history-item-meta">
+                          <span>{formatTime(s.updatedAt)}</span>
+                          <span>•</span>
+                          <span>{s.messages.length} msg{s.messages.length !== 1 ? 's' : ''}</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="history-item-delete"
+                        title="Delete session"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const next = deletePcChatSession(s.id);
+                          setActivePcSession(next);
+                          setPcSessions(listPcChatSessions());
+                          conversationHistoryRef.current = next.messages.slice(-8).map((m) => ({
+                            role: m.role === 'user' ? 'student' : 'blinky',
+                            content: m.text,
+                          }));
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {pcSessions.length > 0 && (
+              <div className="history-footer">
+                <button
+                  type="button"
+                  className="history-clear-btn"
+                  onClick={() => {
+                    if (confirm('Clear all conversation history?')) {
+                      const fresh = clearAllPcChatSessions();
+                      setActivePcSession(fresh);
+                      setPcSessions(listPcChatSessions());
+                      conversationHistoryRef.current = [];
+                    }
+                  }}
+                >
+                  <Trash2 size={12} />
+                  <span>Clear All History</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Google-Style Dropdown Menu */}
         {showSettings && (
           <div ref={dropdownRef} className="command-settings-dropdown">
+            {/* HayMagnet Multi-Agent Model Routing */}
+            <div className="dropdown-section agent-routing-section">
+              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Bot size={14} /> Agent Model Assignment
+              </h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
+                <div style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#e2e8f0' }}>🖥️ Agent 1: Computer-Use / Actuator</span>
+                    <span style={{ fontSize: '9px', background: 'rgba(255, 90, 54, 0.2)', color: '#ff8b6a', padding: '1px 5px', borderRadius: '3px' }}>Active</span>
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                    Model: <strong style={{ color: '#fff' }}>{provider.toUpperCase()} (Qwen 3.8-27B)</strong>
+                  </div>
+                </div>
+
+                <div style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#e2e8f0' }}>📚 Agent 2: Knowledge & RAG</span>
+                    <span style={{ fontSize: '9px', background: 'rgba(139, 92, 246, 0.2)', color: '#c084fc', padding: '1px 5px', borderRadius: '3px' }}>FastEmbed Hybrid</span>
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                    Model: <strong style={{ color: '#fff' }}>Gemini 2.5 Flash / FastEmbed bge-small</strong>
+                  </div>
+                </div>
+
+                <div style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#e2e8f0' }}>🎙️ Agent 3: Realtime Voice</span>
+                    <span style={{ fontSize: '9px', background: 'rgba(34, 197, 94, 0.2)', color: '#4ade80', padding: '1px 5px', borderRadius: '3px' }}>Streaming</span>
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                    Provider: <strong style={{ color: '#fff' }}>{voiceProvider === 'assemblyai' ? 'AssemblyAI Universal-3' : 'Sarvam AI'}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div className="dropdown-section">
               <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Cpu size={14} /> Change Model</h4>
               <div className="dropdown-options">

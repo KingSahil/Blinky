@@ -8,9 +8,10 @@ interface BrandHeaderProps {
   status: 'disconnected' | 'connecting' | 'connected' | 'error';
   isConnected: boolean;
   onPressConnection: () => void;
+  onPressHistory?: () => void;
 }
 
-export function BrandHeader({ status, isConnected, onPressConnection }: BrandHeaderProps) {
+export function BrandHeader({ status, isConnected, onPressConnection, onPressHistory }: BrandHeaderProps) {
   return (
     <View style={styles.header}>
       {/* Brand / Logo */}
@@ -25,6 +26,21 @@ export function BrandHeader({ status, isConnected, onPressConnection }: BrandHea
 
       {/* Right Controls */}
       <View style={styles.controlsContainer}>
+        {/* Chat History Drawer Button */}
+        {onPressHistory && (
+          <TouchableOpacity
+            style={styles.qrHeaderBtn}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              onPressHistory();
+            }}
+            accessibilityLabel="Chat History"
+            activeOpacity={0.7}
+          >
+            <Ionicons name="time-outline" size={18} color="#FF5A36" />
+          </TouchableOpacity>
+        )}
+
         {/* QR Scan Button */}
         <TouchableOpacity
           style={styles.qrHeaderBtn}
