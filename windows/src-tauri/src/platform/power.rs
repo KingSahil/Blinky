@@ -356,6 +356,25 @@ pub fn execute_screenshot() {
     }
 }
 
+/// Instant media play/pause via VK_MEDIA_PLAY_PAUSE (no AI pipeline).
+pub fn execute_media_play_pause() {
+    let _ = send_keypress(0xB3);
+}
+
+/// Instant open of the user's default browser (no AI pipeline).
+pub fn execute_open_browser() {
+    let _ = Command::new("cmd")
+        .args(["/c", "start", "https://www.google.com"])
+        .spawn();
+}
+
+/// Instant open of Windows Terminal, falling back to PowerShell.
+pub fn execute_open_terminal() {
+    if Command::new("wt").spawn().is_err() {
+        let _ = Command::new("powershell").spawn();
+    }
+}
+
 fn send_keypress(vk: u16) -> Result<(), String> {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,

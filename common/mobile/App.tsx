@@ -802,6 +802,16 @@ export default function App() {
   useEffect(() => {
     if (latestLightEvent?.data) {
       const data = latestLightEvent.data;
+      if (data.success === false) {
+        // ESP32 unreachable: revert the optimistic toggle and say why.
+        // Success path (r/g/b present) still syncs the card below.
+        const err = data.error || 'ESP32 unreachable. Check it shares PC Wi-Fi and ESP32_HOST in .env.';
+        setIsLightOn(prev => !prev);
+        triggerHaptic('heavy');
+        setActionFeedback(`💡 Light failed: ${err}`);
+        setTimeout(() => setActionFeedback(null), 6000);
+        return;
+      }
       const on = (data.r ?? 0) > 0 || (data.g ?? 0) > 0 || (data.b ?? 0) > 0;
       setIsLightOn(on);
     }
@@ -2295,6 +2305,7 @@ export default function App() {
               {/* Main Messaging Feed */}
               <ScrollView
                 ref={scrollViewRef}
+                style={{ flex: 1 }}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={[styles.chatScrollContent, { paddingBottom: 24 }]}
                 keyboardShouldPersistTaps="handled"
@@ -2354,31 +2365,19 @@ export default function App() {
               isConnected={isConnected}
               isLightOn={isLightOn}
               onExecuteAction={(cmd) => {
-                // Unified pipeline: quick actions go through the same PC
-                // tutor as CommandBar typing — never raw actuator strings.
+                // Instant path: raw command goes straight to the Rust
+                // fast handler (keypress / process spawn / ESP32 sidecar).
+                // Only screenshot uses the chat/tutor pipeline.
                 if (cmd === 'screenshot') {
                   setActiveTab('Chat');
                   handleCaptureScreenshot();
                   return;
                 }
-                if (cmd === 'toggle_lights') {
-                  setIsLightOn(prev => !prev);
-                  sendQuery('toggle lights', generateUuid());
-                  return;
-                }
-                if (cmd === 'open_browser') {
-                  sendQuery('open browser', generateUuid());
-                  return;
-                }
-                if (cmd === 'open_terminal') {
-                  sendQuery('open terminal', generateUuid());
-                  return;
-                }
-                if (cmd === 'media_play_pause') {
-                  sendQuery('play or pause media', generateUuid());
-                  return;
-                }
                 sendCommand(cmd);
+                if (cmd === 'toggle_lights') {
+                  // Optimistic flip; corrected by light_event from PC.
+                  setIsLightOn(prev => !prev);
+                }
               }}
             />
           )}

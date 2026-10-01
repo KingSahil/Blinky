@@ -417,7 +417,7 @@ const styles = StyleSheet.create({
   wrapper: {
     paddingHorizontal: spacing.md,
     paddingTop: spacing.xs,
-    paddingBottom: spacing.md, // Add bottom padding for safety
+    paddingBottom: spacing.sm,
     backgroundColor: colors.background,
   },
   composerBox: {

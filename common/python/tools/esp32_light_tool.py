@@ -33,13 +33,25 @@ DEFAULT_ESP32_IP = _get_default_ip()
 
 
 def _state_file() -> Path:
-    # Persist toggle state next to repo tmp/ so restarts keep last state.
+    # Persist toggle state in repo-root tmp/ (tools -> python -> common -> root).
     # Falls back to module dir when repo layout is unavailable.
     try:
-        repo_root = Path(__file__).resolve().parent.parent.parent
-        state_dir = repo_root / "tmp"
+        repo_root = Path(__file__).resolve().parent.parent.parent.parent
+        if (repo_root / "common" / "python").is_dir():
+            state_dir = repo_root / "tmp"
+        else:
+            state_dir = Path(__file__).resolve().parent
         state_dir.mkdir(parents=True, exist_ok=True)
-        return state_dir / "esp32_light_state.json"
+        new_path = state_dir / "esp32_light_state.json"
+        if not new_path.exists():
+            # One-time migration from the previous common/tmp location.
+            legacy = repo_root / "common" / "tmp" / "esp32_light_state.json"
+            try:
+                if legacy.exists():
+                    new_path.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
+            except Exception:
+                pass
+        return new_path
     except Exception:
         return Path(__file__).resolve().parent / "esp32_light_state.json"
 
@@ -58,13 +70,45 @@ def get_saved_state() -> dict:
 
 
 def save_state(on: bool, r: int = 0, g: int = 0, b: int = 0, color: str = "", brightness: float = 1.0) -> dict:
-    """Persist last known light state."""
+    """Persist last known light state (preserves last_host)."""
+    prev = get_saved_state()
     state = {"on": bool(on), "r": int(r), "g": int(g), "b": int(b), "color": str(color), "brightness": float(brightness)}
+    if prev.get("last_host"):
+        state["last_host"] = prev["last_host"]
     try:
         _state_file().write_text(json.dumps(state), encoding="utf-8")
     except Exception:
         pass
     return state
+
+
+def note_good_host(host: str) -> None:
+    """Remember the host that just answered so the next tap tries it first."""
+    try:
+        state = get_saved_state()
+        if state.get("last_host") == host:
+            return
+        state["last_host"] = host
+        _state_file().write_text(json.dumps(state), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _candidate_hosts(configured_ip: str) -> list[str]:
+    """Fast-first host order: last-known-good, configured .env IP, mDNS name."""
+    hosts: list[str] = []
+    try:
+        last = (get_saved_state().get("last_host") or "").strip()
+        if last:
+            hosts.append(last)
+    except Exception:
+        pass
+    if configured_ip not in hosts:
+        hosts.append(configured_ip)
+    mdns = "blinky-esp32.local"
+    if mdns not in hosts:
+        hosts.append(mdns)
+    return hosts
 
 
 COLOR_MAP = {
@@ -84,66 +128,80 @@ COLOR_MAP = {
 }
 
 
-def send_to_esp32(r: int, g: int, b: int, ip: str = DEFAULT_ESP32_IP, timeout: float = 3.0) -> dict:
-    """Send RGB values to ESP32 /set endpoint."""
+def send_to_esp32(r: int, g: int, b: int, ip: str = DEFAULT_ESP32_IP, timeout: float = 1.5) -> dict:
+    """Send RGB values to ESP32 /rgb endpoint (firmware: BlinkyUniversalDaemon).
+
+    Fast-first: tries the last-known-good host, then the configured IP, then
+    mDNS. Short timeout because a healthy daemon answers in milliseconds;
+    a wedged/offline one never answers, so fail fast and move on.
+    """
     r = max(0, min(255, int(r)))
     g = max(0, min(255, int(g)))
     b = max(0, min(255, int(b)))
 
-    # Try /rgb first (Universal Daemon), fallback to /set (Legacy Sketch)
-    endpoints = [f"http://{ip}/rgb?r={r}&g={g}&b={b}", f"http://{ip}/set?r={r}&g={g}&b={b}"]
+    hosts = _candidate_hosts(ip)
+
     last_err = None
-    for url in endpoints:
-        try:
-            req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                body = response.read().decode("utf-8").strip()
-                return {
-                    "success": True,
-                    "status": "ok",
-                    "ip": ip,
-                    "r": r,
-                    "g": g,
-                    "b": b,
-                    "esp32_response": body,
-                    "message": f"Light set to RGB({r}, {g}, {b})",
-                }
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                continue
-            last_err = e
-        except Exception as e:
-            last_err = e
-            break
+    for host in hosts:
+        # Universal Daemon serves /rgb (legacy /set kept as fallback).
+        endpoints = [f"http://{host}/rgb?r={r}&g={g}&b={b}", f"http://{host}/set?r={r}&g={g}&b={b}"]
+        for url in endpoints:
+            try:
+                req = urllib.request.Request(url, method="GET")
+                with urllib.request.urlopen(req, timeout=timeout) as response:
+                    body = response.read().decode("utf-8").strip()
+                    note_good_host(host)
+                    return {
+                        "success": True,
+                        "status": "ok",
+                        "ip": host,
+                        "r": r,
+                        "g": g,
+                        "b": b,
+                        "esp32_response": body,
+                        "message": f"Light set to RGB({r}, {g}, {b})",
+                    }
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    continue
+                last_err = e
+            except Exception as e:
+                last_err = e
+                break
 
     return {
         "success": False,
-        "error": f"Failed to connect to ESP32 at {ip}: {last_err}",
+        "error": f"Failed to connect to ESP32 at {ip} (tried {', '.join(hosts)}): {last_err}. Check serial monitor IP matches ESP32_HOST in .env.",
         "ip": ip,
     }
 
 
 def check_status(ip: str = DEFAULT_ESP32_IP, timeout: float = 2.0) -> dict:
 
-    """Check if ESP32 web server is reachable."""
-    url = f"http://{ip}/"
-    try:
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            body = response.read().decode("utf-8").strip()
-            return {
-                "success": True,
-                "online": True,
-                "ip": ip,
-                "esp32_response": body,
-            }
-    except Exception as e:
-        return {
-            "success": False,
-            "online": False,
-            "ip": ip,
-            "error": str(e),
-        }
+    """Check if ESP32 web server is reachable (tries mDNS fallback too)."""
+    hosts = [ip] if ip == "blinky-esp32.local" else [ip, "blinky-esp32.local"]
+    last_err: Exception | None = None
+    for host in hosts:
+        url = f"http://{host}/"
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                body = response.read().decode("utf-8").strip()
+                return {
+                    "success": True,
+                    "online": True,
+                    "ip": host,
+                    "esp32_response": body,
+                }
+        except Exception as e:
+            last_err = e
+            continue
+    return {
+        "success": False,
+        "online": False,
+        "ip": ip,
+        "error": str(last_err),
+    }
 
 
 def resolve_color(color_name: str, r=None, g=None, b=None, brightness: float = 1.0):
@@ -298,10 +356,9 @@ def resolve_light_request(question: str) -> dict | None:
 def main():
 
     if len(sys.argv) < 2:
-        print(json.dumps({
-            "error": "Usage: python esp32_light_tool.py '<json_input>' or python esp32_light_tool.py <color>"
-        }))
-        sys.exit(1)
+        res = handle_request({"action": "status"})
+        print(json.dumps(res, indent=2))
+        return
 
     arg = sys.argv[1].strip()
     if arg.startswith("{"):
@@ -311,8 +368,18 @@ def main():
             print(json.dumps({"error": f"Invalid JSON input: {e}"}))
             sys.exit(1)
     else:
-        # Simple color or command passed directly
-        params = {"color": arg}
+        # Bare CLI word from the Rust quick-action sidecar or manual use.
+        # Map control words to actions (NOT colors) so `toggle` actually toggles.
+        arg_lower = arg.lower()
+        if arg_lower in COLOR_MAP:
+            params = {"action": "set_color", "color": arg_lower}
+        elif arg_lower in {"on", "off", "toggle", "status"}:
+            params = {"action": arg_lower}
+        elif arg_lower in {"turn_on", "turn_off"}:
+            params = {"action": arg_lower}
+        else:
+            resolved = resolve_light_request(arg)
+            params = resolved if resolved else {"color": arg}
 
     result = handle_request(params)
     print(json.dumps(result, indent=2))

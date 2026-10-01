@@ -2407,7 +2407,7 @@ export function CommandBar() {
           }}
         >
           <div className="command-icon">
-            <img src="/logo_text.png" alt="Blinky" style={{ height: 52, objectFit: 'contain' }} />
+            <img src="/logo_text.png" alt="Blinky" style={{ height: 32, objectFit: 'contain' }} />
           </div>
 
           <div className="command-top-hint" data-tauri-drag-region>

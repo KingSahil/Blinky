@@ -1132,6 +1132,51 @@ where
                 crate::platform::execute_unlock(parsed_pin.as_deref());
             } else if trimmed == "screenshot" {
                 crate::platform::execute_screenshot();
+            } else if trimmed == "media_play_pause" || trimmed == "play_pause" {
+                // Instant path: single media keypress, no AI pipeline.
+                crate::platform::execute_media_play_pause();
+            } else if trimmed == "open_browser" || trimmed == "browser" || trimmed == "chrome" {
+                // Instant path: opens the user's default browser directly.
+                crate::platform::execute_open_browser();
+            } else if trimmed == "open_terminal" || trimmed == "terminal" {
+                // Instant path: opens Windows Terminal / default terminal directly.
+                crate::platform::execute_open_terminal();
+            } else if trimmed == "toggle_lights" || trimmed == "lights" || trimmed == "turn_off_lights" || trimmed == "lights_off" || trimmed == "turn_on_lights" || trimmed == "lights_on" {
+                // Instant path: ESP32 sidecar + light_event broadcast (no AI pipeline).
+                let root = project_root();
+                let python = python_executable(&root);
+                let script = root.join("common").join("python").join("tools").join("esp32_light_tool.py");
+                let action_arg = if trimmed == "turn_off_lights" || trimmed == "lights_off" {
+                    "off"
+                } else if trimmed == "turn_on_lights" || trimmed == "lights_on" {
+                    "on"
+                } else {
+                    "toggle"
+                };
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let out = TokioCommand::new(python)
+                        .arg("-u")
+                        .arg(&script)
+                        .arg(action_arg)
+                        .current_dir(&root)
+                        .output()
+                        .await;
+                    if let Ok(output) = out {
+                        let stdout_str = String::from_utf8_lossy(&output.stdout);
+                        let trimmed_out = stdout_str.trim();
+                        println!("blinky: esp32 light action ({}) output: {}", action_arg, trimmed_out);
+                        let json_val = serde_json::from_str::<serde_json::Value>(trimmed_out)
+                            .unwrap_or_else(|_| serde_json::json!({ "raw": trimmed_out }));
+                        let evt = serde_json::json!({
+                            "type": "light_event",
+                            "action": action_arg,
+                            "data": json_val
+                        });
+                        let _ = app_handle.emit("blinky://light-event", evt.clone());
+                        broadcast_to_all_clients(&evt.to_string()).await;
+                    }
+                });
             } else if trimmed == "get_sarvam_key" {
                 let key = get_sarvam_api_key();
                 eprintln!("get_sarvam_key: key_present = {}", !key.is_empty());
@@ -1479,35 +1524,13 @@ where
                         trimmed.to_string()
                     }
                 } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    // Back-compat: old mobile APKs send raw quick-action strings.
-                    // Route them through the unified PC tutor instead of dropping.
-                    let raw_action = parsed
-                        .get("action")
-                        .and_then(|a| a.as_str())
-                        .unwrap_or("");
-                    if !raw_action.is_empty() && parsed.get("query").is_none() {
-                        match raw_action {
-                            "toggle_lights" => "toggle lights".to_string(),
-                            "open_browser" => "open browser".to_string(),
-                            "open_terminal" => "open terminal".to_string(),
-                            "media_play_pause" => "play or pause media".to_string(),
-                            other => other.to_string(),
-                        }
-                    } else {
-                        parsed
-                            .get("query")
-                            .and_then(|q| q.as_str())
-                            .unwrap_or("")
-                            .to_string()
-                    }
+                    parsed
+                        .get("query")
+                        .and_then(|q| q.as_str())
+                        .unwrap_or("")
+                        .to_string()
                 } else {
-                    match trimmed {
-                        "toggle_lights" => "toggle lights".to_string(),
-                        "open_browser" => "open browser".to_string(),
-                        "open_terminal" => "open terminal".to_string(),
-                        "media_play_pause" => "play or pause media".to_string(),
-                        _ => trimmed.to_string(),
-                    }
+                    trimmed.to_string()
                 };
 
                 let (attached_image, attached_file) = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {

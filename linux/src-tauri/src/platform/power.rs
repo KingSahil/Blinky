@@ -91,3 +91,22 @@ pub fn execute_screenshot() {
     let _ = Command::new("gnome-screenshot").arg("-i").spawn();
     let _ = Command::new("spectacle").spawn();
 }
+
+/// Instant media play/pause via playerctl (no AI pipeline).
+pub fn execute_media_play_pause() {
+    let _ = Command::new("playerctl").arg("play-pause").spawn();
+}
+
+/// Instant open of the user's default browser (no AI pipeline).
+pub fn execute_open_browser() {
+    let _ = Command::new("xdg-open").arg("https://www.google.com").spawn();
+}
+
+/// Instant open of a terminal, trying common emulators in order.
+pub fn execute_open_terminal() {
+    let _ = Command::new("x-terminal-emulator")
+        .spawn()
+        .or_else(|_| Command::new("alacritty").spawn())
+        .or_else(|_| Command::new("foot").spawn())
+        .or_else(|_| Command::new("kitty").spawn());
+}
