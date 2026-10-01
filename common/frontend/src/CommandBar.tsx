@@ -935,47 +935,75 @@ export function CommandBar() {
       }
     }
 
+    let transcribedText = '';
     const key = sarvamApiKey || sarvamApiKeyRef.current;
-    if (!key) {
-      setStatus('Please set your Sarvam AI API Key in settings first.');
-      void resumeWakeWord();
-      return;
+    if (key) {
+      try {
+        const formData = new FormData();
+        formData.append('file', blob, 'query.webm');
+        formData.append('model', 'saaras:v3');
+        formData.append('language_code', 'en-IN');
+
+        const res = await fetch('https://api.sarvam.ai/speech-to-text', {
+          method: 'POST',
+          headers: {
+            'api-subscription-key': key,
+          },
+          body: formData,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          transcribedText = data.transcript?.trim() || '';
+        } else {
+          let payload: any = {};
+          try { payload = await res.json(); } catch { }
+          console.warn('Sarvam STT failed, falling back to Groq Whisper:', getSarvamErrorMessage(payload, res.status));
+        }
+      } catch (err: any) {
+        console.warn('Sarvam STT connection error, falling back to Groq Whisper:', err);
+      }
     }
 
-    setStatus('Transcribing with Sarvam AI...');
-    try {
-      const formData = new FormData();
-      formData.append('file', blob, 'query.webm');
-      formData.append('model', 'saaras:v3');
-      formData.append('language_code', 'en-IN');
+    // Fallback: Groq Whisper Large V3
+    const gKey = groqApiKey || (import.meta as any).env?.VITE_GROQ_API_KEY;
+    if (!transcribedText && gKey) {
+      setStatus('Transcribing with Groq Whisper...');
+      try {
+        const groqFormData = new FormData();
+        groqFormData.append('file', blob, 'query.webm');
+        groqFormData.append('model', 'whisper-large-v3');
+        groqFormData.append('response_format', 'json');
 
-      const res = await fetch('https://api.sarvam.ai/speech-to-text', {
-        method: 'POST',
-        headers: {
-          'api-subscription-key': key,
-        },
-        body: formData,
-      });
+        const groqRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${gKey}`,
+          },
+          body: groqFormData,
+        });
 
-      if (!res.ok) {
-        let payload: any = {};
-        try { payload = await res.json(); } catch { }
-        throw new Error(getSarvamErrorMessage(payload, res.status));
+        if (groqRes.ok) {
+          const gData = await groqRes.json();
+          transcribedText = gData.text?.trim() || '';
+        } else {
+          const errBody = await groqRes.text();
+          console.error(`Groq Whisper STT error (${groqRes.status}):`, errBody);
+        }
+      } catch (gErr: any) {
+        console.error('Groq Whisper STT connection error:', gErr);
       }
+    }
 
-      const data = await res.json();
-      const transcript = data.transcript?.trim() || '';
-
-      if (transcript) {
-        setStatus(`Searching for: "${transcript}"`);
-        void executeTutor(transcript, true);
+    if (transcribedText) {
+      setStatus(`Searching for: "${transcribedText}"`);
+      void executeTutor(transcribedText, true);
+    } else {
+      if (!key && !gKey) {
+        setStatus('Please set your Sarvam AI or Groq API Key in settings first.');
       } else {
-        setStatus('Could not hear anything clearly.');
-        void resumeWakeWord();
+        setStatus('Could not hear anything clearly. Please check your mic and try again.');
       }
-    } catch (err: any) {
-      console.error('STT error:', err);
-      setStatus(`Transcription failed: ${err.message}`);
       void resumeWakeWord();
     }
   };
@@ -987,42 +1015,46 @@ export function CommandBar() {
     const currentVP = voiceProviderRef.current;
     let aaiKey = assemblyaiApiKey || assemblyaiApiKeyRef.current;
     let key = sarvamApiKey || sarvamApiKeyRef.current;
+    let gKey = groqApiKey || (import.meta as any).env?.VITE_GROQ_API_KEY || '';
 
-    if (currentVP === 'assemblyai') {
-      if (!aaiKey) {
-        aaiKey = (import.meta as any).env?.VITE_ASSEMBLY_AI_API_KEY || '';
-      }
-      if (!aaiKey) {
+    // If active provider is assemblyai but no key is present, auto-fallback to Sarvam or Groq
+    let effectiveVP = currentVP;
+    if (effectiveVP === 'assemblyai' && !aaiKey) {
+      if (key) {
+        effectiveVP = 'sarvam';
+      } else if (gKey) {
+        effectiveVP = 'sarvam'; // Will use Groq Whisper fallback in audio transcription
+      } else {
         try {
           const s = await getSettings();
           if (s.assemblyai_api_key) {
             setAssemblyaiApiKey(s.assemblyai_api_key);
             assemblyaiApiKeyRef.current = s.assemblyai_api_key;
             aaiKey = s.assemblyai_api_key;
-          }
-        } catch { }
-      }
-      if (!aaiKey) {
-        setStatus('Please set your AssemblyAI API Key in settings first.');
-        isStartingRecordingRef.current = false;
-        return;
-      }
-    } else {
-      if (!key) {
-        try {
-          const s = await getSettings();
-          if (s.sarvam_api_key) {
+          } else if (s.sarvam_api_key) {
             setSarvamApiKey(s.sarvam_api_key);
             sarvamApiKeyRef.current = s.sarvam_api_key;
             key = s.sarvam_api_key;
+            effectiveVP = 'sarvam';
+          } else if (s.groq_api_key) {
+            setGroqApiKey(s.groq_api_key);
+            gKey = s.groq_api_key;
+            effectiveVP = 'sarvam';
           }
         } catch { }
       }
-      if (!key) {
-        setStatus('Please set your Sarvam AI API Key in settings first.');
+    }
+
+    if (effectiveVP === 'assemblyai' && !aaiKey) {
+      if (!key && !gKey) {
+        setStatus('Please set your AssemblyAI, Sarvam, or Groq API Key in settings first.');
         isStartingRecordingRef.current = false;
         return;
       }
+    } else if (effectiveVP === 'sarvam' && !key && !gKey) {
+      setStatus('Please set your Sarvam AI or Groq API Key in settings first.');
+      isStartingRecordingRef.current = false;
+      return;
     }
 
     await pauseWakeWord();

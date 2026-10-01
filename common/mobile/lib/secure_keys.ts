@@ -21,7 +21,7 @@ export interface SyncedApiKeys {
 export async function saveSyncedApiKeys(keys: SyncedApiKeys): Promise<void> {
   try {
     const payload = JSON.stringify(keys);
-    const isSecureAvailable = await SecureStore.isAvailableAsync();
+    const isSecureAvailable = SecureStore ? await SecureStore.isAvailableAsync().catch(() => false) : false;
     
     if (isSecureAvailable) {
       await SecureStore.setItemAsync(SECURE_KEYS_STORAGE_KEY, payload, {
@@ -45,11 +45,11 @@ export async function saveSyncedApiKeys(keys: SyncedApiKeys): Promise<void> {
  */
 export async function getSyncedApiKeys(): Promise<SyncedApiKeys> {
   try {
-    const isSecureAvailable = await SecureStore.isAvailableAsync();
+    const isSecureAvailable = SecureStore ? await SecureStore.isAvailableAsync().catch(() => false) : false;
     let data: string | null = null;
 
     if (isSecureAvailable) {
-      data = await SecureStore.getItemAsync(SECURE_KEYS_STORAGE_KEY);
+      data = await SecureStore.getItemAsync(SECURE_KEYS_STORAGE_KEY).catch(() => null);
     }
 
     if (!data) {

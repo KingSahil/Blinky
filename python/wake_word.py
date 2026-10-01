@@ -67,6 +67,10 @@ def find_best_input_device(sd):
         devices = sd.query_devices()
         candidates = []
 
+        default_dev_idx = sd.default.device[0]
+        default_dev_name = devices[default_dev_idx]["name"].lower() if default_dev_idx is not None and default_dev_idx >= 0 and default_dev_idx < len(devices) else ""
+        is_default_loopback = any(bad in default_dev_name for bad in ["stereo mix", "wave out", "what u hear", "loopback", "virtual"])
+
         for idx, dev in enumerate(devices):
             if dev.get("max_input_channels", 0) > 0:
                 name = dev.get("name", "").lower()
@@ -77,11 +81,14 @@ def find_best_input_device(sd):
                 api_name = apis[dev["hostapi"]]["name"] if dev.get("hostapi") < len(apis) else ""
                 score = 0
                 if "microphone" in name or "mic" in name or "headset" in name:
-                    score += 15
+                    score += 35
                 if "realtek" in name or "conexant" in name:
                     score += 8
                 if "mapper" in name or "primary" in name:
-                    score += 10
+                    if is_default_loopback:
+                        score -= 50  # Heavily penalize mapper if Windows mapped it to Stereo Mix
+                    else:
+                        score += 5
                 if api_name in ["Windows DirectSound", "MME", "Windows WASAPI"]:
                     score += 5
 
@@ -89,7 +96,7 @@ def find_best_input_device(sd):
 
         candidates.sort(key=lambda x: x[0], reverse=True)
 
-        for _, idx, dev_name, sr in candidates:
+        for score, idx, dev_name, sr in candidates:
             try:
                 captured = []
                 def test_cb(indata, frames, time_info, status):
@@ -98,6 +105,14 @@ def find_best_input_device(sd):
                 with sd.InputStream(device=idx, samplerate=sr, channels=1, blocksize=test_block, callback=test_cb):
                     time.sleep(0.12)
                 if len(captured) > 0:
+                    if is_default_loopback and ("mapper" in dev_name.lower() or "primary" in dev_name.lower()):
+                        print(
+                            "⚠️ [WakeWord] ATTENTION: Windows default recording device is 'Stereo Mix'!\n"
+                            "   Audio is currently capturing PC speaker output instead of your physical voice.\n"
+                            "   To fix: Open Windows Sound Settings (mmsys.cpl) and set 'Microphone' as Default Device.",
+                            file=sys.stderr,
+                            flush=True,
+                        )
                     return idx, dev_name, sr
             except Exception:
                 continue
@@ -105,6 +120,14 @@ def find_best_input_device(sd):
         default_input = sd.default.device[0]
         if default_input is not None and default_input >= 0:
             dev = devices[default_input]
+            if is_default_loopback:
+                print(
+                    "⚠️ [WakeWord] ATTENTION: Windows default recording device is 'Stereo Mix'!\n"
+                    "   Audio is currently capturing PC speaker output instead of your physical voice.\n"
+                    "   To fix: Open Windows Sound Settings (mmsys.cpl) and set 'Microphone' as Default Device.",
+                    file=sys.stderr,
+                    flush=True,
+                )
             return default_input, dev["name"], int(dev.get("default_samplerate", 44100))
 
     except Exception as exc:
