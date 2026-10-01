@@ -1720,17 +1720,18 @@ export function CommandBar() {
         ...newHistoryEntries,
       ].slice(-10);
 
-      if (activePcSession) {
+      const currentActiveSession = getActivePcSession();
+      if (currentActiveSession) {
         const isDefaultTitle =
-          activePcSession.title === 'New Conversation' ||
-          activePcSession.title === 'Initial Session' ||
-          activePcSession.title === 'Current Session';
-        const updatedTitle = isDefaultTitle ? generatePcSessionTitle(effectiveQuery) : activePcSession.title;
+          currentActiveSession.title === 'New Conversation' ||
+          currentActiveSession.title === 'Initial Session' ||
+          currentActiveSession.title === 'Current Session';
+        const updatedTitle = isDefaultTitle ? generatePcSessionTitle(effectiveQuery) : currentActiveSession.title;
         const updatedSession: PcChatSession = {
-          ...activePcSession,
+          ...currentActiveSession,
           title: updatedTitle,
           messages: [
-            ...activePcSession.messages,
+            ...currentActiveSession.messages,
             { role: 'user', text: effectiveQuery, timestamp: Date.now() },
             {
               role: 'assistant',
