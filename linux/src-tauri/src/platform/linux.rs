@@ -29,6 +29,10 @@ pub fn click_screen_point_impl(x: i32, y: i32) -> Result<(), String> {
     Ok(())
 }
 
+pub fn click_element_impl(x: i32, y: i32, _label: &str) -> Result<(), String> {
+    click_screen_point_impl(x, y)
+}
+
 pub fn scroll_at_point_impl(x: i32, y: i32, direction: &str, amount: i32) -> Result<(), String> {
     move_cursor(x, y)?;
     let amount = amount.clamp(1, 20);

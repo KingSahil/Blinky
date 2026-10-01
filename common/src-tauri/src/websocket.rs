@@ -382,14 +382,9 @@ async fn start_discovery_server(
     let app_clone = app.clone();
     let get_token = move || {
         let token = crate::websocket::get_remote_token();
-        let cert_pin = if mode.is_release() {
-            if let Ok(identity) = crate::tls_identity::TlsIdentity::load_or_generate(&app_clone) {
-                Some(identity.public_key_pin().to_string())
-            } else {
-                None
-            }
-        } else {
-            None
+        let cert_pin = match crate::tls_identity::TlsIdentity::load_or_generate(&app_clone) {
+            Ok(identity) => Some(identity.public_key_pin().to_string()),
+            Err(_) => None,
         };
         (token, cert_pin)
     };
@@ -445,24 +440,26 @@ pub async fn start_websocket_server(app: AppHandle) {
         }
     };
     let mode = crate::transport::TransportMode::current();
-    let tls_acceptor = if mode.is_release() {
+    let tls_acceptor = {
         let identity = match crate::tls_identity::TlsIdentity::load_or_generate(&app) {
-            Ok(identity) => identity,
+            Ok(identity) => Some(identity),
             Err(error) => {
-                eprintln!("Failed to initialize release WSS identity: {error}");
-                return;
+                eprintln!("Failed to initialize WSS identity: {error}");
+                None
             }
         };
-        println!("Release WSS identity pin: {}", identity.public_key_pin());
-        match identity.server_config() {
-            Ok(config) => Some(TlsAcceptor::from(std::sync::Arc::new(config))),
-            Err(error) => {
-                eprintln!("Failed to initialize release WSS server: {error}");
-                return;
+        if let Some(identity) = identity {
+            println!("WSS identity pin: {}", identity.public_key_pin());
+            match identity.server_config() {
+                Ok(config) => Some(TlsAcceptor::from(std::sync::Arc::new(config))),
+                Err(error) => {
+                    eprintln!("Failed to initialize WSS server: {error}");
+                    None
+                }
             }
+        } else {
+            None
         }
-    } else {
-        None
     };
     println!("WebSocket server listening on {} ({:?})", addr, mode);
 
@@ -520,6 +517,13 @@ pub fn secure_transport_info(
         None
     };
 
+    let local_ip = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|socket| {
+            socket.connect("8.8.8.8:80")?;
+            socket.local_addr()
+        })
+        .ok()
+        .map(|address| address.ip().to_string());
     Ok(serde_json::json!({
         "mode": if mode.is_release() { "release" } else { "development" },
         "desktop_url": if mode.is_release() {
@@ -533,7 +537,83 @@ pub fn secure_transport_info(
             "http://127.0.0.1:9002"
         },
         "certificate_pin": pin,
+        "local_ip": local_ip,
+        "remote_token": if mode.is_release() { Some(get_remote_token()) } else { None },
     }))
+}
+
+/// Non-loopback LAN IPv4 addresses of this PC, for the mobile-pairing QR.
+/// Dependency-free: a UDP `connect()` transmits nothing but reveals the local
+/// address the OS would route with. Works offline.
+pub fn local_lan_ips() -> Vec<String> {
+    let mut ips: Vec<String> = Vec::new();
+    for remote in ["8.8.8.8:80", "1.1.1.1:80"] {
+        if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if sock.connect(remote).is_ok() {
+                if let Ok(local) = sock.local_addr() {
+                    let ip = local.ip().to_string();
+                    if !ip.starts_with("127.") && ip != "::1" && !ips.contains(&ip) {
+                        ips.push(ip);
+                    }
+                }
+            }
+        }
+        if !ips.is_empty() {
+            break;
+        }
+    }
+    ips
+}
+
+/// Payload for the "Connect Mobile" QR shown in the desktop UI.
+/// Ensures a usable token exists (generates + persists one even in dev),
+/// so scanning the QR connects with zero typing.
+pub fn mobile_pairing_payload(
+    app: &AppHandle,
+) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    let mode = crate::transport::TransportMode::current();
+    let pin = match crate::tls_identity::TlsIdentity::load_or_generate(app) {
+        Ok(identity) => Some(identity.public_key_pin().to_string()),
+        Err(e) => {
+            eprintln!("Warning: Could not generate TLS identity for pairing: {e}");
+            None
+        }
+    };
+
+    let mut token = get_remote_token();
+    if token.is_empty() {
+        token = generate_remote_token();
+        let root = project_root();
+        let mut envs = read_env_file(&root);
+        envs.retain(|(k, _)| k != "BLINKY_REMOTE_TOKEN");
+        envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
+        let _ = write_env_file(&root, &envs);
+    }
+
+    Ok(serde_json::json!({
+        "v": 1,
+        "ips": local_lan_ips(),
+        "ws_port": 9001,
+        "discovery_port": 9004,
+        "token": token,
+        "certificate_pin": pin,
+        "mode": if mode.is_release() { "release" } else { "development" },
+    }))
+}
+
+/// Regenerates `BLINKY_REMOTE_TOKEN` and persists it (old QR codes stop working).
+/// Also updates the process environment, since `get_remote_token()` prefers
+/// a nonempty `BLINKY_REMOTE_TOKEN` env var over `.env` — without this, a
+/// regenerate would leave the effective runtime credential unchanged.
+pub fn regenerate_remote_token() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let token = generate_remote_token();
+    let root = project_root();
+    let mut envs = read_env_file(&root);
+    envs.retain(|(k, _)| k != "BLINKY_REMOTE_TOKEN");
+    envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
+    write_env_file(&root, &envs).map_err(|err| format!("Failed to persist token: {err}"))?;
+    std::env::set_var("BLINKY_REMOTE_TOKEN", &token);
+    Ok(token)
 }
 
 pub async fn secure_socket_connect(
@@ -913,20 +993,18 @@ where
                 } else {
                     eprintln!("{} failed authentication", peer_addr);
                 }
-                if mode.is_release() {
-                    let _ = ws_sender
-                        .lock()
-                        .await
-                        .send(Message::Text(
-                            serde_json::json!({
-                                "type": "auth_result",
-                                "ok": authenticated,
-                            })
-                            .to_string()
-                            .into(),
-                        ))
-                        .await;
-                }
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(Message::Text(
+                        serde_json::json!({
+                            "type": "auth_result",
+                            "ok": authenticated,
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await;
                 continue;
             }
 
@@ -1089,6 +1167,54 @@ where
                         resp.to_string().into(),
                     ))
                     .await;
+            } else if trimmed == "get_api_keys" || trimmed == "{\"type\":\"get_api_keys\"}" {
+                let root = project_root();
+                let envs = read_env_file(&root);
+                let find_env = |key: &str| -> String {
+                    envs.iter()
+                        .find(|(k, _)| k == key)
+                        .map(|(_, v)| v.clone())
+                        .or_else(|| std::env::var(key).ok())
+                        .unwrap_or_default()
+                };
+                let resp = serde_json::json!({
+                    "type": "api_keys_sync",
+                    "keys": {
+                        "groq_key": find_env("GROQ_API_KEY"),
+                        "openai_key": find_env("OPENAI_API_KEY"),
+                        "gemini_key": find_env("GEMINI_API_KEY"),
+                        "deepseek_key": find_env("DEEPSEEK_API_KEY"),
+                    }
+                });
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        resp.to_string().into(),
+                    ))
+                    .await;
+            } else if trimmed == "notebook_sync_pull" || trimmed == "{\"type\":\"notebook_sync_pull\"}" {
+                let root = project_root();
+                let store_path = root.join("tmp").join("notebooks").join("notebooks_store.json");
+                let notebooks_json: serde_json::Value = if store_path.exists() {
+                    match std::fs::read_to_string(&store_path) {
+                        Ok(content) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
+                        Err(_) => serde_json::json!({}),
+                    }
+                } else {
+                    serde_json::json!({})
+                };
+                let resp = serde_json::json!({
+                    "type": "notebook_sync_data",
+                    "notebooks": notebooks_json
+                });
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        resp.to_string().into(),
+                    ))
+                    .await;
             } else if trimmed.starts_with("query:") || trimmed.starts_with("{") {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
                     let msg_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -1134,6 +1260,56 @@ where
                                     .await;
                             });
                         }
+                        continue;
+                    } else if msg_type == "get_api_keys" {
+                        let root = project_root();
+                        let envs = read_env_file(&root);
+                        let find_env = |key: &str| -> String {
+                            envs.iter()
+                                .find(|(k, _)| k == key)
+                                .map(|(_, v)| v.clone())
+                                .or_else(|| std::env::var(key).ok())
+                                .unwrap_or_default()
+                        };
+                        let resp = serde_json::json!({
+                            "type": "api_keys_sync",
+                            "keys": {
+                                "groq_key": find_env("GROQ_API_KEY"),
+                                "openai_key": find_env("OPENAI_API_KEY"),
+                                "gemini_key": find_env("GEMINI_API_KEY"),
+                                "deepseek_key": find_env("DEEPSEEK_API_KEY"),
+                            }
+                        });
+                        let _ = ws_sender
+                            .lock()
+                            .await
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                resp.to_string().into(),
+                            ))
+                            .await;
+                        continue;
+                    } else if msg_type == "notebook_sync_pull" {
+                        let root = project_root();
+                        let store_path = root.join("tmp").join("notebooks").join("notebooks_store.json");
+                        let notebooks_json: serde_json::Value = if store_path.exists() {
+                            match std::fs::read_to_string(&store_path) {
+                                Ok(content) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
+                                Err(_) => serde_json::json!({}),
+                            }
+                        } else {
+                            serde_json::json!({})
+                        };
+                        let resp = serde_json::json!({
+                            "type": "notebook_sync_data",
+                            "notebooks": notebooks_json
+                        });
+                        let _ = ws_sender
+                            .lock()
+                            .await
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                resp.to_string().into(),
+                            ))
+                            .await;
                         continue;
                     } else if msg_type == "fs_get_quick_access" {
                         let folders = crate::platform::fs_sync::get_quick_access_folders();
@@ -1329,19 +1505,17 @@ where
     Ok(())
 }
 
-fn auth_token_from_frame(frame: &str, mode: crate::transport::TransportMode) -> Option<String> {
+fn auth_token_from_frame(frame: &str, _mode: crate::transport::TransportMode) -> Option<String> {
     if let Some(token) = frame.strip_prefix("auth:") {
-        return (mode == crate::transport::TransportMode::Development)
-            .then(|| token.trim().to_string());
+        return Some(token.trim().to_string());
     }
 
-    if mode.is_release() {
-        let payload = serde_json::from_str::<serde_json::Value>(frame).ok()?;
+    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(frame) {
         if payload.get("type").and_then(|kind| kind.as_str()) == Some("auth") {
             return payload
                 .get("token")
                 .and_then(|token| token.as_str())
-                .map(str::to_string);
+                .map(|s| s.trim().to_string());
         }
     }
 
@@ -1370,20 +1544,18 @@ where
         .map(|token| token_equals(token, server_token))
         .unwrap_or(false);
 
-    if mode.is_release() {
-        sender
-            .lock()
-            .await
-            .send(Message::Text(
-                serde_json::json!({
-                    "type": "auth_result",
-                    "ok": authenticated,
-                })
-                .to_string()
-                .into(),
-            ))
-            .await?;
-    }
+    let _ = sender
+        .lock()
+        .await
+        .send(Message::Text(
+            serde_json::json!({
+                "type": "auth_result",
+                "ok": authenticated,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await;
 
     Ok(authenticated)
 }
@@ -1889,7 +2061,7 @@ mod tests {
         );
         assert_eq!(
             super::auth_token_from_frame("auth:secret", crate::transport::TransportMode::Release),
-            None
+            Some("secret".to_string())
         );
     }
 
@@ -1992,7 +2164,13 @@ fn get_voice_provider() -> String {
 /// Reads the remote token if explicitly configured by the user in environment or .env.
 /// Development may continue without one for compatibility; release remote peers then fail auth.
 /// In release mode, auto-generates and persists a token on first run.
+static REMOTE_TOKEN: OnceLock<String> = OnceLock::new();
+
 fn get_remote_token() -> String {
+    REMOTE_TOKEN.get_or_init(load_or_create_remote_token).clone()
+}
+
+fn load_or_create_remote_token() -> String {
     if let Ok(val) = std::env::var("BLINKY_REMOTE_TOKEN") {
         let trimmed = val.trim().to_string();
         if !trimmed.is_empty() {

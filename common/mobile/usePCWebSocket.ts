@@ -3,6 +3,8 @@ import {
   disconnectedConnectionState,
   type ConnectionStatus,
 } from './connectionState';
+import { saveSyncedApiKeys } from './lib/secure_keys';
+import { syncPcNotebooks } from './lib/mobile_rag_db';
 
 export type { ConnectionStatus } from './connectionState';
 
@@ -33,7 +35,8 @@ export type FileTransferMessage = {
   message?: string;
 };
 
-const RELEASE_TRANSPORT = process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE === 'release';
+const isProduction = typeof __DEV__ !== 'undefined' ? !__DEV__ : process.env.NODE_ENV === 'production';
+const RELEASE_TRANSPORT = isProduction || process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE === 'release';
 
 function loadNativeSecureSocketModule(): NativeSecureSocketModule | null {
   try {
@@ -199,8 +202,13 @@ export function usePCWebSocket() {
   const [fileTransferMessage, setFileTransferMessage] = useState<FileTransferMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const nativeRef = useRef<NativeSecureSocket | null>(null);
+  // Per-connection transport: true once a pinned native (wss) channel is in
+  // use. Mirrors RELEASE_TRANSPORT by default, but a scanned pairing payload
+  // can also request it (QR carries its own mode) — never the reverse.
+  const secureRef = useRef(false);
 
   const disconnect = useCallback((errorMessage?: string) => {
+    secureRef.current = false;
     if (nativeRef.current) {
       const nativeSocket = nativeRef.current;
       nativeRef.current = null;
@@ -225,7 +233,7 @@ export function usePCWebSocket() {
   }, []);
 
   /** Opens a WebSocket connection and authenticates it when a token is provided. */
-  const connect = useCallback(async (ipAddress: string, token?: string, certificatePin?: string) => {
+  const connect = useCallback(async (ipAddress: string, token?: string, certificatePin?: string, options?: { secure?: boolean }) => {
     disconnect();
     
     // Clean IP Address and default to port 9001 if no port is specified
@@ -245,11 +253,19 @@ export function usePCWebSocket() {
       formattedIp = `${formattedIp}:9001`;
     }
 
-    if (RELEASE_TRANSPORT) {
+    // Release builds never downgrade; a scanned QR can only upgrade a
+    // connection to the secure channel, never downgrade one.
+    const useSecure = RELEASE_TRANSPORT || options?.secure === true;
+    secureRef.current = useSecure;
+
+    if (useSecure) {
       const nativeModule = loadNativeSecureSocketModule();
       if (!nativeModule || ('isNative' in nativeModule && !(nativeModule as any).isNative)) {
+        secureRef.current = false;
         setStatus('error');
-        setErrorMsg('The release secure socket module is missing. Install a release/internal development build.');
+        setErrorMsg(!RELEASE_TRANSPORT
+          ? 'This pairing code requires the release build. Install the release APK to use QR pairing.'
+          : 'The release secure socket module is missing. Install a release/internal development build.');
         return;
       }
       if (!certificatePin?.trim()) {
@@ -295,6 +311,8 @@ export function usePCWebSocket() {
                   void nativeModule.sendText(socketId, 'get_system_info');
                   void nativeModule.sendText(socketId, JSON.stringify({ type: 'fs_get_quick_access' }));
                   void nativeModule.sendText(socketId, JSON.stringify({ type: 'fs_get_recent' }));
+                  void nativeModule.sendText(socketId, JSON.stringify({ type: 'get_api_keys' }));
+                  void nativeModule.sendText(socketId, JSON.stringify({ type: 'notebook_sync_pull' }));
                 }
               }, 300);
             } else {
@@ -305,6 +323,14 @@ export function usePCWebSocket() {
               setFileTransferMessage(parsed as FileTransferMessage);
             } else if (parsed.type === 'system_info') {
               setSystemInfo(parsed as SystemInfo);
+            } else if (parsed.type === 'api_keys_sync') {
+              if (parsed.keys) {
+                void saveSyncedApiKeys(parsed.keys);
+              }
+            } else if (parsed.type === 'notebook_sync_data') {
+              if (parsed.notebooks) {
+                void syncPcNotebooks(parsed.notebooks);
+              }
             } else if (parsed.type === 'power_event') {
               setLatestPowerEvent(parsed as PowerEvent);
             } else if (parsed.type === 'antigravity_approval') {
@@ -449,6 +475,8 @@ export function usePCWebSocket() {
               ws.send('get_system_info');
               ws.send(JSON.stringify({ type: 'fs_get_quick_access' }));
               ws.send(JSON.stringify({ type: 'fs_get_recent' }));
+              ws.send(JSON.stringify({ type: 'get_api_keys' }));
+              ws.send(JSON.stringify({ type: 'notebook_sync_pull' }));
             }
           }, 300);
         }
@@ -460,6 +488,14 @@ export function usePCWebSocket() {
             const parsed = JSON.parse(e.data);
             if (parsed.type === 'system_info') {
               setSystemInfo(parsed as SystemInfo);
+            } else if (parsed.type === 'api_keys_sync') {
+              if (parsed.keys) {
+                void saveSyncedApiKeys(parsed.keys);
+              }
+            } else if (parsed.type === 'notebook_sync_data') {
+              if (parsed.notebooks) {
+                void syncPcNotebooks(parsed.notebooks);
+              }
             } else if (typeof parsed.type === 'string' && parsed.type.startsWith('file_')) {
               setFileTransferMessage(parsed as FileTransferMessage);
             } else if (parsed.type === 'power_event') {
@@ -551,7 +587,7 @@ export function usePCWebSocket() {
   }, [disconnect]);
 
   const sendCommand = useCallback((command: PowerCommand | string) => {
-    if (RELEASE_TRANSPORT) {
+    if (RELEASE_TRANSPORT || secureRef.current) {
       return sendNativeText(command);
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -567,7 +603,7 @@ export function usePCWebSocket() {
   }, [sendCommand]);
   const sendQuery = useCallback((query: string, requestId: string, attachedImage?: string, attachedFile?: { name: string; base64: string; mimeType?: string; size?: number }) => {
     const payload = JSON.stringify({ requestId, query, attachedImage, attachedFile });
-    if (RELEASE_TRANSPORT) {
+    if (RELEASE_TRANSPORT || secureRef.current) {
       return sendNativeText(payload);
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -579,7 +615,7 @@ export function usePCWebSocket() {
 
   const sendFileTransferMessage = useCallback((message: Record<string, unknown>) => {
     const payload = JSON.stringify(message);
-    if (RELEASE_TRANSPORT) return sendNativeText(payload);
+    if (RELEASE_TRANSPORT || secureRef.current) return sendNativeText(payload);
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(payload);
       return true;

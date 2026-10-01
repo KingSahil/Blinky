@@ -34,6 +34,8 @@ export interface SecureTransportInfo {
   mode: 'development' | 'release';
   desktop_url: string;
   certificate_pin: string | null;
+  local_ip: string | null;
+  remote_token: string | null;
 }
 
 export interface SecureSocketEvent {
@@ -45,6 +47,24 @@ export interface SecureSocketEvent {
 
 export function getSecureTransportInfo(): Promise<SecureTransportInfo> {
   return invoke<SecureTransportInfo>('get_secure_transport_info');
+}
+
+export interface MobilePairingPayload {
+  v: number;
+  ips: string[];
+  ws_port: number;
+  discovery_port: number;
+  token: string;
+  certificate_pin: string | null;
+  mode: 'development' | 'release';
+}
+
+export function getMobilePairingPayload(): Promise<MobilePairingPayload> {
+  return invoke<MobilePairingPayload>('get_mobile_pairing_payload');
+}
+
+export function regenerateRemoteToken(): Promise<string> {
+  return invoke<string>('regenerate_remote_token');
 }
 
 export function connectSecureSocket(
@@ -110,6 +130,10 @@ export async function showCommandBar(): Promise<void> {
 
 export async function resizeCommandWindow(height: number): Promise<void> {
   return invoke('resize_command_window', { height });
+}
+
+export async function setCommandWindowSize(width: number, height: number): Promise<void> {
+  return invoke('set_command_window_size', { width, height });
 }
 
 export async function resizeAndMoveCommandWindow(x: number, y: number, width: number, height: number): Promise<void> {
@@ -241,3 +265,16 @@ export async function getCursorPosition(): Promise<{ x: number; y: number }> {
   }
   return { x: 0, y: 0 };
 }
+
+export async function openNotebookWindow(): Promise<void> {
+  if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+    return invoke('open_notebook_window');
+  }
+}
+
+export async function closeNotebookWindow(): Promise<void> {
+  if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+    return invoke('close_notebook_window');
+  }
+}
+

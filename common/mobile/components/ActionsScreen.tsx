@@ -14,6 +14,8 @@ interface ActionItem {
 
 const QUICK_ACTIONS: ActionItem[] = [
   { id: 'music', title: 'Play/Pause', icon: 'play', color: '#10B981', command: 'media_play_pause' },
+  { id: 'volume_up', title: 'Volume Up', icon: 'volume-high', color: '#38BDF8', command: 'volume_up' },
+  { id: 'volume_down', title: 'Volume Down', icon: 'volume-low', color: '#818CF8', command: 'volume_down' },
   { id: 'mute', title: 'Mute Audio', icon: 'volume-mute', color: '#EF4444', command: 'volume_mute' },
   { id: 'screenshot', title: 'Screenshot', icon: 'camera', color: '#3B82F6', command: 'screenshot' },
   { id: 'chrome', title: 'Open Browser', icon: 'globe', color: '#06B6D4', command: 'open_browser' },

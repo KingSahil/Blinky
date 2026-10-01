@@ -27,6 +27,12 @@ This directory contains the React Native Expo mobile application that connects t
 
 ## Running the Application
 
+### Local Android debug testing
+
+The debug APK intentionally uses Android's debuggable flag and the RevenueCat test key. It loads JavaScript from Metro, so install it with `install_apk.bat` (debug is the default), then start the PC development app from the repository root with `bun run dev`. The launcher starts Metro, forwards USB ports 9001, 9002, 9004, and 8081, and launches the mobile app. For a USB connection, use `localhost` in the mobile app.
+
+Use `install_apk.bat release` only when you intend to install the release APK. Do not use a debug APK with a packaged release desktop app: the debug app uses the development WebSocket transport, while the packaged desktop app uses pinned WSS.
+
 1. Ensure your computer and mobile device are connected to the **same local Wi-Fi network**.
 2. For a custom development build, run the following command inside `common/mobile` to start Metro:
    ```bash
@@ -38,11 +44,23 @@ If the app shows `Cannot find native module 'ExponentImagePicker'`, the JavaScri
 
 ## Connecting to Blinky
 
+Release builds open the link setup on the **QR** tab by default; debug builds
+show the manual form directly.
+
+**Option A — QR (release builds only, fastest, recommended)**
+
+1. Make sure Blinky is running on your desktop PC (`bun run dev`).
+2. In the PC app, click the **QR icon** in the Blinky header to show the pairing code.
+3. In the mobile app's **QR** tab, point the camera at the code — you connect instantly, no typing.
+
+**Option B — Manual**
+
 1. Make sure Blinky is running on your desktop PC (`bun run dev`).
 2. Obtain your computer's local IP address.
    * **Linux**: Run `ip route get 1.1.1.1 | awk '{print $7}'` in terminal.
    * **Windows**: Run `ipconfig` in Command Prompt and check your IPv4 address under your wireless adapter.
-3. In the mobile application screen, input your PC's IP address (e.g., `192.168.1.15`).
+3. Switch to the **Manual** tab, input your PC's IP address (e.g., `192.168.1.15`).
+   Release builds also need the remote token and certificate pin (shown in the PC app).
 4. Tap **Establish Link** to connect.
 5. Use the control buttons on your phone to trigger actions on your PC, or send an agent query from the mobile UI.
 

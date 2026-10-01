@@ -97,6 +97,16 @@ fn get_secure_transport_info(app: AppHandle) -> Result<serde_json::Value, String
 }
 
 #[tauri::command]
+fn get_mobile_pairing_payload(app: AppHandle) -> Result<serde_json::Value, String> {
+    websocket::mobile_pairing_payload(&app).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn regenerate_remote_token() -> Result<String, String> {
+    websocket::regenerate_remote_token().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn secure_socket_connect(
     app: AppHandle,
     socket_id: String,
@@ -301,6 +311,38 @@ fn resize_and_move_command_window(
         let _ = command.set_position(pos);
     }
     Ok(())
+}
+
+#[tauri::command]
+fn set_command_window_size(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+    if let Some(command) = app.get_webview_window("command") {
+        let size = tauri::LogicalSize::new(width, height);
+        let _ = command.set_size(size);
+        let _ = command.center();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_notebook_window(app: AppHandle) -> Result<(), String> {
+    if let Some(notebook) = app.get_webview_window("notebook") {
+        let _ = notebook.unminimize();
+        let _ = notebook.show();
+        let _ = notebook.set_focus();
+        Ok(())
+    } else {
+        Err("Notebook window not found".to_string())
+    }
+}
+
+#[tauri::command]
+fn close_notebook_window(app: AppHandle) -> Result<(), String> {
+    if let Some(notebook) = app.get_webview_window("notebook") {
+        let _ = notebook.hide();
+        Ok(())
+    } else {
+        Err("Notebook window not found".to_string())
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -995,6 +1037,12 @@ fn start_wake_word_detector(app: &AppHandle) {
 }
 
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    if !acquire_single_instance() {
+        eprintln!("Blinky is already running; ignoring the duplicate launch.");
+        return;
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -1002,6 +1050,8 @@ pub fn run() {
             run_tutor,
             run_agent_query,
             get_secure_transport_info,
+            get_mobile_pairing_payload,
+            regenerate_remote_token,
             secure_socket_connect,
             secure_socket_send,
             secure_socket_close,
@@ -1015,6 +1065,7 @@ pub fn run() {
             show_command_bar,
             resize_command_window,
             resize_and_move_command_window,
+            set_command_window_size,
             get_settings,
             save_settings,
             log_debug_message,
@@ -1022,7 +1073,9 @@ pub fn run() {
             resume_wake_word,
             confirm_recipe_save,
             set_agent_cursor_visibility,
-            get_cursor_position
+            get_cursor_position,
+            open_notebook_window,
+            close_notebook_window
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -1121,6 +1174,31 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("failed to run Blinky");
+}
+
+#[cfg(target_os = "windows")]
+fn acquire_single_instance() -> bool {
+    use std::sync::OnceLock;
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+
+    static INSTANCE_MUTEX: OnceLock<isize> = OnceLock::new();
+    let name: Vec<u16> = "Local\\Blinky.Desktop.SingleInstance"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    unsafe {
+        let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+        if handle.is_null() {
+            // Let Blinky run if Windows cannot create the guard.
+            return true;
+        }
+
+        let already_running = GetLastError() == ERROR_ALREADY_EXISTS;
+        let _ = INSTANCE_MUTEX.set(handle as isize);
+        !already_running
+    }
 }
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {

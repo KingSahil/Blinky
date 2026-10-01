@@ -36,7 +36,7 @@ mock.module('react-native-purchases', () => ({
       entitlements: { active: {} },
     }),
   },
-  LOG_LEVEL: { DEBUG: 'DEBUG' },
+  LOG_LEVEL: { DEBUG: 'DEBUG', ERROR: 'ERROR' },
 }));
 
 mock.module('react-native-purchases-ui', () => ({

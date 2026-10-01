@@ -1,7 +1,7 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo } from 'lucide-react';
+import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -15,7 +15,7 @@ import {
   shouldCompleteStepOnHighlightClick,
   shouldShowSummaryBubble,
 } from './lib/guidance';
-import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility, getSecureTransportInfo } from './lib/tauri';
+import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, setCommandWindowSize, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility, getSecureTransportInfo, getMobilePairingPayload, regenerateRemoteToken, openNotebookWindow } from './lib/tauri';
 
 import { linkCitationMarkers, preprocessMarkdown } from './lib/citations';
 import { getSarvamErrorMessage } from './lib/tts';
@@ -29,7 +29,7 @@ import {
 } from './lib/assemblyaiVoice';
 import { AdaptiveTransportManager } from './lib/adaptiveTransport';
 import type { TutorConversationMessage, TutorProgress, TutorResult } from './lib/types';
-import type { SecureTransportInfo } from './lib/tauri';
+import type { SecureTransportInfo, MobilePairingPayload } from './lib/tauri';
 
 
 interface AttachedMedia {
@@ -316,6 +316,14 @@ export function CommandBar() {
   const [showWaModal, setShowWaModal] = useState(false);
   const waCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
+  // Mobile pairing (QR) states
+  const [showMobileModal, setShowMobileModal] = useState(false);
+  const [pairingPayload, setPairingPayload] = useState<MobilePairingPayload | null>(null);
+  const [pairingIp, setPairingIp] = useState('');
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [pairingError, setPairingError] = useState('');
+  const mobileCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
   const SESSION_ID = 'blinky-default-session';
   const PORTS_TO_SCAN = [3000, 3001, 3002, 3003, 3004, 3005];
 
@@ -411,6 +419,54 @@ export function CommandBar() {
     };
   }, []);
 
+  // Mobile pairing: load payload (LAN IPs + token) for the Connect-Mobile QR.
+  const loadPairingPayload = async () => {
+    setPairingLoading(true);
+    setPairingError('');
+    try {
+      const payload = await getMobilePairingPayload();
+      setPairingPayload(payload);
+      setPairingIp((current) => (
+        current && payload.ips.includes(current) ? current : (payload.ips[0] ?? '')
+      ));
+    } catch (err) {
+      setPairingError(err instanceof Error ? err.message : 'Could not load pairing info. Is the desktop backend running?');
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
+  const openMobileModal = () => {
+    setShowMobileModal(true);
+    void loadPairingPayload();
+  };
+
+  const handleRegenerateToken = async () => {
+    setPairingLoading(true);
+    setPairingError('');
+    try {
+      await regenerateRemoteToken();
+      await loadPairingPayload();
+    } catch (err) {
+      setPairingError(err instanceof Error ? err.message : 'Could not regenerate token.');
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
+  // Compact JSON the mobile app scans: full credentials for one-scan connect.
+  const pairingQrText = pairingPayload && pairingIp
+    ? JSON.stringify({
+      v: 1,
+      ip: pairingIp,
+      ws: pairingPayload.ws_port,
+      disc: pairingPayload.discovery_port,
+      token: pairingPayload.token,
+      pin: pairingPayload.certificate_pin,
+      mode: pairingPayload.mode,
+    })
+    : '';
+
   // Keep WhatsApp status fresh so startup state and logout state update without user interaction.
   useEffect(() => {
     let active = true;
@@ -469,6 +525,27 @@ export function CommandBar() {
       );
     }
   }, [waStatus, waQr]);
+
+  // Draw mobile-pairing QR code to canvas
+  useEffect(() => {
+    if (showMobileModal && pairingQrText && mobileCanvasRef.current) {
+      QRCode.toCanvas(
+        mobileCanvasRef.current,
+        pairingQrText,
+        {
+          width: 180,
+          margin: 2,
+          color: {
+            dark: '#140f13',
+            light: '#ffffff'
+          }
+        },
+        (error) => {
+          if (error) console.error('Failed to render pairing QR Code:', error);
+        }
+      );
+    }
+  }, [showMobileModal, pairingQrText]);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -858,47 +935,75 @@ export function CommandBar() {
       }
     }
 
+    let transcribedText = '';
     const key = sarvamApiKey || sarvamApiKeyRef.current;
-    if (!key) {
-      setStatus('Please set your Sarvam AI API Key in settings first.');
-      void resumeWakeWord();
-      return;
+    if (key) {
+      try {
+        const formData = new FormData();
+        formData.append('file', blob, 'query.webm');
+        formData.append('model', 'saaras:v3');
+        formData.append('language_code', 'en-IN');
+
+        const res = await fetch('https://api.sarvam.ai/speech-to-text', {
+          method: 'POST',
+          headers: {
+            'api-subscription-key': key,
+          },
+          body: formData,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          transcribedText = data.transcript?.trim() || '';
+        } else {
+          let payload: any = {};
+          try { payload = await res.json(); } catch { }
+          console.warn('Sarvam STT failed, falling back to Groq Whisper:', getSarvamErrorMessage(payload, res.status));
+        }
+      } catch (err: any) {
+        console.warn('Sarvam STT connection error, falling back to Groq Whisper:', err);
+      }
     }
 
-    setStatus('Transcribing with Sarvam AI...');
-    try {
-      const formData = new FormData();
-      formData.append('file', blob, 'query.webm');
-      formData.append('model', 'saaras:v3');
-      formData.append('language_code', 'en-IN');
+    // Fallback: Groq Whisper Large V3
+    const gKey = groqApiKey || (import.meta as any).env?.VITE_GROQ_API_KEY;
+    if (!transcribedText && gKey) {
+      setStatus('Transcribing with Groq Whisper...');
+      try {
+        const groqFormData = new FormData();
+        groqFormData.append('file', blob, 'query.webm');
+        groqFormData.append('model', 'whisper-large-v3');
+        groqFormData.append('response_format', 'json');
 
-      const res = await fetch('https://api.sarvam.ai/speech-to-text', {
-        method: 'POST',
-        headers: {
-          'api-subscription-key': key,
-        },
-        body: formData,
-      });
+        const groqRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${gKey}`,
+          },
+          body: groqFormData,
+        });
 
-      if (!res.ok) {
-        let payload: any = {};
-        try { payload = await res.json(); } catch { }
-        throw new Error(getSarvamErrorMessage(payload, res.status));
+        if (groqRes.ok) {
+          const gData = await groqRes.json();
+          transcribedText = gData.text?.trim() || '';
+        } else {
+          const errBody = await groqRes.text();
+          console.error(`Groq Whisper STT error (${groqRes.status}):`, errBody);
+        }
+      } catch (gErr: any) {
+        console.error('Groq Whisper STT connection error:', gErr);
       }
+    }
 
-      const data = await res.json();
-      const transcript = data.transcript?.trim() || '';
-
-      if (transcript) {
-        setStatus(`Searching for: "${transcript}"`);
-        void executeTutor(transcript, true);
+    if (transcribedText) {
+      setStatus(`Searching for: "${transcribedText}"`);
+      void executeTutor(transcribedText, true);
+    } else {
+      if (!key && !gKey) {
+        setStatus('Please set your Sarvam AI or Groq API Key in settings first.');
       } else {
-        setStatus('Could not hear anything clearly.');
-        void resumeWakeWord();
+        setStatus('Could not hear anything clearly. Please check your mic and try again.');
       }
-    } catch (err: any) {
-      console.error('STT error:', err);
-      setStatus(`Transcription failed: ${err.message}`);
       void resumeWakeWord();
     }
   };
@@ -910,42 +1015,46 @@ export function CommandBar() {
     const currentVP = voiceProviderRef.current;
     let aaiKey = assemblyaiApiKey || assemblyaiApiKeyRef.current;
     let key = sarvamApiKey || sarvamApiKeyRef.current;
+    let gKey = groqApiKey || (import.meta as any).env?.VITE_GROQ_API_KEY || '';
 
-    if (currentVP === 'assemblyai') {
-      if (!aaiKey) {
-        aaiKey = (import.meta as any).env?.VITE_ASSEMBLY_AI_API_KEY || '';
-      }
-      if (!aaiKey) {
+    // If active provider is assemblyai but no key is present, auto-fallback to Sarvam or Groq
+    let effectiveVP = currentVP;
+    if (effectiveVP === 'assemblyai' && !aaiKey) {
+      if (key) {
+        effectiveVP = 'sarvam';
+      } else if (gKey) {
+        effectiveVP = 'sarvam'; // Will use Groq Whisper fallback in audio transcription
+      } else {
         try {
           const s = await getSettings();
           if (s.assemblyai_api_key) {
             setAssemblyaiApiKey(s.assemblyai_api_key);
             assemblyaiApiKeyRef.current = s.assemblyai_api_key;
             aaiKey = s.assemblyai_api_key;
-          }
-        } catch { }
-      }
-      if (!aaiKey) {
-        setStatus('Please set your AssemblyAI API Key in settings first.');
-        isStartingRecordingRef.current = false;
-        return;
-      }
-    } else {
-      if (!key) {
-        try {
-          const s = await getSettings();
-          if (s.sarvam_api_key) {
+          } else if (s.sarvam_api_key) {
             setSarvamApiKey(s.sarvam_api_key);
             sarvamApiKeyRef.current = s.sarvam_api_key;
             key = s.sarvam_api_key;
+            effectiveVP = 'sarvam';
+          } else if (s.groq_api_key) {
+            setGroqApiKey(s.groq_api_key);
+            gKey = s.groq_api_key;
+            effectiveVP = 'sarvam';
           }
         } catch { }
       }
-      if (!key) {
-        setStatus('Please set your Sarvam AI API Key in settings first.');
+    }
+
+    if (effectiveVP === 'assemblyai' && !aaiKey) {
+      if (!key && !gKey) {
+        setStatus('Please set your AssemblyAI, Sarvam, or Groq API Key in settings first.');
         isStartingRecordingRef.current = false;
         return;
       }
+    } else if (effectiveVP === 'sarvam' && !key && !gKey) {
+      setStatus('Please set your Sarvam AI or Groq API Key in settings first.');
+      isStartingRecordingRef.current = false;
+      return;
     }
 
     await pauseWakeWord();
@@ -2084,6 +2193,10 @@ export function CommandBar() {
         height = Math.max(height, 420);
       }
 
+      if (showMobileModal) {
+        height = Math.max(height, 460);
+      }
+
       const targetHeight = Math.ceil(height + 40);
       void resizeCommandWindow(targetHeight);
     };
@@ -2104,7 +2217,7 @@ export function CommandBar() {
       cancelAnimationFrame(raf);
       observer.disconnect();
     };
-  }, [showSettings, showWaModal, waStatus, provider, voiceProvider]);
+  }, [showSettings, showWaModal, showMobileModal, waStatus, provider, voiceProvider]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setQuestion(event.target.value);
@@ -2280,6 +2393,15 @@ export function CommandBar() {
           </div>
 
           <div className="command-actions">
+            <button
+              type="button"
+              className={`icon-action ${showMobileModal ? 'active' : ''}`}
+              aria-label="Connect Mobile"
+              title="Connect Mobile (show QR)"
+              onClick={openMobileModal}
+            >
+              <QrCode size={18} />
+            </button>
             <button
               ref={toggleButtonRef}
               type="button"
@@ -2463,25 +2585,23 @@ export function CommandBar() {
               </div>
             )}
 
-            {transportInfo?.mode === 'release' && transportInfo.certificate_pin && (
-              <div className="dropdown-section">
-                <h4>Mobile Release Link</h4>
-                <div style={{ fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', lineHeight: 1.45 }}>
-                  <div>Enter this certificate pin and your BLINKY_REMOTE_TOKEN in the mobile release build.</div>
-                  <code style={{ display: 'block', marginTop: '8px', wordBreak: 'break-all', color: '#fff' }}>
-                    {transportInfo.certificate_pin}
-                  </code>
-                  <button
-                    type="button"
-                    className="dropdown-option"
-                    style={{ marginTop: '8px', width: '100%' }}
-                    onClick={() => void navigator.clipboard?.writeText(transportInfo.certificate_pin || '')}
-                  >
-                    Copy certificate pin
-                  </button>
-                </div>
+            <div className="dropdown-section">
+              <h4>Mobile Companion</h4>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', lineHeight: 1.45 }}>
+                <div>Pair your phone to control Blinky remotely over local Wi-Fi.</div>
+                <button
+                  type="button"
+                  className="dropdown-option"
+                  style={{ marginTop: '8px', width: '100%' }}
+                  onClick={() => {
+                    setShowSettings(false);
+                    openMobileModal();
+                  }}
+                >
+                  <QrCode size={16} /> Show Mobile Pairing QR
+                </button>
               </div>
-            )}
+            </div>
 
             <div className="dropdown-section">
               <h4>WhatsApp</h4>
@@ -2695,6 +2815,18 @@ export function CommandBar() {
                 >
                   <Bot size={16} />
                 </button>
+                <button
+                  type="button"
+                  className="command-agent-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void openNotebookWindow();
+                  }}
+                  disabled={isRunning || isTranscribing}
+                  title="Open OKF Notebook Hub"
+                >
+                  <BookOpen size={16} />
+                </button>
               </div>
               <div className="command-input-actions-right">
                 <button
@@ -2878,6 +3010,89 @@ export function CommandBar() {
                     disabled={isWaActionLoading}
                   >
                     Retry Connection
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showMobileModal && (
+        <div className="wa-modal-backdrop" onClick={() => setShowMobileModal(false)}>
+          <div className="wa-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="wa-modal-header">
+              <h3>Connect Mobile</h3>
+              <button
+                type="button"
+                className="wa-modal-close"
+                onClick={() => setShowMobileModal(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="wa-modal-content">
+              {pairingLoading && !pairingPayload && (
+                <div className="wa-disconnected">
+                  <div className="wa-loader">
+                    <Loader2 className="spin" size={16} />
+                    <span>Preparing pairing code...</span>
+                  </div>
+                </div>
+              )}
+
+              {pairingError && (
+                <div className="wa-error-container">
+                  <p className="wa-error-msg">{pairingError}</p>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-retry"
+                    onClick={() => loadPairingPayload()}
+                    disabled={pairingLoading}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {pairingPayload && !pairingError && (
+                <div className="wa-qr-container">
+                  <p className="wa-scan-instruction">Scan with the Blinky mobile app (QR tab):</p>
+                  {pairingPayload.ips.length > 1 && (
+                    <div className="pairing-ip-row">
+                      <span className="wa-help-text">PC IP:</span>
+                      <select
+                        className="pairing-ip-select"
+                        value={pairingIp}
+                        onChange={(e) => setPairingIp(e.target.value)}
+                      >
+                        {pairingPayload.ips.map((ip) => (
+                          <option key={ip} value={ip}>{ip}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className="wa-qr-canvas-wrapper">
+                    <canvas ref={mobileCanvasRef} className="wa-qr-canvas" />
+                    {pairingLoading && (
+                      <div className="wa-qr-overlay">
+                        <Loader2 className="spin" size={24} />
+                      </div>
+                    )}
+                  </div>
+                  {pairingPayload.ips.length === 0 ? (
+                    <p className="wa-error-msg">No LAN address detected. Enter the PC IP manually in the app (see ./setup-mobile.sh output).</p>
+                  ) : (
+                    <p className="wa-help-text">Or enter manually: IP {pairingIp} :{pairingPayload.ws_port}, then Establish Link.</p>
+                  )}
+                  <p className="wa-help-text pairing-warning">Anyone who scans this can control this PC on your LAN.</p>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-cancel"
+                    onClick={handleRegenerateToken}
+                    disabled={pairingLoading}
+                  >
+                    {pairingLoading ? <Loader2 className="spin" size={14} /> : 'Regenerate code'}
                   </button>
                 </div>
               )}

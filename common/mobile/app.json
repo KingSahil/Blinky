@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "mobile",
-    "slug": "mobile",
+    "name": "Blinky",
+    "slug": "blinky",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -27,11 +27,21 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "extra": {},
+    "extra": {
+      "eas": {
+              "projectId": "afbfa0ff-70c3-4e96-9215-5a98981af54e"
+            }
+    },
     "plugins": [
       "expo-audio",
       "expo-status-bar",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Blinky to scan the pairing QR code shown in the PC app."
+        }
+      ]
     ]
   }
 }

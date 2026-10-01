@@ -1,4 +1,4 @@
-export type TabScreen = 'Chat' | 'Actions' | 'Files' | 'PC';
+export type TabScreen = 'Chat' | 'Actions' | 'Files' | 'PC' | 'Notebook';
 
 export interface AttachedFile {
   uri: string;
