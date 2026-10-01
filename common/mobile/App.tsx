@@ -56,6 +56,7 @@ import { SystemScreen } from './components/SystemScreen';
 import { SettingsModal } from './components/SettingsModal';
 import { FilesScreen } from './components/FilesScreen';
 import { BottomNavigation } from './components/BottomNavigation';
+import { NotebookScreen } from './components/NotebookScreen';
 import { PromoCodeModal } from './components/PromoCodeModal';
 import {
   initializePurchases,
@@ -2290,6 +2291,12 @@ export default function App() {
                 }
               }}
             />
+          )}
+
+          {activeTab === 'Notebook' && (
+            <View style={{ flex: 1 }}>
+              <NotebookScreen />
+            </View>
           )}
 
           {activeTab === 'PC' && (

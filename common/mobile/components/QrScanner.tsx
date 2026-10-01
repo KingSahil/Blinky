@@ -103,7 +103,7 @@ export function QrScanner({ onScanned, scanActive }: QrScannerProps) {
           barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
           onBarcodeScanned={
             scanActive && !locked
-              ? ({ data }) => {
+              ? ({ data }: { data: string }) => {
                   setLocked(true);
                   Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
                   onScanned(data);

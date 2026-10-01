@@ -313,6 +313,38 @@ fn resize_and_move_command_window(
     Ok(())
 }
 
+#[tauri::command]
+fn set_command_window_size(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+    if let Some(command) = app.get_webview_window("command") {
+        let size = tauri::LogicalSize::new(width, height);
+        let _ = command.set_size(size);
+        let _ = command.center();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_notebook_window(app: AppHandle) -> Result<(), String> {
+    if let Some(notebook) = app.get_webview_window("notebook") {
+        let _ = notebook.unminimize();
+        let _ = notebook.show();
+        let _ = notebook.set_focus();
+        Ok(())
+    } else {
+        Err("Notebook window not found".to_string())
+    }
+}
+
+#[tauri::command]
+fn close_notebook_window(app: AppHandle) -> Result<(), String> {
+    if let Some(notebook) = app.get_webview_window("notebook") {
+        let _ = notebook.hide();
+        Ok(())
+    } else {
+        Err("Notebook window not found".to_string())
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct BlinkySettings {
     provider: String,
@@ -1027,6 +1059,7 @@ pub fn run() {
             show_command_bar,
             resize_command_window,
             resize_and_move_command_window,
+            set_command_window_size,
             get_settings,
             save_settings,
             log_debug_message,
@@ -1034,7 +1067,9 @@ pub fn run() {
             resume_wake_word,
             confirm_recipe_save,
             set_agent_cursor_visibility,
-            get_cursor_position
+            get_cursor_position,
+            open_notebook_window,
+            close_notebook_window
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {

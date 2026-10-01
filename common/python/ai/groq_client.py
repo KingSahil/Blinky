@@ -446,10 +446,9 @@ def _format_groq_error(response: requests.Response, model: str = "") -> str:
         if _is_rate_limit_error(response):
             model_info = f" for model '{model}'" if model else ""
             return (
-                f"Groq request failed ({code or 'rate_limit_exceeded'}): {message}\n\n"
-                f"Tip: Free-tier Groq vision{model_info} has an 8,000 TPM limit. "
-                f"You can wait a moment for the token window to reset, configure a smaller image size via "
-                f"BLINKY_GROQ_IMAGE_MAX_DIM=768, or switch BLINKY_AI_PROVIDER to 'ollama' or 'mimo' in your .env."
+                f"Groq API rate limit reached (TPM exhausted){model_info}. "
+                f"If you are on the free tier, please try again in a few moments, reduce active document context, "
+                f"or upgrade to a Groq Pro / custom plan."
             )
         if message and code:
             return f"Groq request failed ({code}): {message}"

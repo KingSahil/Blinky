@@ -3,6 +3,8 @@ import {
   disconnectedConnectionState,
   type ConnectionStatus,
 } from './connectionState';
+import { saveSyncedApiKeys } from './lib/secure_keys';
+import { syncPcNotebooks } from './lib/mobile_rag_db';
 
 export type { ConnectionStatus } from './connectionState';
 
@@ -309,6 +311,8 @@ export function usePCWebSocket() {
                   void nativeModule.sendText(socketId, 'get_system_info');
                   void nativeModule.sendText(socketId, JSON.stringify({ type: 'fs_get_quick_access' }));
                   void nativeModule.sendText(socketId, JSON.stringify({ type: 'fs_get_recent' }));
+                  void nativeModule.sendText(socketId, JSON.stringify({ type: 'get_api_keys' }));
+                  void nativeModule.sendText(socketId, JSON.stringify({ type: 'notebook_sync_pull' }));
                 }
               }, 300);
             } else {
@@ -319,6 +323,14 @@ export function usePCWebSocket() {
               setFileTransferMessage(parsed as FileTransferMessage);
             } else if (parsed.type === 'system_info') {
               setSystemInfo(parsed as SystemInfo);
+            } else if (parsed.type === 'api_keys_sync') {
+              if (parsed.keys) {
+                void saveSyncedApiKeys(parsed.keys);
+              }
+            } else if (parsed.type === 'notebook_sync_data') {
+              if (parsed.notebooks) {
+                void syncPcNotebooks(parsed.notebooks);
+              }
             } else if (parsed.type === 'power_event') {
               setLatestPowerEvent(parsed as PowerEvent);
             } else if (parsed.type === 'antigravity_approval') {
@@ -463,6 +475,8 @@ export function usePCWebSocket() {
               ws.send('get_system_info');
               ws.send(JSON.stringify({ type: 'fs_get_quick_access' }));
               ws.send(JSON.stringify({ type: 'fs_get_recent' }));
+              ws.send(JSON.stringify({ type: 'get_api_keys' }));
+              ws.send(JSON.stringify({ type: 'notebook_sync_pull' }));
             }
           }, 300);
         }
@@ -474,6 +488,14 @@ export function usePCWebSocket() {
             const parsed = JSON.parse(e.data);
             if (parsed.type === 'system_info') {
               setSystemInfo(parsed as SystemInfo);
+            } else if (parsed.type === 'api_keys_sync') {
+              if (parsed.keys) {
+                void saveSyncedApiKeys(parsed.keys);
+              }
+            } else if (parsed.type === 'notebook_sync_data') {
+              if (parsed.notebooks) {
+                void syncPcNotebooks(parsed.notebooks);
+              }
             } else if (typeof parsed.type === 'string' && parsed.type.startsWith('file_')) {
               setFileTransferMessage(parsed as FileTransferMessage);
             } else if (parsed.type === 'power_event') {

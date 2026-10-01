@@ -39,6 +39,21 @@
         "skipTaskbar": true,
         "resizable": false,
         "shadow": false
+      },
+      {
+        "label": "notebook",
+        "title": "Blinky Knowledge Hub",
+        "url": "/notebook",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "visible": false,
+        "resizable": true,
+        "shadow": true
       }
     ],
     "security": {
