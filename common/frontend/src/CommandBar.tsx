@@ -1,7 +1,7 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen } from 'lucide-react';
+import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen, Cpu, Zap, Brain, Cloud, Wrench, Key, Smartphone, MessageSquare, Command, Palette, Info } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -2407,7 +2407,7 @@ export function CommandBar() {
           }}
         >
           <div className="command-icon">
-            <Sparkles size={18} />
+            <img src="/logo_text.png" alt="Blinky" style={{ height: 52, objectFit: 'contain' }} />
           </div>
 
           <div className="command-top-hint" data-tauri-drag-region>
@@ -2456,24 +2456,29 @@ export function CommandBar() {
         {showSettings && (
           <div ref={dropdownRef} className="command-settings-dropdown">
             <div className="dropdown-section">
-              <h4>Change Model</h4>
+              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Cpu size={14} /> Change Model</h4>
               <div className="dropdown-options">
-                {(['groq', 'ollama', 'deepseek', 'mimo', 'custom'] as const).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    className={`dropdown-option ${provider.toLowerCase().trim() === p ? 'active' : ''}`}
-                    onClick={() => updateProvider(p)}
-                  >
-                    <span>{p === 'custom' ? 'Custom (OpenAI-compatible)' : p.charAt(0).toUpperCase() + p.slice(1)}</span>
-                    {provider.toLowerCase().trim() === p && <Check size={14} className="active-dot" />}
-                  </button>
-                ))}
+                {(['groq', 'ollama', 'deepseek', 'mimo', 'custom'] as const).map((p) => {
+                  const Icon = p === 'groq' ? Zap : p === 'ollama' ? Cpu : p === 'deepseek' ? Brain : p === 'mimo' ? Cloud : Wrench;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      className={`dropdown-option ${provider.toLowerCase().trim() === p ? 'active' : ''}`}
+                      onClick={() => updateProvider(p)}
+                      style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                    >
+                      <Icon size={14} style={{ opacity: 0.7 }} />
+                      <span style={{ flex: 1, textAlign: 'left' }}>{p === 'custom' ? 'Custom (OpenAI)' : p.charAt(0).toUpperCase() + p.slice(1)}</span>
+                      {provider.toLowerCase().trim() === p && <Check size={14} className="active-dot" />}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
             <div className="dropdown-section">
-              <h4>Shortcut Key</h4>
+              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Command size={14} /> Shortcut Key</h4>
               <div className="dropdown-options">
                 <button
                   type="button"
@@ -2496,7 +2501,7 @@ export function CommandBar() {
 
             {provider.toLowerCase().trim() === 'groq' && (
               <div className="dropdown-section">
-                <h4>Groq API Key</h4>
+                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> Groq API Key</h4>
                 <input
                   type="password"
                   className="settings-input"
@@ -2509,7 +2514,7 @@ export function CommandBar() {
 
             {provider.toLowerCase().trim() === 'deepseek' && (
               <div className="dropdown-section">
-                <h4>DeepSeek API Key</h4>
+                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> DeepSeek API Key</h4>
                 <input
                   type="password"
                   className="settings-input"
@@ -2523,7 +2528,7 @@ export function CommandBar() {
             {provider.toLowerCase().trim() === 'custom' && (
               <>
                 <div className="dropdown-section">
-                  <h4>Custom API URL</h4>
+                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Globe size={14} /> Custom API URL</h4>
                   <input
                     type="text"
                     className="settings-input"
@@ -2533,7 +2538,7 @@ export function CommandBar() {
                   />
                 </div>
                 <div className="dropdown-section">
-                  <h4>Model</h4>
+                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Bot size={14} /> Model</h4>
                   <input
                     type="text"
                     className="settings-input"
@@ -2543,7 +2548,7 @@ export function CommandBar() {
                   />
                 </div>
                 <div className="dropdown-section">
-                  <h4>Custom API Key</h4>
+                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> Custom API Key</h4>
                   <input
                     type="password"
                     className="settings-input"
@@ -2557,7 +2562,7 @@ export function CommandBar() {
 
             <div className="dropdown-section">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                <h4>Voice Provider</h4>
+                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Mic size={14} /> Voice Provider</h4>
                 <span style={{ fontSize: '10px', background: 'rgba(255, 110, 95, 0.2)', color: '#ff8b6a', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
                   {voiceProvider === 'assemblyai' ? 'Universal-3 Pro' : 'Indic Voice'}
                 </span>
@@ -2583,7 +2588,7 @@ export function CommandBar() {
             {voiceProvider === 'assemblyai' ? (
               <div className="dropdown-section">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                  <h4>AssemblyAI API Key</h4>
+                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> AssemblyAI API Key</h4>
                   <span style={{ fontSize: '9.5px', color: 'rgba(255, 255, 255, 0.5)' }}>Universal-3 Pro</span>
                 </div>
                 <input
@@ -2596,7 +2601,7 @@ export function CommandBar() {
               </div>
             ) : (
               <div className="dropdown-section">
-                <h4>Sarvam AI API Key</h4>
+                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> Sarvam AI API Key</h4>
                 <input
                   type="password"
                   className="settings-input"
@@ -2608,7 +2613,7 @@ export function CommandBar() {
             )}
 
             <div className="dropdown-section">
-              <h4>Mobile Companion</h4>
+              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Smartphone size={14} /> Mobile Companion</h4>
               <div style={{ fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', lineHeight: 1.45 }}>
                 <div>Pair your phone to control Blinky remotely over local Wi-Fi.</div>
                 <button
@@ -2626,7 +2631,7 @@ export function CommandBar() {
             </div>
 
             <div className="dropdown-section">
-              <h4>WhatsApp</h4>
+              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><MessageSquare size={14} /> WhatsApp</h4>
               <div className="dropdown-options">
                 <button
                   type="button"
@@ -2643,7 +2648,7 @@ export function CommandBar() {
             </div>
 
             <div className="dropdown-section">
-              <h4>Shortcuts & Voice</h4>
+              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Settings size={14} /> Shortcuts & Voice</h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', marginTop: '4px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span>Toggle App</span>
@@ -2657,8 +2662,8 @@ export function CommandBar() {
             </div>
 
             <div className="dropdown-section dropdown-about">
-              <span>Theme: <strong>Ember</strong></span>
-              <span>About: <strong>v1.0.0</strong></span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Palette size={14} /> Theme: <strong>Ember</strong></span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Info size={14} /> About: <strong>v1.0.0</strong></span>
             </div>
           </div>
         )}
@@ -2668,7 +2673,7 @@ export function CommandBar() {
         {recipePrompt && (
           <div className="recipe-prompt-banner">
             <div className="recipe-prompt-title">
-              <Sparkles size={14} />
+              <img src="/blinky_mascot_logo.png" alt="Blinky" style={{ height: 24, objectFit: 'contain' }} />
               <span>Save this workflow?</span>
             </div>
             <div className="recipe-prompt-preview">
@@ -2864,7 +2869,11 @@ export function CommandBar() {
                   {isTranscribing ? (
                     <Loader2 className="spin" size={16} />
                   ) : isRecording ? (
-                    <span className="mic-record-indicator" />
+                    <div className="audio-wave">
+                      <div className="audio-wave-bar"></div>
+                      <div className="audio-wave-bar"></div>
+                      <div className="audio-wave-bar"></div>
+                    </div>
                   ) : (
                     <Mic size={16} />
                   )}
@@ -2901,7 +2910,7 @@ export function CommandBar() {
             <div className="command-result-container">
               {showSummaryBubble && (
                 <div className="command-summary-bubble">
-                  <Sparkles size={14} className="summary-sparkle" />
+                  <img src="/blinky_mascot_logo.png" className="summary-sparkle" style={{ height: 24, objectFit: 'contain' }} alt="Blinky" />
                   <div className="command-summary-text-container">
                     <span className="command-status">
                       <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents as any}>

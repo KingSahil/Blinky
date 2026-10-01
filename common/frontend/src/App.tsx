@@ -608,7 +608,7 @@ export function App() {
           }}
         >
           <div className="command-icon">
-            <Sparkles size={18} />
+            <img src="/logo_text.png" alt="Blinky" style={{ height: 52, objectFit: 'contain' }} />
           </div>
 
           <div className="command-top-hint" data-tauri-drag-region>
@@ -849,7 +849,7 @@ export function App() {
           {showStatus && (
             <div className="command-result-container">
               <div className="command-summary-bubble">
-                <Sparkles size={14} className="summary-sparkle" />
+                <img src="/blinky_mascot_logo.png" className="summary-sparkle" style={{ height: 24, objectFit: 'contain' }} alt="Blinky" />
                 <span className="command-status">
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
