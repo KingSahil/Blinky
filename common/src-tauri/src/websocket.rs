@@ -6,7 +6,7 @@ use futures_util::{
 use serde::Serialize;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -78,10 +78,10 @@ impl AgentDaemon {
 
         let mut child = cmd.spawn()?;
         let stdin = child.stdin.take().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::Other, "Failed to open stdin")
+            std::io::Error::other("Failed to open stdin")
         })?;
         let stdout = child.stdout.take().ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::Other, "Failed to open stdout")
+            std::io::Error::other("Failed to open stdout")
         })?;
         let reader = BufReader::new(stdout);
 
@@ -140,7 +140,7 @@ pub(crate) fn project_root() -> PathBuf {
     PathBuf::from(".")
 }
 
-pub(crate) fn python_executable(root: &PathBuf) -> PathBuf {
+pub(crate) fn python_executable(root: &Path) -> PathBuf {
     let mut candidates = vec![
         root.join("python_runtime").join("Python313"),
         root.join(".venv"),
@@ -189,7 +189,7 @@ pub(crate) fn python_executable(root: &PathBuf) -> PathBuf {
     }
 }
 
-pub(crate) fn read_env_file(root: &PathBuf) -> Vec<(String, String)> {
+pub(crate) fn read_env_file(root: &Path) -> Vec<(String, String)> {
     let env_path = root.join(".env");
     let Ok(contents) = std::fs::read_to_string(env_path) else {
         return Vec::new();
@@ -225,7 +225,7 @@ fn trim_env_value(value: &str) -> String {
     value.to_string()
 }
 
-pub(crate) fn write_env_file(root: &PathBuf, envs: &[(String, String)]) -> std::io::Result<()> {
+pub(crate) fn write_env_file(root: &Path, envs: &[(String, String)]) -> std::io::Result<()> {
     let env_path = root.join(".env");
     let mut content = String::new();
     for (k, v) in envs {
@@ -391,14 +391,13 @@ async fn start_discovery_server(
 
     let app_router = Router::new()
         .route("/discover", get(move || {
-            let (token, cert_pin) = get_token();
+            let (_token, cert_pin) = get_token();
             async move {
                 let mut headers = HeaderMap::new();
                 headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
                 headers.insert("Access-Control-Allow-Methods", "GET, OPTIONS".parse().unwrap());
                 headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
                 let resp = serde_json::json!({
-                    "token": token,
                     "certificate_pin": cert_pin,
                     "mode": format!("{:?}", mode),
                     "websocket_port": 9001,
@@ -1026,6 +1025,8 @@ where
                 continue;
             }
 
+            let is_authorized_for_secrets = is_loopback || has_presented_token;
+
             if trimmed == "get_system_info" || trimmed == "system_info" {
                 let info = crate::platform::get_system_telemetry();
                 let _ = ws_sender.lock().await
@@ -1178,6 +1179,11 @@ where
                     }
                 });
             } else if trimmed == "get_sarvam_key" {
+                if !is_authorized_for_secrets {
+                    let denied = auth_denied("get_sarvam_key");
+                    let _ = ws_sender.lock().await.send(Message::Text(denied.into())).await;
+                    continue;
+                }
                 let key = get_sarvam_api_key();
                 eprintln!("get_sarvam_key: key_present = {}", !key.is_empty());
                 let resp = serde_json::json!({
@@ -1192,6 +1198,11 @@ where
                     ))
                     .await;
             } else if trimmed == "get_assemblyai_key" {
+                if !is_authorized_for_secrets {
+                    let denied = auth_denied("get_assemblyai_key");
+                    let _ = ws_sender.lock().await.send(Message::Text(denied.into())).await;
+                    continue;
+                }
                 let key = get_assemblyai_api_key();
                 eprintln!("get_assemblyai_key: key_present = {}", !key.is_empty());
                 let resp = serde_json::json!({
@@ -1220,6 +1231,11 @@ where
                     ))
                     .await;
             } else if trimmed == "get_api_keys" || trimmed == "{\"type\":\"get_api_keys\"}" {
+                if !is_authorized_for_secrets {
+                    let denied = auth_denied("get_api_keys");
+                    let _ = ws_sender.lock().await.send(Message::Text(denied.into())).await;
+                    continue;
+                }
                 let root = project_root();
                 let envs = read_env_file(&root);
                 let find_env = |key: &str| -> String {
@@ -1246,6 +1262,11 @@ where
                     ))
                     .await;
             } else if trimmed == "notebook_sync_pull" || trimmed == "{\"type\":\"notebook_sync_pull\"}" {
+                if !is_authorized_for_secrets {
+                    let denied = auth_denied("notebook_sync_pull");
+                    let _ = ws_sender.lock().await.send(Message::Text(denied.into())).await;
+                    continue;
+                }
                 let root = project_root();
                 let store_path = root.join("tmp").join("notebooks").join("notebooks_store.json");
                 let notebooks_json: serde_json::Value = if store_path.exists() {
@@ -1314,6 +1335,11 @@ where
                         }
                         continue;
                     } else if msg_type == "get_api_keys" {
+                        if !is_authorized_for_secrets {
+                            let denied = auth_denied("get_api_keys");
+                            let _ = ws_sender.lock().await.send(Message::Text(denied.into())).await;
+                            continue;
+                        }
                         let root = project_root();
                         let envs = read_env_file(&root);
                         let find_env = |key: &str| -> String {
@@ -1341,6 +1367,11 @@ where
                             .await;
                         continue;
                     } else if msg_type == "notebook_sync_pull" {
+                        if !is_authorized_for_secrets {
+                            let denied = auth_denied("notebook_sync_pull");
+                            let _ = ws_sender.lock().await.send(Message::Text(denied.into())).await;
+                            continue;
+                        }
                         let root = project_root();
                         let store_path = root.join("tmp").join("notebooks").join("notebooks_store.json");
                         let notebooks_json: serde_json::Value = if store_path.exists() {

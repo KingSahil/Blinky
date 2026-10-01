@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
 import {
   listMobileNotebooks,
@@ -26,6 +27,8 @@ interface ChatMessage {
   text: string;
 }
 
+const SESSION_STORAGE_PREFIX = '@blinky_mobile_chat_session_';
+
 export const NotebookScreen: React.FC = () => {
   const [notebooks, setNotebooks] = useState<MobileNotebook[]>([]);
   const [activeNotebookId, setActiveNotebookId] = useState<string>('');
@@ -42,16 +45,53 @@ export const NotebookScreen: React.FC = () => {
   const [newTitle, setNewTitle] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
 
+  const loadNotebooks = async () => {
+    try {
+      const list = await listMobileNotebooks();
+      setNotebooks(list);
+      if (list.length > 0 && !activeNotebookId) {
+        setActiveNotebookId(list[0].id);
+      }
+    } catch (err) {
+      console.warn('[NotebookScreen] Error loading notebooks:', err);
+    }
+  };
+
   useEffect(() => {
     loadNotebooks();
   }, []);
 
-  const loadNotebooks = async () => {
-    const list = await listMobileNotebooks();
-    setNotebooks(list);
-    if (list.length > 0 && !activeNotebookId) {
-      setActiveNotebookId(list[0].id);
+  useEffect(() => {
+    if (activeNotebookId) {
+      loadSavedSession(activeNotebookId);
     }
+  }, [activeNotebookId]);
+
+  const loadSavedSession = async (nbId: string) => {
+    try {
+      const saved = await AsyncStorage.getItem(SESSION_STORAGE_PREFIX + nbId);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(parsed);
+          return;
+        }
+      }
+      // Default welcome message if no history exists for this notebook
+      setMessages([
+        {
+          id: `m_${Date.now()}`,
+          sender: 'ai',
+          text: 'Welcome to Blinky Mobile Notebook! Upload documents on your phone or query synced notebooks with Top-K Mobile Vector Search.',
+        },
+      ]);
+    } catch (_) {}
+  };
+
+  const persistMessages = async (nbId: string, msgs: ChatMessage[]) => {
+    try {
+      await AsyncStorage.setItem(SESSION_STORAGE_PREFIX + nbId, JSON.stringify(msgs));
+    } catch (_) {}
   };
 
   const activeNotebook = notebooks.find((n) => n.id === activeNotebookId) || notebooks[0];
@@ -90,14 +130,40 @@ export const NotebookScreen: React.FC = () => {
     setActiveNotebookId(created.id);
   };
 
+  const handleResetSession = () => {
+    if (!activeNotebook) return;
+    Alert.alert(
+      'Reset Session',
+      `Clear conversation history for "${activeNotebook.title}" and start a fresh session?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: async () => {
+            const initialMsg: ChatMessage = {
+              id: `m_${Date.now()}`,
+              sender: 'ai',
+              text: `Started a fresh session for "${activeNotebook.title}". What would you like to explore in your documents?`,
+            };
+            setMessages([initialMsg]);
+            await persistMessages(activeNotebook.id, [initialMsg]);
+          },
+        },
+      ]
+    );
+  };
+
   const handleSendQuery = async () => {
     const q = queryInput.trim();
     if (!q || loading || !activeNotebook) return;
 
     const userMsg: ChatMessage = { id: `u_${Date.now()}`, sender: 'user', text: q };
-    setMessages((prev) => [...prev, userMsg]);
+    const newMessages = [...messages, userMsg];
+    setMessages(newMessages);
     setQueryInput('');
     setLoading(true);
+    void persistMessages(activeNotebook.id, newMessages);
 
     try {
       const { systemPrompt, userPrompt, matchCount } = buildMobileOkfContext(
@@ -107,9 +173,8 @@ export const NotebookScreen: React.FC = () => {
       );
       const keys = await getSyncedApiKeys();
 
-      // Groq decommissioned llama-3.3-70b-versatile (Aug 2026). Use the
-      // current supported default, matching desktop (groq_client.py).
-      const GROQ_MODEL = 'openai/gpt-oss-120b';
+      // Active supported models: qwen/qwen3.8-27b, openai/gpt-oss-120b, openai/gpt-oss-20b
+      const GROQ_MODEL = 'qwen/qwen3.8-27b';
       let answer = '';
       if (keys.groq_key) {
         const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -151,7 +216,7 @@ export const NotebookScreen: React.FC = () => {
       } else if (keys.gemini_key) {
         try {
           const resp = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(keys.gemini_key)}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(keys.gemini_key)}`,
             {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -177,14 +242,18 @@ export const NotebookScreen: React.FC = () => {
       }
 
       const aiMsg: ChatMessage = { id: `ai_${Date.now()}`, sender: 'ai', text: answer };
-      setMessages((prev) => [...prev, aiMsg]);
+      const finalMessages = [...newMessages, aiMsg];
+      setMessages(finalMessages);
+      void persistMessages(activeNotebook.id, finalMessages);
     } catch (err: any) {
       const errMsg: ChatMessage = {
         id: `err_${Date.now()}`,
         sender: 'ai',
         text: `Error executing mobile vector query: ${err?.message || 'Network error'}`,
       };
-      setMessages((prev) => [...prev, errMsg]);
+      const finalMessages = [...newMessages, errMsg];
+      setMessages(finalMessages);
+      void persistMessages(activeNotebook.id, finalMessages);
     } finally {
       setLoading(false);
     }
@@ -203,18 +272,21 @@ export const NotebookScreen: React.FC = () => {
       {/* NOTEBOOK SELECTOR & VECTOR RAG TOGGLE */}
       {activeNotebook && (
         <View style={styles.subHeader}>
-          <Text style={styles.activeNbTitle}>{activeNotebook.title}</Text>
+          <Text style={styles.activeNbTitle} numberOfLines={1}>{activeNotebook.title}</Text>
           <View style={styles.controlsRow}>
             <TouchableOpacity
               style={[styles.toggleBtn, useVectorSearch ? styles.toggleBtnActive : null]}
               onPress={() => setUseVectorSearch(!useVectorSearch)}
             >
               <Text style={styles.toggleBtnText}>
-                {useVectorSearch ? '⚡ Vector RAG' : '📄 Full Context'}
+                {useVectorSearch ? '⚡ Vector' : '📄 Full'}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.attachBtn} onPress={handlePickDocument}>
-              <Text style={styles.attachBtnText}>📎 Attach File</Text>
+              <Text style={styles.attachBtnText}>📎 File</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.resetBtn} onPress={handleResetSession}>
+              <Text style={styles.resetBtnText}>🔄 Reset</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -284,8 +356,10 @@ const styles = StyleSheet.create({
   },
   toggleBtnActive: { backgroundColor: '#8b5cf6' },
   toggleBtnText: { color: '#ffffff', fontSize: 11, fontWeight: '600' },
-  attachBtn: { backgroundColor: '#0284c7', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6 },
+  attachBtn: { backgroundColor: '#0284c7', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6, marginRight: 8 },
   attachBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '600' },
+  resetBtn: { backgroundColor: '#ef4444', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
+  resetBtnText: { color: '#ffffff', fontSize: 12, fontWeight: '600' },
   chatStream: { flex: 1 },
   chatContent: { padding: 16 },
   bubble: { padding: 12, borderRadius: 12, marginBottom: 12, maxWidth: '85%' },

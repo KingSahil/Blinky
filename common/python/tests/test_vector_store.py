@@ -63,7 +63,7 @@ class TestVectorStore(unittest.TestCase):
             query="GPU requirements?",
             vector_matches=[doc_match]
         )
-        self.assertIn("VECTOR CHUNK: ai_manual.pdf", context["user_prompt"])
+        self.assertIn('name="ai_manual.pdf"', context["user_prompt"])
         self.assertIn("85%", context["user_prompt"])
         self.assertEqual(context["source_count"], 1)
 

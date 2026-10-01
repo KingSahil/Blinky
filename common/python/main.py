@@ -1421,7 +1421,8 @@ def run_notebook_intelligence(
     if use_vector_search:
         try:
             v_store = VectorStore()
-            vector_matches = v_store.search_top_k(notebook_id, question, top_k=5)
+            active_source_names = [s.get("source_name") for s in active_sources if s.get("source_name")]
+            vector_matches = v_store.search_top_k(notebook_id, question, top_k=5, active_sources=active_source_names)
         except Exception as e:
             LOGGER.warning(f"Vector search failed, falling back: {e}")
             vector_matches = None

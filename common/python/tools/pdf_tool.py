@@ -41,12 +41,7 @@ def resolve_explorer_pdf_context() -> Dict[str, Any]:
     except Exception as exc:
         LOGGER.warning(f"Could not query Windows File Explorer COM interface: {exc}")
 
-    # Fallback to current working directory if Explorer query yielded no files
-    if not selected_files and active_folder and active_folder.exists():
-        for candidate in active_folder.iterdir():
-            if candidate.suffix.lower() in {".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg"}:
-                selected_files.append(candidate)
-
+    # Do not auto-select random files if the user has nothing selected
     return {
         "active_folder": str(active_folder) if active_folder else str(Path.cwd()),
         "selected_files": [str(f) for f in selected_files],

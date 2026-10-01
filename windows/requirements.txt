@@ -29,7 +29,7 @@ winrt-Windows.Media.Ocr>=2.0.0; sys_platform == 'win32'
 winrt-Windows.Storage.Streams>=2.0.0; sys_platform == 'win32'
 
 # PDF Engine Dependencies
-pypdf>=4.0.0
+pypdf>=6.1.0
 PyMuPDF>=1.24.0
 reportlab>=4.2.0
 

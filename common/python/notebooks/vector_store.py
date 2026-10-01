@@ -137,21 +137,34 @@ class VectorStore:
         self,
         notebook_id: str,
         query: str,
-        top_k: int = 5
+        top_k: int = 5,
+        active_sources: Optional[List[str]] = None
     ) -> List[Tuple[Dict[str, Any], float]]:
         """
         Searches the vector store using cosine similarity and returns top-K matching chunks with similarity scores.
+        Filters by active_sources if provided.
         """
+        if active_sources is not None and not active_sources:
+            return []
+
         query_tokens = simple_tokenize(query)
         if not query_tokens:
             return []
         query_tf = calculate_term_frequencies(query_tokens)
 
         with self._get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM document_chunks WHERE notebook_id = ?",
-                (notebook_id,)
-            )
+            if active_sources is not None:
+                placeholders = ",".join("?" for _ in active_sources)
+                params: List[Any] = [notebook_id] + list(active_sources)
+                cursor = conn.execute(
+                    f"SELECT * FROM document_chunks WHERE notebook_id = ? AND source_name IN ({placeholders})",
+                    params
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT * FROM document_chunks WHERE notebook_id = ?",
+                    (notebook_id,)
+                )
             rows = cursor.fetchall()
 
         results: List[Tuple[Dict[str, Any], float]] = []
@@ -166,6 +179,15 @@ class VectorStore:
         # Sort descending by similarity score
         results.sort(key=lambda item: item[1], reverse=True)
         return results[:top_k]
+
+    def delete_source(self, notebook_id: str, source_name: str) -> None:
+        """Removes all indexed chunks for a single source."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "DELETE FROM document_chunks WHERE notebook_id = ? AND source_name = ?",
+                (notebook_id, source_name)
+            )
+            conn.commit()
 
     def clear_notebook(self, notebook_id: str) -> None:
         """Removes all indexed vector chunks for a given notebook."""

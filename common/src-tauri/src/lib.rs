@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::Duration;
@@ -79,7 +79,7 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
         set_window_capture_exclusion(w, false);
     }
 
-    let output = output_res.map_err(|error| error)?;
+    let output = output_res?;
 
     let parsed: serde_json::Value = serde_json::from_str(&output)
         .map_err(|err| format!("Python worker returned invalid JSON: {err}. Raw: {output}"))?;
@@ -658,7 +658,7 @@ fn run_python_worker(
     Ok(stdout_accumulated)
 }
 
-fn ensure_env_file(root: &PathBuf) {
+fn ensure_env_file(root: &Path) {
     let env_path = root.join(".env");
     if !env_path.exists() {
         let example_path = root.join("common").join(".envexample");
@@ -748,7 +748,7 @@ fn project_root(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|err| format!("Cannot locate app resource directory: {err}"))
 }
 
-fn python_executable(root: &PathBuf) -> PathBuf {
+fn python_executable(root: &Path) -> PathBuf {
     let mut candidates = vec![root.join("python_runtime").join("Python313"), root.join(".venv")];
 
     if let Ok(cwd) = std::env::current_dir() {
@@ -1103,10 +1103,10 @@ pub fn run() {
         .setup(|app| {
             register_exit_cursor_restorer();
             setup_tray(app)?;
-            start_ui_observer(&app.handle());
+            start_ui_observer(app.handle());
 
-            start_whatsapp_backend(&app.handle());
-            start_wake_word_detector(&app.handle());
+            start_whatsapp_backend(app.handle());
+            start_wake_word_detector(app.handle());
 
             #[cfg(target_os = "linux")]
             {

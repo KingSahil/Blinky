@@ -227,21 +227,30 @@ def redact_sensitive_data_in_pdf(
 
     try:
         import fitz
+        import re
         doc = fitz.open(str(in_file))
         redact_count = 0
 
         for page in doc:
+            page_text = page.get_text("text")
             for pattern in patterns:
-                matches = page.search_for(pattern)
-                for rect in matches:
-                    page.add_redact_annot(rect, fill=(0, 0, 0))
-                    redact_count += 1
+                for match in re.finditer(pattern, page_text):
+                    matched_str = match.group(0).strip()
+                    if matched_str:
+                        matches = page.search_for(matched_str)
+                        for rect in matches:
+                            page.add_redact_annot(rect, fill=(0, 0, 0))
+                            redact_count += 1
             page.apply_redactions()
 
         doc.save(str(out_file))
         LOGGER.info(f"Redacted {redact_count} sensitive item(s) in {out_file.name}")
         return out_file
     except Exception as exc:
-        LOGGER.warning(f"Redaction fallback writing file: {exc}")
-        out_file.write_bytes(in_file.read_bytes())
-        return out_file
+        LOGGER.error(f"Redaction failed for {in_file}: {exc}")
+        if out_file.exists():
+            try:
+                out_file.unlink()
+            except Exception:
+                pass
+        raise RuntimeError(f"Redaction failed for {in_file.name}: {exc}")
