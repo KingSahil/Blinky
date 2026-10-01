@@ -1,6 +1,13 @@
-from __future__ import annotations
-
+from html import escape
 from typing import Dict, Any, List, Optional, Tuple
+
+
+def _escape_attr(val: Any) -> str:
+    return escape(str(val if val is not None else ""), quote=True)
+
+
+def _escape_content(val: Any) -> str:
+    return escape(str(val if val is not None else ""))
 
 
 def build_okf_prompt_context(
@@ -17,9 +24,9 @@ def build_okf_prompt_context(
     if vector_matches:
         v_blocks = []
         for match, score in vector_matches:
-            src_name = match.get("source_name", "unknown")
+            src_name = _escape_attr(match.get("source_name", "unknown"))
             idx = match.get("chunk_index", 0)
-            content = match.get("content", "")
+            content = _escape_content(match.get("content", ""))
             v_blocks.append(
                 f'<context_source name="{src_name}" chunk="{idx + 1}" match_score="{int(score * 100)}%">\n{content}\n</context_source>'
             )
@@ -27,8 +34,8 @@ def build_okf_prompt_context(
     else:
         okf_source_blocks = []
         for src in active_sources:
-            src_name = src.get("source_name", "unknown")
-            content = src.get("okf_content", "")
+            src_name = _escape_attr(src.get("source_name", "unknown"))
+            content = _escape_content(src.get("okf_content", ""))
             okf_source_blocks.append(f'<context_source name="{src_name}">\n{content}\n</context_source>')
         sources_payload = "\n\n".join(okf_source_blocks) if okf_source_blocks else "[No active notebook sources selected]"
         # Token protection for free-tier TPM limits
