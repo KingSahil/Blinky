@@ -1,4 +1,5 @@
 import { requireOptionalNativeModule, type EventSubscription } from 'expo-modules-core';
+import { toExactArrayBuffer, acceptReadBuffer } from '../../lib/fileBytes';
 
 type NativeSecureSocketFunctions = {
   connect(id: string, url: string, pin: string): Promise<void>;
@@ -154,34 +155,70 @@ async function computeSha256(buffer: ArrayBuffer): Promise<string> {
   return sha256Pure(new Uint8Array(buffer));
 }
 
-async function readUriAsArrayBuffer(uri: string): Promise<ArrayBuffer> {
-  // Method 1: React Native fetch() handles content:// and file:// natively
+/**
+ * Copies a Uint8Array view into an exactly-sized ArrayBuffer.
+ * Re-exported from lib/fileBytes (dependency-free, unit-tested).
+ */
+export { toExactArrayBuffer } from '../../lib/fileBytes';
+
+async function expectedFileSize(uri: string): Promise<number | null> {
+  // Ground truth for read verification: filesystem-reported size.
   try {
-    const res = await fetch(uri);
-    const blob = await res.blob();
-    if (blob && typeof blob.size === 'number' && blob.size > 0) {
-      return await new Promise<ArrayBuffer>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as ArrayBuffer);
-        reader.onerror = () => reject(reader.error || new Error('Failed to read file content'));
-        reader.readAsArrayBuffer(blob);
-      });
+    const { File } = require('expo-file-system');
+    if (typeof File === 'function') {
+      const s = new File(uri).size;
+      if (typeof s === 'number' && s > 0) return s;
     }
   } catch {}
+  try {
+    const FileSystem = require('expo-file-system/legacy');
+    if (FileSystem?.getInfoAsync) {
+      const info = await FileSystem.getInfoAsync(uri);
+      if (info?.exists && typeof info.size === 'number' && info.size > 0) return info.size;
+    }
+  } catch {}
+  return null;
+}
 
-  // Method 2: Modern expo-file-system File class
+async function readUriAsArrayBuffer(uri: string): Promise<ArrayBuffer> {
+  const expected = await expectedFileSize(uri);
+  const accept = (buf: ArrayBuffer | null | undefined): ArrayBuffer | null =>
+    acceptReadBuffer(buf, expected);
+
+  // Method 1: Modern expo-file-system File class (direct bytes, no blob store).
   try {
     const { File } = require('expo-file-system');
     if (typeof File === 'function') {
       const file = new File(uri);
       const bytes = await file.bytes();
       if (bytes && bytes.length > 0) {
-        return bytes.buffer;
+        // Defensive copy: bytes may be a view into a larger pooled buffer —
+        // returning bytes.buffer raw would hash/upload surrounding garbage.
+        const exact = toExactArrayBuffer(bytes);
+        const ok = accept(exact);
+        if (ok) return ok;
       }
     }
   } catch {}
 
-  // Method 3: expo-file-system/legacy
+  // Method 2: React Native fetch() handles content:// and file:// natively.
+  // (Kept second: it round-trips through the native blob store + base64.)
+  try {
+    const res = await fetch(uri);
+    const blob = await res.blob();
+    if (blob && typeof blob.size === 'number' && blob.size > 0) {
+      const buf = await new Promise<ArrayBuffer>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as ArrayBuffer);
+        reader.onerror = () => reject(reader.error || new Error('Failed to read file content'));
+        reader.readAsArrayBuffer(blob);
+      });
+      const ok = accept(buf);
+      if (ok) return ok;
+    }
+  } catch {}
+
+  // Method 3: expo-file-system/legacy base64 read.
   try {
     const FileSystem = require('expo-file-system/legacy');
     if (FileSystem?.readAsStringAsync) {
@@ -194,11 +231,16 @@ async function readUriAsArrayBuffer(uri: string): Promise<ArrayBuffer> {
       for (let i = 0; i < len; i++) {
         bytes[i] = binaryStr.charCodeAt(i);
       }
-      return bytes.buffer;
+      const ok = accept(bytes.buffer);
+      if (ok) return ok;
     }
   } catch {}
 
-  throw new Error('Unable to read selected file on this device.');
+  throw new Error(
+    expected !== null
+      ? `Could not read ${expected} exact bytes from the selected file (got a short/long read).`
+      : 'Unable to read selected file on this device.'
+  );
 }
 
 function getNative(): NativeSecureSocketModule {
