@@ -26,7 +26,7 @@ import type { AttachedFile } from '../types';
 interface CommandComposerProps {
   queryText: string;
   setQueryText: (text: string) => void;
-  onSubmit: (files: AttachedFile[]) => void;
+  onSubmit: (files: AttachedFile[]) => Promise<boolean>;
   onStop: () => void;
   status: 'idle' | 'processing' | 'success' | 'error';
   isConnected: boolean;
@@ -58,6 +58,7 @@ export function CommandComposer({
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  const submission = useRef({ id: 0, pending: false });
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   const attachAnim = useRef(new Animated.Value(0)).current;
@@ -361,7 +362,10 @@ export function CommandComposer({
               {status === 'processing' ? (
                 <TouchableOpacity
                   style={styles.stopBtn}
-                  onPress={onStop}
+                  onPress={() => {
+                    submission.current = { id: submission.current.id + 1, pending: false };
+                    onStop();
+                  }}
                   activeOpacity={0.7}
                 >
                   <View style={styles.stopSquare} />
@@ -372,10 +376,23 @@ export function CommandComposer({
                     styles.sendBtn,
                     (!isConnected || (!queryText.trim() && attachedFiles.length === 0)) && styles.sendBtnDisabled
                   ]}
-                  onPress={() => {
+                  onPress={async () => {
+                    if (submission.current.pending) return;
+                    const id = submission.current.id + 1;
+                    submission.current = { id, pending: true };
+                    const submitted = new Set(attachedFiles);
                     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    onSubmit(attachedFiles);
-                    setAttachedFiles([]);
+                    try {
+                      if (await onSubmit(attachedFiles) && submission.current.id === id) {
+                        setAttachedFiles(previous => previous.filter(file => !submitted.has(file)));
+                      }
+                    } catch (error) {
+                      if (submission.current.id === id) {
+                        Alert.alert('Message not sent', error instanceof Error ? error.message : 'Please try again.');
+                      }
+                    } finally {
+                      if (submission.current.id === id) submission.current.pending = false;
+                    }
                   }}
                   disabled={!isConnected || (!queryText.trim() && attachedFiles.length === 0)}
                   activeOpacity={0.7}

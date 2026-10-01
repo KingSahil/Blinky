@@ -49,6 +49,38 @@ function start() {
 }
 const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 
+test('attachment planning uses the authenticated socket and consumes the matching AI result', async () => {
+  const id = start(); emit('onOpen', id);
+  emit('onMessage', id, { data: JSON.stringify({ type: 'auth_result', ok: true }) });
+  const result = render().planAttachments('These belong with my receipts', [{ name: 'screen.png', type: 'image' }]);
+  const request = JSON.parse(sendText.mock.calls.at(-1)![1]);
+  expect(request.type).toBe('file_route');
+  emit('onMessage', id, { data: JSON.stringify({ type: 'file_route_result', requestId: request.requestId, action: 'transfer' }) });
+  expect(await result).toBe('transfer');
+  expect(render().fileTransferMessage).toBeNull();
+});
+
+test('disconnect rejects an outstanding attachment plan', async () => {
+  const id = start(); emit('onOpen', id);
+  emit('onMessage', id, { data: JSON.stringify({ type: 'auth_result', ok: true }) });
+  const result = render().planAttachments('Summarize', [{ name: 'screen.png', type: 'image' }]);
+  render().disconnect();
+  await expect(result).rejects.toThrow('connection closed');
+});
+
+test('late canceled routing errors never reach an ongoing transfer', async () => {
+  const id = start(); emit('onOpen', id);
+  emit('onMessage', id, { data: JSON.stringify({ type: 'auth_result', ok: true }) });
+  const result = render().planAttachments('Summarize', [{ name: 'screen.png', type: 'image' }]);
+  const request = JSON.parse(sendText.mock.calls.at(-1)![1]);
+  render().cancelAttachmentPlanning();
+  await expect(result).rejects.toThrow('connection closed');
+  emit('onMessage', id, { data: JSON.stringify({ type: 'file_route_error', requestId: request.requestId, message: 'AI offline' }) });
+  expect(render().fileTransferMessage).toBeNull();
+  emit('onMessage', id, { data: JSON.stringify({ type: 'file_error', requestId: 'transfer', message: 'Upload error' }) });
+  expect(render().fileTransferMessage?.requestId).toBe('transfer');
+});
+
 beforeEach(() => {
   slots = []; cursor = 0; cleanup = undefined; listeners.clear(); timers.clear();
   connectNative.mockReset(); sendText.mockReset(); close.mockReset();

@@ -8,10 +8,10 @@ import {
   TextInput,
   ActivityIndicator,
   KeyboardAvoidingView,
-  Platform,
   ScrollView,
   Animated,
   PanResponder,
+  Keyboard,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -58,6 +58,8 @@ export interface SettingsModalProps {
 
 export function SettingsModal(props: SettingsModalProps) {
   const panY = useRef(new Animated.Value(0)).current;
+  const scrollRef = useRef<ScrollView>(null);
+  const focusedInput = useRef<number | null>(null);
   const [linkTab, setLinkTab] = useState<LinkTab>('qr');
   const [qrError, setQrError] = useState<string | null>(null);
   const [showRescanScanner, setShowRescanScanner] = useState<boolean>(false);
@@ -108,8 +110,31 @@ export function SettingsModal(props: SettingsModalProps) {
       panY.setValue(0);
       setQrError(null);
       setShowRescanScanner(false);
+    } else {
+      focusedInput.current = null;
     }
   }, [props.visible]);
+
+  useEffect(() => {
+    if (!props.visible) return;
+    const subscription = Keyboard.addListener('keyboardDidShow', () => {
+      if (focusedInput.current != null) {
+        scrollRef.current?.scrollResponderScrollNativeHandleToKeyboard(focusedInput.current, 24, true);
+      }
+    });
+    return () => subscription.remove();
+  }, [props.visible]);
+
+  const handleInputFocus = (event: { nativeEvent: { target: number } }) => {
+    const target = event.nativeEvent.target;
+    focusedInput.current = target;
+    // Also handle switching fields while the keyboard is already open.
+    setTimeout(() => {
+      if (focusedInput.current === target) {
+        scrollRef.current?.scrollResponderScrollNativeHandleToKeyboard(target, 24, true);
+      }
+    }, 100);
+  };
 
   if (!props.visible) return null;
 
@@ -138,7 +163,7 @@ export function SettingsModal(props: SettingsModalProps) {
 
   return (
     <Modal visible={props.visible} animationType="fade" transparent={true} onRequestClose={handleDismiss}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalOverlay}>
+      <KeyboardAvoidingView behavior="padding" style={styles.modalOverlay}>
         <Animated.View
           style={[
             styles.modalContent,
@@ -161,7 +186,13 @@ export function SettingsModal(props: SettingsModalProps) {
             </TouchableOpacity>
           </View>
           
-          <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            ref={scrollRef}
+            style={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+          >
             {props.RELEASE_TRANSPORT ? (
               // ================= RELEASE MODE: QR-FIRST & WHATSAPP WEB STYLE =================
               <View>
@@ -381,6 +412,7 @@ export function SettingsModal(props: SettingsModalProps) {
                         placeholder="Enter PC IP (e.g. 100.122.62.2)"
                         placeholderTextColor={colors.textMuted}
                         value={props.ipAddress}
+                        onFocus={handleInputFocus}
                         onChangeText={props.setIpAddress}
                         editable={!props.isConnected && props.status !== 'connecting'}
                         keyboardType="numeric"
@@ -452,6 +484,7 @@ export function SettingsModal(props: SettingsModalProps) {
                 placeholder="Windows Lockscreen Password or PIN"
                 placeholderTextColor={colors.textMuted}
                 value={props.workstationPin}
+                onFocus={handleInputFocus}
                 onChangeText={(val) => {
                   props.setWorkstationPin(val);
                   AsyncStorage.setItem(props.WORKSTATION_PIN_STORAGE_KEY, val).catch(() => {});
@@ -491,6 +524,7 @@ export function SettingsModal(props: SettingsModalProps) {
                   placeholder={props.systemInfo?.network?.mac_address || "e.g. 68:c6:ac:a2:d2:30"}
                   placeholderTextColor={colors.textMuted}
                   value={props.macAddress}
+                  onFocus={handleInputFocus}
                   onChangeText={props.setMacAddress}
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -553,6 +587,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     marginTop: spacing.xs,
+    flexShrink: 1,
   },
   connectionSubtitle: {
     ...typography.bodyMedium,

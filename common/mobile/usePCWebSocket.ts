@@ -5,6 +5,7 @@ import {
 } from './connectionState';
 import { saveSyncedApiKeys } from './lib/secure_keys';
 import { syncPcNotebooks } from './lib/mobile_rag_db';
+import { AttachmentPlanner } from './lib/attachmentRouting';
 
 export type { ConnectionStatus } from './connectionState';
 
@@ -206,6 +207,7 @@ export function usePCWebSocket() {
   const [fsFileData, setFsFileData] = useState<FsFileData | null>(null);
   const [fileTransferMessage, setFileTransferMessage] = useState<FileTransferMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const attachmentPlannerRef = useRef(new AttachmentPlanner());
   const nativeRef = useRef<NativeSecureSocket | null>(null);
   // Per-connection transport: true once a pinned native (wss) channel is in
   // use. Mirrors RELEASE_TRANSPORT by default, but a scanned pairing payload
@@ -213,6 +215,7 @@ export function usePCWebSocket() {
   const secureRef = useRef(false);
 
   const disconnect = useCallback((errorMessage?: string) => {
+    attachmentPlannerRef.current.cancel();
     secureRef.current = false;
     if (nativeRef.current) {
       const nativeSocket = nativeRef.current;
@@ -324,7 +327,9 @@ export function usePCWebSocket() {
               disconnect('The PC rejected the remote token.');
             }
           } else if (nativeRef.current.authenticated) {
-            if (typeof parsed.type === 'string' && parsed.type.startsWith('file_')) {
+            if (attachmentPlannerRef.current.handle(parsed)) {
+              // Planning responses are consumed by their matching request.
+            } else if (typeof parsed.type === 'string' && parsed.type.startsWith('file_')) {
               setFileTransferMessage(parsed as FileTransferMessage);
             } else if (parsed.type === 'system_info') {
               setSystemInfo(parsed as SystemInfo);
@@ -519,6 +524,8 @@ export function usePCWebSocket() {
               if (parsed.notebooks) {
                 void syncPcNotebooks(parsed.notebooks);
               }
+            } else if (attachmentPlannerRef.current.handle(parsed)) {
+              // Planning responses are consumed by their matching request.
             } else if (typeof parsed.type === 'string' && parsed.type.startsWith('file_')) {
               setFileTransferMessage(parsed as FileTransferMessage);
             } else if (parsed.type === 'power_event') {
@@ -576,6 +583,7 @@ export function usePCWebSocket() {
         console.log(`[WS] ws.onclose fired: code=${e?.code}, reason=${e?.reason}`);
         if (connectTimeout) clearTimeout(connectTimeout);
         if (wsRef.current === ws) {
+          attachmentPlannerRef.current.cancel();
           setStatus('disconnected');
           wsRef.current = null;
         }
@@ -585,6 +593,7 @@ export function usePCWebSocket() {
         console.log(`[WS] ws.onerror fired:`, e?.message || e);
         if (connectTimeout) clearTimeout(connectTimeout);
         if (wsRef.current === ws) {
+          attachmentPlannerRef.current.cancel();
           setStatus('error');
           setErrorMsg(`Failed to connect to ${formattedIp}. ${e?.message || 'Check Wi-Fi & PC firewall.'}`);
           wsRef.current = null;
@@ -651,6 +660,7 @@ export function usePCWebSocket() {
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      attachmentPlannerRef.current.cancel();
       if (nativeRef.current) {
         const nativeSocket = nativeRef.current;
         nativeRef.current = null;
@@ -763,6 +773,9 @@ export function usePCWebSocket() {
     sendCommand,
     sendQuery,
     sendFileTransferMessage,
+    planAttachments: (prompt: string, files: { name: string; type?: string; mimeType?: string }[]) =>
+      attachmentPlannerRef.current.request(prompt, files, sendFileTransferMessage),
+    cancelAttachmentPlanning: () => attachmentPlannerRef.current.cancel(),
     getFileTransferModule,
     fetchSystemInfo,
     sendAntigravityDecision,

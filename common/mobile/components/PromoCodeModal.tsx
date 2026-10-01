@@ -32,6 +32,8 @@ export function PromoCodeModal({ visible, onClose, onSuccess }: PromoCodeModalPr
   const [result, setResult] = useState<PromoRedemptionResult | null>(null);
 
   const panY = useRef(new Animated.Value(0)).current;
+  const scrollRef = useRef<ScrollView>(null);
+  const focusedInput = useRef<number | null>(null);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -68,7 +70,19 @@ export function PromoCodeModal({ visible, onClose, onSuccess }: PromoCodeModalPr
       setCode('');
       setResult(null);
       setLoading(false);
+    } else {
+      focusedInput.current = null;
     }
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible) return;
+    const subscription = Keyboard.addListener('keyboardDidShow', () => {
+      if (focusedInput.current != null) {
+        scrollRef.current?.scrollResponderScrollNativeHandleToKeyboard(focusedInput.current, 24, true);
+      }
+    });
+    return () => subscription.remove();
   }, [visible]);
 
   const handleClose = () => {
@@ -129,13 +143,14 @@ export function PromoCodeModal({ visible, onClose, onSuccess }: PromoCodeModalPr
       <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <View style={styles.overlay}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+            behavior="padding"
             style={styles.keyboardAvoid}
           >
             <ScrollView
+              ref={scrollRef}
               contentContainerStyle={styles.scrollContent}
               keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
               showsVerticalScrollIndicator={false}
               bounces={false}
             >
@@ -179,6 +194,9 @@ export function PromoCodeModal({ visible, onClose, onSuccess }: PromoCodeModalPr
                   placeholder="e.g. SHIPATHON, BLINKYVIP"
                   placeholderTextColor={colors.textMuted}
                   value={code}
+                  onFocus={(event) => {
+                    focusedInput.current = event.nativeEvent.target;
+                  }}
                   onChangeText={(val) => {
                     setCode(val.toUpperCase());
                     if (result) setResult(null);
