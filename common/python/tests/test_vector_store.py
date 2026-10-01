@@ -68,5 +68,20 @@ class TestVectorStore(unittest.TestCase):
         self.assertEqual(context["source_count"], 1)
 
 
+    def test_semantic_synonym_search(self):
+        doc1 = "The vehicle was repaired by the mechanic at the garage."
+        doc2 = "Photosynthesis occurs inside chloroplasts using solar radiation."
+        self.store.index_document(notebook_id="nb_sem_1", source_name="cars.txt", content=doc1)
+        self.store.index_document(notebook_id="nb_sem_1", source_name="biology.txt", content=doc2)
+
+        # Query has zero exact word overlap with doc1 ("automobile maintenance fix")
+        results = self.store.search_top_k("nb_sem_1", "automobile maintenance fix", top_k=2)
+        self.assertGreater(len(results), 0)
+        top_match, score = results[0]
+        self.assertEqual(top_match["source_name"], "cars.txt")
+        self.assertGreater(score, 0.4)
+
+
 if __name__ == "__main__":
     unittest.main()
+

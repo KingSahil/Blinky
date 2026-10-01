@@ -212,8 +212,8 @@ graph TD
 | :--- | :--- | :--- | :---: |
 | **Phase 1** | **CodeRabbit Remediation** | Fix PDF regex redaction, fix Explorer selection, strip `/discover` token, secure mobile AsyncStorage, clippy warnings. | ✅ **COMPLETED** |
 | **Phase 2** | **Active Model Update & Ping Check** | Update mobile/desktop Groq default to `qwen/qwen3.8-27b`, add live 1-token test check to Settings modal & CommandBar. | ✅ **COMPLETED** |
-| **Phase 3** | **Neural Local RAG** | Replace raw TF keyword math in `vector_store.py` with `fastembed` local embeddings ($0 cost, 80MB). | ⏳ Next |
-| **Phase 4** | **Single-Window Mobile & Cross-Platform History** | Unify mobile chat into 1 window with document grounding, add session history drawer on Mobile & PC, and per-agent model routing. | ⏳ Scheduled |
+| **Phase 3** | **Neural Local RAG** | Replace raw TF keyword math in `vector_store.py` with `fastembed` local embeddings ($0 cost, 80MB). | ✅ **COMPLETED** |
+| **Phase 4** | **Single-Window Mobile & Cross-Platform History** | Unify mobile chat into 1 window with document grounding, add session history drawer on Mobile & PC, and per-agent model routing. | ⏳ Next |
 
 > [!TIP]
 > 💬 **Feedback & Next Action:**
