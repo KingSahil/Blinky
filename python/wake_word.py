@@ -5,6 +5,9 @@ import os
 import threading
 import logging
 import ctypes
+from collections import deque
+from fractions import Fraction
+import numpy as np
 
 # Suppress ALSA C-level error noise on Linux
 if sys.platform.startswith("linux"):
@@ -35,164 +38,209 @@ if sys.platform == "win32":
         pass
 
 is_paused = False
+pause_lock = threading.Lock()
+last_pause_time = 0.0
 
 
 def stdin_listener():
-    global is_paused
+    global is_paused, last_pause_time
     try:
         for line in sys.stdin:
             command = line.strip().upper()
-            if command == "PAUSE":
-                is_paused = True
-                print("[WakeWord] Paused via stdin", file=sys.stderr, flush=True)
-            elif command == "RESUME":
-                is_paused = False
-                print("[WakeWord] Resumed via stdin", file=sys.stderr, flush=True)
+            with pause_lock:
+                if command == "PAUSE":
+                    is_paused = True
+                    last_pause_time = time.time()
+                elif command == "RESUME":
+                    is_paused = False
     except Exception as e:
-        print(f"Error in stdin listener: {e}", file=sys.stderr)
+        print(f"[WakeWord] Stdin listener error: {e}", file=sys.stderr, flush=True)
 
 
-def get_best_microphone_index(sd):
-    """Scans sounddevice input devices to select an active physical microphone over Stereo Mix loopbacks."""
+def find_best_input_device(sd):
+    """
+    Tests and selects the best active physical microphone over Stereo Mix loopbacks.
+    Returns (device_index, device_name, native_sample_rate).
+    """
     try:
+        apis = sd.query_hostapis()
         devices = sd.query_devices()
-        mic_candidates = []
-        default_input = sd.default.device[0]
+        candidates = []
 
         for idx, dev in enumerate(devices):
             if dev.get("max_input_channels", 0) > 0:
                 name = dev.get("name", "").lower()
-                # Exclude loopback output streams like Stereo Mix
-                if "stereo mix" in name or "wave out" in name:
+                # Exclude loopback streams
+                if any(bad in name for bad in ["stereo mix", "wave out", "what u hear", "loopback", "virtual"]):
                     continue
+
+                api_name = apis[dev["hostapi"]]["name"] if dev.get("hostapi") < len(apis) else ""
+                score = 0
                 if "microphone" in name or "mic" in name or "headset" in name:
-                    mic_candidates.append(idx)
+                    score += 15
+                if "realtek" in name or "conexant" in name:
+                    score += 8
+                if "mapper" in name or "primary" in name:
+                    score += 10
+                if api_name in ["Windows DirectSound", "MME", "Windows WASAPI"]:
+                    score += 5
 
-        if mic_candidates:
-            selected = mic_candidates[0]
-            dev_name = devices[selected]["name"]
-            print(f"[WakeWord] Selected Microphone Device [{selected}]: {dev_name}", file=sys.stderr, flush=True)
-            return selected
+                candidates.append((score, idx, dev["name"], int(dev.get("default_samplerate", 44100))))
 
-        # Fallback to default input device if valid
+        candidates.sort(key=lambda x: x[0], reverse=True)
+
+        for _, idx, dev_name, sr in candidates:
+            try:
+                captured = []
+                def test_cb(indata, frames, time_info, status):
+                    captured.append(True)
+                test_block = max(256, int(sr * 0.05))
+                with sd.InputStream(device=idx, samplerate=sr, channels=1, blocksize=test_block, callback=test_cb):
+                    time.sleep(0.12)
+                if len(captured) > 0:
+                    return idx, dev_name, sr
+            except Exception:
+                continue
+
+        default_input = sd.default.device[0]
         if default_input is not None and default_input >= 0:
-            dev_name = devices[default_input]["name"]
-            print(f"[WakeWord] Using Default Input Device [{default_input}]: {dev_name}", file=sys.stderr, flush=True)
-            return default_input
+            dev = devices[default_input]
+            return default_input, dev["name"], int(dev.get("default_samplerate", 44100))
 
     except Exception as exc:
-        print(f"[WakeWord] Warning resolving microphone device: {exc}", file=sys.stderr, flush=True)
-    return None
+        print(f"[WakeWord] Warning detecting audio devices: {exc}", file=sys.stderr, flush=True)
+
+    return None, "Default Input", 44100
+
+
+def resample_to_16k(audio_data, native_sr, resample_poly_fn):
+    """Accurately downsamples native audio to 16,000 Hz using polyphase resampling."""
+    if native_sr == 16000:
+        return audio_data
+
+    if native_sr == 48000:
+        up, down = 1, 3
+    elif native_sr == 44100:
+        up, down = 160, 441
+    else:
+        frac = Fraction(16000, native_sr).limit_denominator(500)
+        up, down = frac.numerator, frac.denominator
+
+    return resample_poly_fn(audio_data, up, down).astype(np.int16)
 
 
 def start_wake_word_detector(model_name="hey_blinky.onnx", threshold=0.25, verbose=True):
-    """Captures microphone audio and emits WAKE_WORD_DETECTED when the target wake word is spoken."""
+    """Captures microphone audio, resamples cleanly to 16kHz, and emits WAKE_WORD_DETECTED."""
     threading.Thread(target=stdin_listener, daemon=True).start()
 
     try:
         import sounddevice as sd
         import numpy as np
+        import scipy.signal
         from openwakeword.model import Model
     except ImportError as e:
-        print(f"Error importing dependencies: {e}", file=sys.stderr)
+        print(f"[WakeWord] Missing dependencies: {e}", file=sys.stderr, flush=True)
         return
 
+    # Resolve model path
+    candidate_paths = [
+        model_name,
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), os.path.basename(model_name)),
+        os.path.join(os.getcwd(), "python", os.path.basename(model_name)),
+        os.path.join(os.getcwd(), "common", "python", os.path.basename(model_name)),
+    ]
+    resolved_model = next((p for p in candidate_paths if os.path.exists(p)), model_name)
+
+    print(f"[WakeWord] Loading model: {resolved_model}", file=sys.stderr, flush=True)
     try:
-        # Resolve model path
-        if not os.path.isabs(model_name):
-            if not os.path.exists(model_name):
-                script_dir = os.path.dirname(os.path.abspath(__file__))
-                candidate = os.path.join(script_dir, os.path.basename(model_name))
-                if os.path.exists(candidate):
-                    model_name = candidate
+        owwModel = Model(wakeword_models=[resolved_model])
+    except Exception as exc:
+        print(f"[WakeWord] Failed to instantiate OpenWakeWord model: {exc}", file=sys.stderr, flush=True)
+        return
 
-        print(f"[WakeWord] Loading model: {model_name}", file=sys.stderr, flush=True)
+    device_idx, device_name, native_sr = find_best_input_device(sd)
+    native_block_size = int(native_sr * 0.08)  # 80ms chunk
+    audio_queue = deque(maxlen=24)  # ~1.9s rolling window
 
-        try:
-            import openwakeword.utils
-            if hasattr(openwakeword.utils, "download_models"):
-                openwakeword.utils.download_models()
-        except Exception as exc:
-            print(f"[WakeWord] Feature model check: {exc}", file=sys.stderr)
+    print(f"[WakeWord] Locked Device [{device_idx}]: '{device_name}' ({native_sr}Hz -> 16000Hz)", file=sys.stderr, flush=True)
+    print(f"[WakeWord] Listening for 'Hey Blinky' (Threshold: {threshold})...", file=sys.stderr, flush=True)
 
-        owwModel = Model(wakeword_models=[model_name])
-        print(f"[WakeWord] Model loaded successfully. Threshold: {threshold}", file=sys.stderr, flush=True)
+    def audio_callback(indata, frames, time_info, status):
+        if is_paused:
+            return
+        # Convert float32 [-1.0, 1.0] to int16 PCM
+        pcm_native = (indata[:, 0] * 32767).astype(np.int16)
+        # Polyphase resample to 16kHz
+        pcm_16k = resample_to_16k(pcm_native, native_sr, scipy.signal.resample_poly)
+        if len(pcm_16k) == 1280:
+            audio_queue.append(pcm_16k)
+        elif len(pcm_16k) > 1280:
+            audio_queue.append(pcm_16k[:1280])
 
-        selected_device = get_best_microphone_index(sd)
-        audio_queue = []
+    stream_kwargs = {
+        "samplerate": native_sr,
+        "blocksize": native_block_size,
+        "channels": 1,
+        "dtype": "float32",
+        "callback": audio_callback,
+    }
+    if device_idx is not None:
+        stream_kwargs["device"] = device_idx
+    if sys.platform.startswith("linux"):
+        stream_kwargs["latency"] = "high"
 
-        def audio_callback(indata, frames, time_info, status):
-            if is_paused:
-                return
-            # indata is float32 [-1.0, 1.0]. Convert to int16 PCM for openwakeword.
-            audio_data = (indata[:, 0] * 32767).astype(np.int16)
-            audio_queue.append(audio_data)
-            # Maintain tight 5-block queue (400ms max backlog) for real-time sub-100ms response
-            if len(audio_queue) > 5:
-                del audio_queue[:-5]
+    last_badge_time = 0.0
 
-        stream_kwargs = {
-            "samplerate": 16000,
-            "blocksize": 1280,
-            "channels": 1,
-            "dtype": "float32",
-            "callback": audio_callback,
-        }
-        if selected_device is not None:
-            stream_kwargs["device"] = selected_device
-        if sys.platform.startswith("linux"):
-            stream_kwargs["latency"] = "high"
-
-        print(f"[WakeWord] Listening for 'Hey Blinky'...", file=sys.stderr, flush=True)
-        if verbose:
-            print(f"{'Time':<8} | {'Audio RMS':<12} | {'Wake Word Score':<18} | {'Status'}", file=sys.stderr, flush=True)
-            print("-" * 75, file=sys.stderr, flush=True)
-
-        with sd.InputStream(**stream_kwargs) as stream:
-            start_time = time.time()
-            last_debug_time = start_time
-
+    try:
+        with sd.InputStream(**stream_kwargs):
             while True:
                 if is_paused:
-                    if len(audio_queue) > 0:
-                        audio_queue.clear()
-                    time.sleep(0.1)
+                    time.sleep(0.08)
                     continue
 
                 if len(audio_queue) > 0:
-                    audio_chunk = audio_queue.pop(0)
+                    chunk = audio_queue.popleft()
 
-                    # Calculate Root Mean Square (RMS) energy
-                    rms = np.sqrt(np.mean(audio_chunk.astype(np.float32)**2))
+                    # Real-time RMS calculation
+                    rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
 
-                    prediction = owwModel.predict(audio_chunk)
-                    score = list(prediction.values())[0] if prediction else 0.0
+                    # Adaptive noise gating: skip heavy neural net inference on silence
+                    if rms < 30.0:
+                        score = 0.0
+                    else:
+                        prediction = owwModel.predict(chunk)
+                        score = float(list(prediction.values())[0]) if prediction else 0.0
 
-                    if score > threshold:
-                        elapsed = int(time.time() - start_time)
-                        status_text = f"*** WAKE_WORD_DETECTED (Score: {score:.4f} > {threshold}) ***"
-                        print(f"{elapsed:>5}s  | {rms:>10.1f}   | {score:>16.4f}   | {status_text}", file=sys.stderr, flush=True)
+                    if score >= threshold:
+                        # Print trigger event to stdout for Tauri
                         print("WAKE_WORD_DETECTED", flush=True)
+                        print(
+                            f"\n⚡ [WAKE_WORD_DETECTED] \"Hey Blinky\" triggered! (Score: {score:.3f} >= {threshold}, RMS: {rms:.1f})\n",
+                            file=sys.stderr,
+                            flush=True,
+                        )
                         owwModel.reset()
                         audio_queue.clear()
-                        time.sleep(2)
+                        time.sleep(1.2)  # Refractory cooldown
                         continue
 
                     now = time.time()
-                    if verbose and now - last_debug_time >= 1.0:
-                        elapsed = int(now - start_time)
-                        status_text = "[SPEECH] Hearing speech..." if rms > 150 else ("[LOW] Quiet sound" if rms > 30 else "[WAIT] Listening...")
-                        print(f"{elapsed:>5}s  | {rms:>10.1f}   | {score:>16.4f}   | {status_text}", file=sys.stderr, flush=True)
-                        last_debug_time = now
+                    if verbose and now - last_badge_time >= 1.0:
+                        status_tag = "🗣️ Speech" if rms > 120 else ("🔉 Voice" if rms > 45 else "💤 Ambient")
+                        sys.stderr.write(
+                            f"\r[WakeWord] {status_tag} | RMS: {rms:>5.1f} | Score: {score:>6.3f} | Target: {threshold}   "
+                        )
+                        sys.stderr.flush()
+                        last_badge_time = now
 
                     time.sleep(0.005)
                 else:
                     time.sleep(0.01)
 
     except KeyboardInterrupt:
-        print("[WakeWord] Detector stopped.", file=sys.stderr)
-    except Exception as e:
-        print(f"[WakeWord] Error in detector loop: {e}", file=sys.stderr)
+        print("\n[WakeWord] Detector stopped.", file=sys.stderr, flush=True)
+    except Exception as exc:
+        print(f"\n[WakeWord] Error in audio stream: {exc}", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":
