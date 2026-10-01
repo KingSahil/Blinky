@@ -1,7 +1,7 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen, Cpu, Zap, Brain, Cloud, Wrench, Key, Smartphone, MessageSquare, Command, Palette, Info, Clock, Trash2, Plus, Search, ChevronDown, Edit3, RefreshCw } from 'lucide-react';
+import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen, Cpu, Zap, Brain, Cloud, Wrench, Key, Smartphone, MessageSquare, Command, Palette, Info, Clock, Trash2, Plus, Search, ChevronDown, Edit3, RefreshCw, Sliders } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -340,6 +340,7 @@ export function CommandBar() {
   const [geminiModelsList, setGeminiModelsList] = useState<DynamicModelItem[]>(DEFAULT_GEMINI_CATALOG);
   const [geminiModelsLoading, setGeminiModelsLoading] = useState<boolean>(false);
   const geminiFetchSeqRef = useRef<number>(0);
+  const [settingsTab, setSettingsTab] = useState<'agents' | 'keys' | 'mobile' | 'shortcuts' | 'about'>('agents');
 
   const updateGeminiModel = (newModel: string) => {
     const clean = newModel.trim();
@@ -684,7 +685,7 @@ export function CommandBar() {
 
   // Draw mobile-pairing QR code to canvas
   useEffect(() => {
-    if (showMobileModal && pairingQrText && mobileCanvasRef.current) {
+    if ((showMobileModal || (showSettings && settingsTab === 'mobile')) && pairingQrText && mobileCanvasRef.current) {
       QRCode.toCanvas(
         mobileCanvasRef.current,
         pairingQrText,
@@ -701,7 +702,13 @@ export function CommandBar() {
         }
       );
     }
-  }, [showMobileModal, pairingQrText]);
+  }, [showMobileModal, showSettings, settingsTab, pairingQrText]);
+
+  useEffect(() => {
+    if (showSettings && settingsTab === 'mobile' && !pairingPayload && !pairingLoading) {
+      void loadPairingPayload();
+    }
+  }, [showSettings, settingsTab, pairingPayload, pairingLoading]);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -1838,6 +1845,24 @@ export function CommandBar() {
     };
   }, [isRunning, isTranscribing, isRecording]);
 
+  // Global Escape key handler to close settings, history, and modals
+  useEffect(() => {
+    const handleGlobalEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showSettings) {
+          setShowSettings(false);
+          setIsAgent1SearchOpen(false);
+          setIsGeminiSearchOpen(false);
+        }
+        if (showHistory) setShowHistory(false);
+        if (showWaModal) setShowWaModal(false);
+        if (showMobileModal) setShowMobileModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalEscape);
+    return () => window.removeEventListener('keydown', handleGlobalEscape);
+  }, [showSettings, showHistory, showWaModal, showMobileModal]);
+
   // Setup native Tauri and web drag-and-drop listener
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -2406,12 +2431,8 @@ export function CommandBar() {
       const formRect = formElement.getBoundingClientRect();
       let height = formRect.height;
 
-      if (showSettings && dropdownRef.current) {
-        const dd = dropdownRef.current;
-        // Use scrollHeight (full content) instead of the capped visible rect,
-        // otherwise the window never grows enough and the menu gets cut off.
-        const dropdownHeight = Math.max(dd.scrollHeight, dd.getBoundingClientRect().height);
-        height = Math.max(height, 52 + dropdownHeight);
+      if (showSettings) {
+        height = Math.max(height, 580);
       }
 
       if (showHistory && historyDropdownRef.current) {
@@ -2805,1002 +2826,7 @@ export function CommandBar() {
           </div>
         )}
 
-        {/* Google-Style Dropdown Menu */}
-        {showSettings && (
-          <div ref={dropdownRef} className="command-settings-dropdown">
-            {/* HayMagnet Multi-Agent Model Routing */}
-            <div className="dropdown-section agent-routing-section">
-              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <Bot size={14} /> Agent Model Assignment
-              </h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
-                {/* Agent 1 Card */}
-                <div
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.04)',
-                    padding: '8px 10px',
-                    borderRadius: '6px',
-                    border: showAgent1Config ? '1px solid rgba(255, 90, 54, 0.5)' : '1px solid rgba(255, 255, 255, 0.08)',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease',
-                  }}
-                  onClick={() => {
-                    setShowAgent1Config(!showAgent1Config);
-                    if (!showAgent1Config) setShowGeminiConfig(false);
-                  }}
-                  title="Click to search, edit model, or change provider"
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#e2e8f0' }}>🖥️ Agent 1: Computer-Use / Actuator</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ fontSize: '9px', background: 'rgba(255, 90, 54, 0.2)', color: '#ff8b6a', padding: '1px 5px', borderRadius: '3px' }}>Active</span>
-                      <span style={{ fontSize: '10px', color: '#ff8b6a', fontWeight: 600 }}>{showAgent1Config ? '▲ Close' : '▼ Edit'}</span>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                    Provider: <strong style={{ color: '#fff' }}>{provider.toUpperCase()}</strong> • Model: <strong style={{ color: '#fff' }}>{agent1Model}</strong>
-                  </div>
-                </div>
 
-                {/* Agent 2 Card */}
-                <div
-                  style={{
-                    background: 'rgba(255, 255, 255, 0.04)',
-                    padding: '8px 10px',
-                    borderRadius: '6px',
-                    border: showGeminiConfig ? '1px solid rgba(192, 132, 252, 0.5)' : '1px solid rgba(255, 255, 255, 0.08)',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease',
-                  }}
-                  onClick={() => {
-                    setShowGeminiConfig(!showGeminiConfig);
-                    if (!showGeminiConfig) setShowAgent1Config(false);
-                  }}
-                  title="Click to search, edit model, or configure API key"
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#e2e8f0' }}>📚 Agent 2: Knowledge & RAG</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ fontSize: '9px', background: 'rgba(139, 92, 246, 0.2)', color: '#c084fc', padding: '1px 5px', borderRadius: '3px' }}>FastEmbed Hybrid</span>
-                      <span style={{ fontSize: '10px', color: '#c084fc', fontWeight: 600 }}>{showGeminiConfig ? '▲ Close' : '▼ Edit'}</span>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                    Model: <strong style={{ color: '#fff' }}>{geminiModel}</strong> <span style={{ opacity: 0.6 }}>/ FastEmbed bge-small</span>
-                  </div>
-                </div>
-
-                {/* Agent 3 Card */}
-                <div style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#e2e8f0' }}>🎙️ Agent 3: Realtime Voice</span>
-                    <span style={{ fontSize: '9px', background: 'rgba(34, 197, 94, 0.2)', color: '#4ade80', padding: '1px 5px', borderRadius: '3px' }}>Streaming</span>
-                  </div>
-                  <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                    Provider: <strong style={{ color: '#fff' }}>{voiceProvider === 'assemblyai' ? 'AssemblyAI Universal-3' : 'Sarvam AI'}</strong>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Agent 1: Actuator Model Configuration & Dynamic Search */}
-            {showAgent1Config && (
-              <div
-                className="dropdown-section"
-                style={{
-                  background: 'rgba(255, 90, 54, 0.06)',
-                  borderRadius: '10px',
-                  padding: '12px',
-                  border: '1px solid rgba(255, 90, 54, 0.25)',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#ff8b6a', margin: 0 }}>
-                    <Zap size={14} /> Agent 1: Actuator Model Selection
-                  </h4>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const key = provider === 'groq' ? groqApiKey : provider === 'deepseek' ? deepseekApiKey : provider === 'custom' ? customApiKey : '';
-                      handleTestPing(provider, key, agent1Model, provider === 'custom' ? customUrl : undefined);
-                    }}
-                    disabled={pingTesting}
-                    style={{
-                      background: 'rgba(255, 90, 54, 0.15)',
-                      border: '1px solid rgba(255, 90, 54, 0.35)',
-                      color: '#ff8b6a',
-                      borderRadius: '6px',
-                      padding: '2px 8px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      cursor: pingTesting ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                    }}
-                  >
-                    {pingTesting ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
-                    {pingTesting ? 'Testing...' : 'Test Ping ⚡'}
-                  </button>
-                </div>
-
-                {/* Provider switcher pills */}
-                <div style={{ display: 'flex', gap: '4px', marginBottom: '8px', flexWrap: 'wrap' }}>
-                  {(['groq', 'ollama', 'deepseek', 'custom'] as const).map((p) => {
-                    const isSelected = provider.toLowerCase().trim() === p;
-                    return (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => updateProvider(p)}
-                        style={{
-                          padding: '3px 8px',
-                          borderRadius: '5px',
-                          fontSize: '10.5px',
-                          fontWeight: isSelected ? 600 : 400,
-                          background: isSelected ? 'rgba(255, 90, 54, 0.25)' : 'rgba(255, 255, 255, 0.05)',
-                          border: isSelected ? '1px solid #FF5A36' : '1px solid rgba(255, 255, 255, 0.08)',
-                          color: isSelected ? '#fff' : '#94a3b8',
-                          cursor: 'pointer',
-                          textTransform: 'capitalize',
-                        }}
-                      >
-                        {p === 'custom' ? 'Custom OpenAI' : p}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '6px', lineHeight: 1.4 }}>
-                  Type to filter models or enter a custom name:
-                </div>
-
-                {/* Model Search Input with live filter */}
-                <div style={{ position: 'relative', marginBottom: '8px' }}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      background: 'rgba(0, 0, 0, 0.35)',
-                      borderRadius: '8px',
-                      border: '1px solid rgba(255, 90, 54, 0.3)',
-                      padding: '0 8px',
-                    }}
-                  >
-                    <Search size={14} style={{ color: '#ff8b6a', marginRight: '6px', opacity: 0.8 }} />
-                    <input
-                      type="text"
-                      className="settings-input"
-                      style={{ border: 'none', background: 'transparent', padding: '7px 0', fontSize: '12px' }}
-                      value={agent1SearchQuery}
-                      onChange={(e) => {
-                        setAgent1SearchQuery(e.target.value);
-                        setIsAgent1SearchOpen(true);
-                      }}
-                      onFocus={() => setIsAgent1SearchOpen(true)}
-                      placeholder={`Search ${provider.toUpperCase()} models (e.g. qwen, gpt, llama)...`}
-                    />
-                    <button
-                      type="button"
-                      title="Fetch live models from provider API"
-                      onClick={() => refreshAgent1Models()}
-                      style={{ background: 'transparent', border: 'none', color: '#ff8b6a', cursor: 'pointer', padding: '2px 4px', display: 'flex', alignItems: 'center' }}
-                    >
-                      <RefreshCw size={12} className={agent1ModelsLoading ? 'animate-spin' : ''} />
-                    </button>
-                    {agent1SearchQuery ? (
-                      <button
-                        type="button"
-                        onClick={() => setAgent1SearchQuery('')}
-                        style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px' }}
-                      >
-                        <X size={12} />
-                      </button>
-                    ) : (
-                      <ChevronDown size={14} style={{ color: '#94a3b8', opacity: 0.6 }} />
-                    )}
-                  </div>
-
-                  {/* Filtered Search Results Dropdown List */}
-                  {isAgent1SearchOpen && (
-                    <div
-                      style={{
-                        marginTop: '4px',
-                        maxHeight: '190px',
-                        overflowY: 'auto',
-                        background: '#151722',
-                        border: '1px solid rgba(255, 90, 54, 0.35)',
-                        borderRadius: '8px',
-                        padding: '4px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '2px',
-                        boxShadow: '0 10px 30px rgba(0,0,0,0.6)',
-                        zIndex: 20,
-                      }}
-                    >
-                      {/* Custom typed option if not exact match */}
-                      {agent1SearchQuery.trim() &&
-                        !agent1ModelsList.some(
-                          (m) => m.id.toLowerCase() === agent1SearchQuery.trim().toLowerCase()
-                        ) && (
-                          <button
-                            type="button"
-                            className="dropdown-option"
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '8px',
-                              padding: '6px 8px',
-                              borderRadius: '6px',
-                              background: 'rgba(255, 90, 54, 0.12)',
-                              border: '1px dashed rgba(255, 90, 54, 0.4)',
-                            }}
-                            onClick={() => {
-                              updateAgent1Model(agent1SearchQuery.trim());
-                              setIsAgent1SearchOpen(false);
-                            }}
-                          >
-                            <Sparkles size={13} style={{ color: '#ff8b6a' }} />
-                            <div style={{ flex: 1, textAlign: 'left' }}>
-                              <div style={{ fontSize: '11px', fontWeight: 600, color: '#ff8b6a' }}>
-                                Use custom model: "{agent1SearchQuery.trim()}"
-                              </div>
-                              <div style={{ fontSize: '10px', color: '#94a3b8' }}>Select this custom model ID</div>
-                            </div>
-                            <Check size={13} className="active-dot" />
-                          </button>
-                        )}
-
-                      {agent1ModelsList.filter((m) => {
-                        const q = agent1SearchQuery.toLowerCase().trim();
-                        if (!q) return true;
-                        return (
-                          m.id.toLowerCase().includes(q) ||
-                          m.name.toLowerCase().includes(q) ||
-                          (m.desc && m.desc.toLowerCase().includes(q)) ||
-                          (m.badge && m.badge.toLowerCase().includes(q))
-                        );
-                      }).map((m) => {
-                        const isSelected = agent1Model.toLowerCase().trim() === m.id.toLowerCase().trim();
-                        return (
-                          <button
-                            key={m.id}
-                            type="button"
-                            className={`dropdown-option ${isSelected ? 'active' : ''}`}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '8px',
-                              padding: '6px 8px',
-                              borderRadius: '6px',
-                              textAlign: 'left',
-                            }}
-                            onClick={() => {
-                              updateAgent1Model(m.id);
-                              setAgent1SearchQuery('');
-                              setIsAgent1SearchOpen(false);
-                            }}
-                          >
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ fontSize: '11.5px', fontWeight: 600, color: isSelected ? '#fff' : '#e2e8f0' }}>
-                                  {m.name}
-                                </span>
-                                {m.badge && (
-                                  <span
-                                    style={{
-                                      fontSize: '9px',
-                                      padding: '1px 4px',
-                                      borderRadius: '3px',
-                                      background: isSelected ? 'rgba(255, 90, 54, 0.3)' : 'rgba(255, 255, 255, 0.06)',
-                                      color: isSelected ? '#ff8b6a' : '#94a3b8',
-                                    }}
-                                  >
-                                    {m.badge}
-                                  </span>
-                                )}
-                              </div>
-                              {m.desc && (
-                                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  {m.desc}
-                                </div>
-                              )}
-                            </div>
-                            {isSelected && <Check size={14} className="active-dot" style={{ color: '#ff8b6a' }} />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Selected Model indicator pill */}
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    background: 'rgba(0, 0, 0, 0.25)',
-                    padding: '5px 8px',
-                    borderRadius: '6px',
-                    marginBottom: '8px',
-                    fontSize: '11px',
-                    border: '1px solid rgba(255, 255, 255, 0.05)',
-                  }}
-                >
-                  <span style={{ color: '#94a3b8' }}>Selected Model:</span>
-                  <span style={{ fontWeight: 600, color: '#ff8b6a' }}>{agent1Model}</span>
-                </div>
-
-                {/* Provider specific inputs */}
-                {provider === 'groq' && (
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                      <h5 style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#e2e8f0', margin: 0 }}>
-                        <Key size={12} /> Groq API Key
-                      </h5>
-                      <span style={{ fontSize: '9.5px', color: 'rgba(255, 255, 255, 0.45)' }}>console.groq.com</span>
-                    </div>
-                    <input
-                      type="password"
-                      className="settings-input"
-                      value={groqApiKey}
-                      onChange={(e) => updateGroqApiKey(e.target.value)}
-                      placeholder="Paste Groq API Key (gsk_...)"
-                      style={{ fontSize: '11.5px', marginTop: '4px' }}
-                    />
-                  </div>
-                )}
-
-                {provider === 'deepseek' && (
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                      <h5 style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#e2e8f0', margin: 0 }}>
-                        <Key size={12} /> DeepSeek API Key
-                      </h5>
-                      <span style={{ fontSize: '9.5px', color: 'rgba(255, 255, 255, 0.45)' }}>platform.deepseek.com</span>
-                    </div>
-                    <input
-                      type="password"
-                      className="settings-input"
-                      value={deepseekApiKey}
-                      onChange={(e) => updateDeepseekApiKey(e.target.value)}
-                      placeholder="Paste DeepSeek API Key (sk-...)"
-                      style={{ fontSize: '11.5px', marginTop: '4px' }}
-                    />
-                  </div>
-                )}
-
-                {provider === 'custom' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <div>
-                      <h5 style={{ fontSize: '11px', color: '#e2e8f0', margin: '0 0 4px 0' }}>Custom Endpoint URL</h5>
-                      <input
-                        type="text"
-                        className="settings-input"
-                        value={customUrl}
-                        onChange={(e) => updateCustomUrl(e.target.value)}
-                        placeholder="http://localhost:1234/v1"
-                        style={{ fontSize: '11.5px' }}
-                      />
-                    </div>
-                    <div>
-                      <h5 style={{ fontSize: '11px', color: '#e2e8f0', margin: '0 0 4px 0' }}>Custom API Key (optional)</h5>
-                      <input
-                        type="password"
-                        className="settings-input"
-                        value={customApiKey}
-                        onChange={(e) => updateCustomApiKey(e.target.value)}
-                        placeholder="Bearer token if required..."
-                        style={{ fontSize: '11.5px' }}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Ping Result Display */}
-                {pingResult && pingResult.provider === provider && (
-                  <div
-                    style={{
-                      marginTop: '6px',
-                      padding: '4px 8px',
-                      borderRadius: '4px',
-                      fontSize: '11px',
-                      background: pingResult.ok ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                      color: pingResult.ok ? '#22c55e' : '#ef4444',
-                      border: `1px solid ${pingResult.ok ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-                    }}
-                  >
-                    {pingResult.ok
-                      ? `✓ Online (${pingResult.latency_ms}ms) • ${pingResult.model}`
-                      : `✗ ${pingResult.error}`}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Agent 2: Gemini RAG Model Configuration & Search */}
-            {showGeminiConfig && (
-              <div
-                className="dropdown-section"
-                style={{
-                  background: 'rgba(139, 92, 246, 0.06)',
-                  borderRadius: '10px',
-                  padding: '12px',
-                  border: '1px solid rgba(192, 132, 252, 0.25)',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#c084fc', margin: 0 }}>
-                    <Sparkles size={14} /> Agent 2: Gemini Model Selection
-                  </h4>
-                  <button
-                    type="button"
-                    onClick={() => handleTestPing('gemini', geminiApiKey, geminiModel)}
-                    disabled={pingTesting}
-                    style={{
-                      background: 'rgba(192, 132, 252, 0.15)',
-                      border: '1px solid rgba(192, 132, 252, 0.35)',
-                      color: '#c084fc',
-                      borderRadius: '6px',
-                      padding: '2px 8px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      cursor: pingTesting ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                    }}
-                  >
-                    {pingTesting ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
-                    {pingTesting ? 'Testing...' : 'Test Ping ⚡'}
-                  </button>
-                </div>
-
-                <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '8px', lineHeight: 1.4 }}>
-                  Type to filter models or enter a custom name:
-                </div>
-
-                {/* Model Search Input with live filter */}
-                <div style={{ position: 'relative', marginBottom: '8px' }}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      background: 'rgba(0, 0, 0, 0.35)',
-                      borderRadius: '8px',
-                      border: '1px solid rgba(192, 132, 252, 0.3)',
-                      padding: '0 8px',
-                    }}
-                  >
-                    <Search size={14} style={{ color: '#c084fc', marginRight: '6px', opacity: 0.8 }} />
-                    <input
-                      type="text"
-                      className="settings-input"
-                      style={{ border: 'none', background: 'transparent', padding: '7px 0', fontSize: '12px' }}
-                      value={geminiSearchQuery}
-                      onChange={(e) => {
-                        setGeminiSearchQuery(e.target.value);
-                        setIsGeminiSearchOpen(true);
-                      }}
-                      onFocus={() => setIsGeminiSearchOpen(true)}
-                      placeholder="Type model name to search (e.g. 2.5-pro, flash)..."
-                    />
-                    <button
-                      type="button"
-                      title="Fetch live models from Google Gemini API"
-                      onClick={() => refreshGeminiModels()}
-                      style={{ background: 'transparent', border: 'none', color: '#c084fc', cursor: 'pointer', padding: '2px 4px', display: 'flex', alignItems: 'center' }}
-                    >
-                      <RefreshCw size={12} className={geminiModelsLoading ? 'animate-spin' : ''} />
-                    </button>
-                    {geminiSearchQuery ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setGeminiSearchQuery('');
-                        }}
-                        style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px' }}
-                      >
-                        <X size={12} />
-                      </button>
-                    ) : (
-                      <ChevronDown size={14} style={{ color: '#94a3b8', opacity: 0.6 }} />
-                    )}
-                  </div>
-
-                  {/* Filtered Search Results Dropdown List */}
-                  {isGeminiSearchOpen && (
-                    <div
-                      style={{
-                        marginTop: '4px',
-                        maxHeight: '190px',
-                        overflowY: 'auto',
-                        background: '#151722',
-                        border: '1px solid rgba(192, 132, 252, 0.35)',
-                        borderRadius: '8px',
-                        padding: '4px',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '2px',
-                        boxShadow: '0 10px 30px rgba(0,0,0,0.6)',
-                        zIndex: 20,
-                      }}
-                    >
-                      {/* Custom typed option if not exact match */}
-                      {geminiSearchQuery.trim() &&
-                        !geminiModelsList.some(
-                          (m) => m.id.toLowerCase() === geminiSearchQuery.trim().toLowerCase()
-                        ) && (
-                          <button
-                            type="button"
-                            className="dropdown-option"
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '8px',
-                              padding: '6px 8px',
-                              borderRadius: '6px',
-                              background: 'rgba(192, 132, 252, 0.12)',
-                              border: '1px dashed rgba(192, 132, 252, 0.4)',
-                            }}
-                            onClick={() => {
-                              updateGeminiModel(geminiSearchQuery.trim());
-                              setIsGeminiSearchOpen(false);
-                            }}
-                          >
-                            <Sparkles size={13} style={{ color: '#c084fc' }} />
-                            <div style={{ flex: 1, textAlign: 'left' }}>
-                              <div style={{ fontSize: '11px', fontWeight: 600, color: '#c084fc' }}>
-                                Use custom model: "{geminiSearchQuery.trim()}"
-                              </div>
-                              <div style={{ fontSize: '10px', color: '#94a3b8' }}>Select this custom Gemini model ID</div>
-                            </div>
-                            <Check size={13} className="active-dot" />
-                          </button>
-                        )}
-
-                      {geminiModelsList.filter((m) => {
-                        const q = geminiSearchQuery.toLowerCase().trim();
-                        if (!q) return true;
-                        return (
-                          m.id.toLowerCase().includes(q) ||
-                          m.name.toLowerCase().includes(q) ||
-                          (m.desc && m.desc.toLowerCase().includes(q)) ||
-                          (m.badge && m.badge.toLowerCase().includes(q))
-                        );
-                      }).map((m) => {
-                        const isSelected = geminiModel.toLowerCase().trim() === m.id.toLowerCase().trim();
-                        return (
-                          <button
-                            key={m.id}
-                            type="button"
-                            className={`dropdown-option ${isSelected ? 'active' : ''}`}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '8px',
-                              padding: '6px 8px',
-                              borderRadius: '6px',
-                              textAlign: 'left',
-                            }}
-                            onClick={() => {
-                              updateGeminiModel(m.id);
-                              setGeminiSearchQuery('');
-                              setIsGeminiSearchOpen(false);
-                            }}
-                          >
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <span style={{ fontSize: '11.5px', fontWeight: 600, color: isSelected ? '#fff' : '#e2e8f0' }}>
-                                  {m.name}
-                                </span>
-                                {m.badge && (
-                                  <span
-                                    style={{
-                                      fontSize: '9px',
-                                      padding: '1px 4px',
-                                      borderRadius: '3px',
-                                      background: isSelected ? 'rgba(192, 132, 252, 0.3)' : 'rgba(255, 255, 255, 0.06)',
-                                      color: isSelected ? '#c084fc' : '#94a3b8',
-                                    }}
-                                  >
-                                    {m.badge}
-                                  </span>
-                                )}
-                              </div>
-                              {m.desc && (
-                                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                  {m.desc}
-                                </div>
-                              )}
-                            </div>
-                            {isSelected && <Check size={14} className="active-dot" style={{ color: '#c084fc' }} />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-
-                {/* Selected Model indicator pill */}
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    background: 'rgba(0, 0, 0, 0.25)',
-                    padding: '5px 8px',
-                    borderRadius: '6px',
-                    marginBottom: '8px',
-                    fontSize: '11px',
-                    border: '1px solid rgba(255, 255, 255, 0.05)',
-                  }}
-                >
-                  <span style={{ color: '#94a3b8' }}>Selected Model:</span>
-                  <span style={{ fontWeight: 600, color: '#c084fc' }}>{geminiModel}</span>
-                </div>
-
-                {/* Gemini API Key input */}
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                    <h5 style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#e2e8f0', margin: 0 }}>
-                      <Key size={12} /> Gemini API Key
-                    </h5>
-                    <span style={{ fontSize: '9.5px', color: 'rgba(255, 255, 255, 0.45)' }}>Google AI Studio</span>
-                  </div>
-                  <input
-                    type="password"
-                    className="settings-input"
-                    value={geminiApiKey}
-                    onChange={(e) => updateGeminiApiKey(e.target.value)}
-                    placeholder="Paste Gemini API Key (AIzaSy...)"
-                    style={{ fontSize: '11.5px', marginTop: '4px' }}
-                  />
-                </div>
-
-                {/* Ping Result Display */}
-                {pingResult && pingResult.provider === 'gemini' && (
-                  <div
-                    style={{
-                      marginTop: '6px',
-                      padding: '4px 8px',
-                      borderRadius: '4px',
-                      fontSize: '11px',
-                      background: pingResult.ok ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                      color: pingResult.ok ? '#22c55e' : '#ef4444',
-                      border: `1px solid ${pingResult.ok ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-                    }}
-                  >
-                    {pingResult.ok
-                      ? `✓ Online (${pingResult.latency_ms}ms) • ${pingResult.model}`
-                      : `✗ ${pingResult.error}`}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="dropdown-section">
-              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Cpu size={14} /> Change Model</h4>
-              <div className="dropdown-options">
-                {(['groq', 'ollama', 'deepseek', 'mimo', 'custom'] as const).map((p) => {
-                  const Icon = p === 'groq' ? Zap : p === 'ollama' ? Cpu : p === 'deepseek' ? Brain : p === 'mimo' ? Cloud : Wrench;
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      className={`dropdown-option ${provider.toLowerCase().trim() === p ? 'active' : ''}`}
-                      onClick={() => updateProvider(p)}
-                      style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-                    >
-                      <Icon size={14} style={{ opacity: 0.7 }} />
-                      <span style={{ flex: 1, textAlign: 'left' }}>{p === 'custom' ? 'Custom (OpenAI)' : p.charAt(0).toUpperCase() + p.slice(1)}</span>
-                      {provider.toLowerCase().trim() === p && <Check size={14} className="active-dot" />}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="dropdown-section">
-              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Command size={14} /> Shortcut Key</h4>
-              <div className="dropdown-options">
-                <button
-                  type="button"
-                  className={`dropdown-option ${shortcut === 'Enter' ? 'active' : ''}`}
-                  onClick={() => updateShortcut('Enter')}
-                >
-                  <span>Ctrl + Shift + Enter</span>
-                  {shortcut === 'Enter' && <Check size={14} className="active-dot" />}
-                </button>
-                <button
-                  type="button"
-                  className={`dropdown-option ${shortcut === 'Space' ? 'active' : ''}`}
-                  onClick={() => updateShortcut('Space')}
-                >
-                  <span>Ctrl + Win + Space</span>
-                  {shortcut === 'Space' && <Check size={14} className="active-dot" />}
-                </button>
-              </div>
-            </div>
-
-            {provider.toLowerCase().trim() === 'groq' && (
-              <div className="dropdown-section">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> Groq API Key</h4>
-                  <button
-                    type="button"
-                    onClick={() => handleTestPing('groq', groqApiKey, 'qwen/qwen3.8-27b')}
-                    disabled={pingTesting}
-                    style={{
-                      background: 'rgba(255, 90, 54, 0.15)',
-                      border: '1px solid rgba(255, 90, 54, 0.3)',
-                      color: '#FF5A36',
-                      borderRadius: '6px',
-                      padding: '2px 8px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      cursor: pingTesting ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                    }}
-                  >
-                    {pingTesting ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
-                    {pingTesting ? 'Testing...' : 'Test Ping ⚡'}
-                  </button>
-                </div>
-                <input
-                  type="password"
-                  className="settings-input"
-                  value={groqApiKey}
-                  onChange={(e) => updateGroqApiKey(e.target.value)}
-                  placeholder="Paste API Key..."
-                />
-                {pingResult && pingResult.provider === 'groq' && (
-                  <div style={{
-                    marginTop: '6px',
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    fontSize: '11px',
-                    background: pingResult.ok ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                    color: pingResult.ok ? '#22c55e' : '#ef4444',
-                    border: `1px solid ${pingResult.ok ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-                  }}>
-                    {pingResult.ok ? `✓ Online (${pingResult.latency_ms}ms) • ${pingResult.model}` : `✗ ${pingResult.error}`}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {provider.toLowerCase().trim() === 'deepseek' && (
-              <div className="dropdown-section">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> DeepSeek API Key</h4>
-                  <button
-                    type="button"
-                    onClick={() => handleTestPing('deepseek', deepseekApiKey, 'deepseek-chat')}
-                    disabled={pingTesting}
-                    style={{
-                      background: 'rgba(255, 90, 54, 0.15)',
-                      border: '1px solid rgba(255, 90, 54, 0.3)',
-                      color: '#FF5A36',
-                      borderRadius: '6px',
-                      padding: '2px 8px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      cursor: pingTesting ? 'not-allowed' : 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                    }}
-                  >
-                    {pingTesting ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
-                    {pingTesting ? 'Testing...' : 'Test Ping ⚡'}
-                  </button>
-                </div>
-                <input
-                  type="password"
-                  className="settings-input"
-                  value={deepseekApiKey}
-                  onChange={(e) => updateDeepseekApiKey(e.target.value)}
-                  placeholder="Paste API Key..."
-                />
-                {pingResult && pingResult.provider === 'deepseek' && (
-                  <div style={{
-                    marginTop: '6px',
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    fontSize: '11px',
-                    background: pingResult.ok ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                    color: pingResult.ok ? '#22c55e' : '#ef4444',
-                    border: `1px solid ${pingResult.ok ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-                  }}>
-                    {pingResult.ok ? `✓ Online (${pingResult.latency_ms}ms) • ${pingResult.model}` : `✗ ${pingResult.error}`}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {provider.toLowerCase().trim() === 'custom' && (
-              <>
-                <div className="dropdown-section">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Globe size={14} /> Custom API URL</h4>
-                    <button
-                      type="button"
-                      onClick={() => handleTestPing('custom', customApiKey, customModel, customUrl)}
-                      disabled={pingTesting}
-                      style={{
-                        background: 'rgba(255, 90, 54, 0.15)',
-                        border: '1px solid rgba(255, 90, 54, 0.3)',
-                        color: '#FF5A36',
-                        borderRadius: '6px',
-                        padding: '2px 8px',
-                        fontSize: '11px',
-                        fontWeight: 600,
-                        cursor: pingTesting ? 'not-allowed' : 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                      }}
-                    >
-                      {pingTesting ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
-                      {pingTesting ? 'Testing...' : 'Test Ping ⚡'}
-                    </button>
-                  </div>
-                  <input
-                    type="text"
-                    className="settings-input"
-                    value={customUrl}
-                    onChange={(e) => updateCustomUrl(e.target.value)}
-                    placeholder="https://opencode.ai/zen/v1"
-                  />
-                </div>
-                <div className="dropdown-section">
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Bot size={14} /> Model</h4>
-                  <input
-                    type="text"
-                    className="settings-input"
-                    value={customModel}
-                    onChange={(e) => updateCustomModel(e.target.value)}
-                    placeholder="minimax-m3"
-                  />
-                </div>
-                <div className="dropdown-section">
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> Custom API Key</h4>
-                  <input
-                    type="password"
-                    className="settings-input"
-                    value={customApiKey}
-                    onChange={(e) => updateCustomApiKey(e.target.value)}
-                    placeholder="Paste API Key..."
-                  />
-                </div>
-                {pingResult && pingResult.provider === 'custom' && (
-                  <div style={{
-                    marginTop: '6px',
-                    padding: '4px 8px',
-                    borderRadius: '4px',
-                    fontSize: '11px',
-                    background: pingResult.ok ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                    color: pingResult.ok ? '#22c55e' : '#ef4444',
-                    border: `1px solid ${pingResult.ok ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
-                  }}>
-                    {pingResult.ok ? `✓ Online (${pingResult.latency_ms}ms) • ${pingResult.model}` : `✗ ${pingResult.error}`}
-                  </div>
-                )}
-              </>
-            )}
-
-            <div className="dropdown-section">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Mic size={14} /> Voice Provider</h4>
-                <span style={{ fontSize: '10px', background: 'rgba(255, 110, 95, 0.2)', color: '#ff8b6a', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
-                  {voiceProvider === 'assemblyai' ? 'Universal-3 Pro' : 'Indic Voice'}
-                </span>
-              </div>
-              <div className="voice-provider-tabs">
-                <button
-                  type="button"
-                  className={`voice-provider-tab ${voiceProvider === 'assemblyai' ? 'active aai' : ''}`}
-                  onClick={() => void updateVoiceProvider('assemblyai')}
-                >
-                  <span>AssemblyAI</span>
-                </button>
-                <button
-                  type="button"
-                  className={`voice-provider-tab ${voiceProvider === 'sarvam' ? 'active' : ''}`}
-                  onClick={() => void updateVoiceProvider('sarvam')}
-                >
-                  <span>Sarvam AI</span>
-                </button>
-              </div>
-            </div>
-
-            {voiceProvider === 'assemblyai' ? (
-              <div className="dropdown-section">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> AssemblyAI API Key</h4>
-                  <span style={{ fontSize: '9.5px', color: 'rgba(255, 255, 255, 0.5)' }}>Universal-3 Pro</span>
-                </div>
-                <input
-                  type="password"
-                  className="settings-input"
-                  value={assemblyaiApiKey}
-                  onChange={(e) => void updateAssemblyaiApiKey(e.target.value)}
-                  placeholder="Paste AssemblyAI API Key..."
-                />
-              </div>
-            ) : (
-              <div className="dropdown-section">
-                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> Sarvam AI API Key</h4>
-                <input
-                  type="password"
-                  className="settings-input"
-                  value={sarvamApiKey}
-                  onChange={(e) => void updateSarvamApiKey(e.target.value)}
-                  placeholder="Paste Sarvam API Key..."
-                />
-              </div>
-            )}
-
-            <div className="dropdown-section">
-              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Smartphone size={14} /> Mobile Companion</h4>
-              <div style={{ fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', lineHeight: 1.45 }}>
-                <div>Pair your phone to control Blinky remotely over local Wi-Fi.</div>
-                <button
-                  type="button"
-                  className="dropdown-option"
-                  style={{ marginTop: '8px', width: '100%' }}
-                  onClick={() => {
-                    setShowSettings(false);
-                    openMobileModal();
-                  }}
-                >
-                  <QrCode size={16} /> Show Mobile Pairing QR
-                </button>
-              </div>
-            </div>
-
-            <div className="dropdown-section">
-              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><MessageSquare size={14} /> WhatsApp</h4>
-              <div className="dropdown-options">
-                <button
-                  type="button"
-                  className="dropdown-option wa-dropdown-btn"
-                  onClick={() => {
-                    setShowWaModal(true);
-                    setShowSettings(false);
-                  }}
-                >
-                  <span>Link / Connection Status</span>
-                  <div className={`wa-indicator-dot ${waStatus === 'connected' ? 'connected' : 'disconnected'}`} />
-                </button>
-              </div>
-            </div>
-
-            <div className="dropdown-section">
-              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Settings size={14} /> Shortcuts & Voice</h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', marginTop: '4px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>Toggle App</span>
-                  <code style={{ background: 'rgba(255, 255, 255, 0.08)', padding: '2px 6px', borderRadius: '4px', color: '#fff', fontSize: '11px' }}>Ctrl + Shift + {shortcut}</code>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>Push-to-Talk (Hold to speak)</span>
-                  <code style={{ background: 'rgba(255, 139, 106, 0.15)', color: 'var(--accent-strong, #ff8b6a)', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>Win + Space</code>
-                </div>
-              </div>
-            </div>
-
-            <div className="dropdown-section dropdown-about">
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Palette size={14} /> Theme: <strong>Ember</strong></span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Info size={14} /> About: <strong>v1.0.0</strong></span>
-            </div>
-          </div>
-        )}
 
 
         {/* Workflow-save prompt (agent loop completed a task) */}
@@ -4261,6 +3287,716 @@ export function CommandBar() {
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSettings && (
+        <div className="settings-modal-backdrop" onClick={() => setShowSettings(false)}>
+          <div className="settings-modal-dialog" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="settings-modal-header">
+              <div className="settings-modal-header-left">
+                <div className="settings-about-logo" style={{ width: '32px', height: '32px', borderRadius: '8px' }}>
+                  <Sliders size={16} />
+                </div>
+                <div>
+                  <h3>Settings &amp; Intelligence</h3>
+                  <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>
+                    Multi-agent orchestrator, endpoints, and credentials
+                  </p>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                {pingTesting && (
+                  <span className="settings-ping-chip" style={{ background: 'rgba(255, 90, 54, 0.15)', color: '#ff8b6a' }}>
+                    <Loader2 className="spin" size={12} /> Pinging...
+                  </span>
+                )}
+                {pingResult && !pingTesting && (
+                  <span className={`settings-ping-chip ${pingResult.ok ? 'success' : 'error'}`}>
+                    {pingResult.ok ? (
+                      <>⚡ {pingResult.latency_ms}ms ({pingResult.provider})</>
+                    ) : (
+                      <>❌ Ping Failed</>
+                    )}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="settings-modal-close"
+                  onClick={() => setShowSettings(false)}
+                  title="Close Settings (Esc)"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="settings-modal-body">
+              {/* Sidebar */}
+              <div className="settings-modal-sidebar">
+                <button
+                  type="button"
+                  className={`settings-sidebar-btn ${settingsTab === 'agents' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('agents')}
+                >
+                  <Bot size={15} />
+                  <span>Multi-Agent Core</span>
+                </button>
+                <button
+                  type="button"
+                  className={`settings-sidebar-btn ${settingsTab === 'keys' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('keys')}
+                >
+                  <Key size={15} />
+                  <span>Credentials &amp; APIs</span>
+                </button>
+                <button
+                  type="button"
+                  className={`settings-sidebar-btn ${settingsTab === 'mobile' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('mobile')}
+                >
+                  <Smartphone size={15} />
+                  <span>Mobile Companion</span>
+                </button>
+                <button
+                  type="button"
+                  className={`settings-sidebar-btn ${settingsTab === 'shortcuts' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('shortcuts')}
+                >
+                  <Command size={15} />
+                  <span>Keybindings</span>
+                </button>
+                <button
+                  type="button"
+                  className={`settings-sidebar-btn ${settingsTab === 'about' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('about')}
+                >
+                  <Info size={15} />
+                  <span>About &amp; System</span>
+                </button>
+              </div>
+
+              {/* Content Area */}
+              <div className="settings-modal-content">
+                {/* TAB 1: AGENTS */}
+                {settingsTab === 'agents' && (
+                  <>
+                    {/* Agent 1: Computer-Use Actuator */}
+                    <div className="settings-section-card settings-agent-card agent1-active">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Bot size={16} style={{ color: '#ff5a36' }} />
+                          <span>Agent 1: OS Actuator</span>
+                        </div>
+                        <span className="agent-badge-pill ember">Vision &amp; Computer Use</span>
+                      </div>
+                      <p className="settings-help-text">
+                        Orchestrates natural language commands into vision-guided OS clicks, keystrokes, and workflows.
+                      </p>
+
+                      <div className="settings-input-group">
+                        <label className="settings-label">Backend Actuator Provider</label>
+                        <div className="settings-provider-grid">
+                          <div
+                            className={`provider-grid-item ${provider === 'groq' ? 'active' : ''}`}
+                            onClick={() => updateProvider('groq')}
+                          >
+                            <Zap size={15} />
+                            <span className="provider-grid-item-label">Groq Llama/Qwen</span>
+                          </div>
+                          <div
+                            className={`provider-grid-item ${provider === 'deepseek' ? 'active' : ''}`}
+                            onClick={() => updateProvider('deepseek')}
+                          >
+                            <Brain size={15} />
+                            <span className="provider-grid-item-label">DeepSeek V3</span>
+                          </div>
+                          <div
+                            className={`provider-grid-item ${provider === 'custom' ? 'active' : ''}`}
+                            onClick={() => updateProvider('custom')}
+                          >
+                            <Wrench size={15} />
+                            <span className="provider-grid-item-label">Custom API</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Model Selector & Search for Agent 1 */}
+                      <div className="settings-input-group">
+                        <div className="settings-input-header">
+                          <label className="settings-label">Actuator Model</label>
+                          <button
+                            type="button"
+                            className="settings-btn-action settings-btn-secondary"
+                            style={{ padding: '3px 8px', fontSize: '10.5px' }}
+                            onClick={() => void refreshAgent1Models()}
+                            disabled={agent1ModelsLoading}
+                          >
+                            <RefreshCw className={agent1ModelsLoading ? 'spin' : ''} size={11} />
+                            <span>{agent1ModelsLoading ? 'Fetching...' : 'Sync Models'}</span>
+                          </button>
+                        </div>
+
+                        <div className="settings-search-container">
+                          <div className="settings-model-selector-row">
+                            <div className="settings-model-info">
+                              <span className="settings-model-name">{agent1Model}</span>
+                              <span className="settings-model-sub">Provider: {provider.toUpperCase()}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <button
+                                type="button"
+                                className="settings-btn-action"
+                                onClick={() => setIsAgent1SearchOpen(!isAgent1SearchOpen)}
+                              >
+                                <Search size={12} />
+                                <span>{isAgent1SearchOpen ? 'Close Search' : 'Change Model'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="settings-btn-action settings-btn-secondary"
+                                onClick={() => handleTestPing(provider, provider === 'groq' ? groqApiKey : provider === 'deepseek' ? deepseekApiKey : customApiKey, agent1Model, customUrl)}
+                                disabled={pingTesting}
+                              >
+                                ⚡ Ping
+                              </button>
+                            </div>
+                          </div>
+
+                          {isAgent1SearchOpen && (
+                            <div className="settings-search-dropdown-menu">
+                              <input
+                                type="text"
+                                className="settings-text-input"
+                                placeholder="Search models (e.g. qwen, llama, deepseek)..."
+                                value={agent1SearchQuery}
+                                onChange={(e) => setAgent1SearchQuery(e.target.value)}
+                                autoFocus
+                              />
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '4px' }}>
+                                {agent1ModelsList
+                                  .filter((m) =>
+                                    m.id.toLowerCase().includes(agent1SearchQuery.toLowerCase()) ||
+                                    (m.name && m.name.toLowerCase().includes(agent1SearchQuery.toLowerCase()))
+                                  )
+                                  .slice(0, 15)
+                                  .map((m) => (
+                                    <div
+                                      key={m.id}
+                                      className={`settings-search-item ${agent1Model === m.id ? 'selected' : ''}`}
+                                      onClick={() => {
+                                        updateAgent1Model(m.id);
+                                        setIsAgent1SearchOpen(false);
+                                      }}
+                                    >
+                                      <div>
+                                        <div style={{ fontWeight: 600 }}>{m.name || m.id}</div>
+                                        <div style={{ fontSize: '10px', color: '#94a3b8' }}>{m.id}</div>
+                                      </div>
+                                      {agent1Model === m.id && <Check size={14} style={{ color: '#ff5a36' }} />}
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Agent 2: Knowledge & RAG (Gemini) */}
+                    <div className="settings-section-card settings-agent-card agent2-active">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Brain size={16} style={{ color: '#c084fc' }} />
+                          <span>Agent 2: Knowledge &amp; RAG</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <span className="agent-badge-pill violet">Google Gemini</span>
+                          <span className="agent-badge-pill violet">FastEmbed</span>
+                        </div>
+                      </div>
+                      <p className="settings-help-text">
+                        Powers document synthesis, smart context grounding, offline/online vector search, and web citations.
+                      </p>
+
+                      <div className="settings-input-group">
+                        <div className="settings-input-header">
+                          <label className="settings-label">Gemini Model</label>
+                          <button
+                            type="button"
+                            className="settings-btn-action settings-btn-secondary"
+                            style={{ padding: '3px 8px', fontSize: '10.5px' }}
+                            onClick={() => void refreshGeminiModels()}
+                            disabled={geminiModelsLoading}
+                          >
+                            <RefreshCw className={geminiModelsLoading ? 'spin' : ''} size={11} />
+                            <span>{geminiModelsLoading ? 'Fetching...' : 'Sync Catalog'}</span>
+                          </button>
+                        </div>
+
+                        <div className="settings-search-container">
+                          <div className="settings-model-selector-row">
+                            <div className="settings-model-info">
+                              <span className="settings-model-name">{geminiModel}</span>
+                              <span className="settings-model-sub">Multimodal &amp; RAG Core</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <button
+                                type="button"
+                                className="settings-btn-action"
+                                onClick={() => setIsGeminiSearchOpen(!isGeminiSearchOpen)}
+                              >
+                                <Search size={12} />
+                                <span>{isGeminiSearchOpen ? 'Close Search' : 'Change Model'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="settings-btn-action settings-btn-secondary"
+                                onClick={() => handleTestPing('gemini', geminiApiKey, geminiModel)}
+                                disabled={pingTesting}
+                              >
+                                ⚡ Ping
+                              </button>
+                            </div>
+                          </div>
+
+                          {isGeminiSearchOpen && (
+                            <div className="settings-search-dropdown-menu">
+                              <input
+                                type="text"
+                                className="settings-text-input"
+                                placeholder="Search Gemini models (e.g. 2.5-flash, pro, exp)..."
+                                value={geminiSearchQuery}
+                                onChange={(e) => setGeminiSearchQuery(e.target.value)}
+                                autoFocus
+                              />
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '4px' }}>
+                                {geminiModelsList
+                                  .filter((m) =>
+                                    m.id.toLowerCase().includes(geminiSearchQuery.toLowerCase()) ||
+                                    (m.name && m.name.toLowerCase().includes(geminiSearchQuery.toLowerCase()))
+                                  )
+                                  .slice(0, 15)
+                                  .map((m) => (
+                                    <div
+                                      key={m.id}
+                                      className={`settings-search-item ${geminiModel === m.id ? 'selected' : ''}`}
+                                      onClick={() => {
+                                        updateGeminiModel(m.id);
+                                        setIsGeminiSearchOpen(false);
+                                      }}
+                                    >
+                                      <div>
+                                        <div style={{ fontWeight: 600 }}>{m.name || m.id}</div>
+                                        <div style={{ fontSize: '10px', color: '#94a3b8' }}>{m.id}</div>
+                                      </div>
+                                      {geminiModel === m.id && <Check size={14} style={{ color: '#c084fc' }} />}
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Agent 3: Realtime Voice Intelligence */}
+                    <div className="settings-section-card settings-agent-card">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Mic size={16} style={{ color: '#4ade80' }} />
+                          <span>Agent 3: Realtime Voice Intelligence</span>
+                        </div>
+                        <span className="agent-badge-pill emerald">Streaming STT + TTS</span>
+                      </div>
+                      <p className="settings-help-text">
+                        Conversational voice streaming with real-time speech-to-text, audio chunking, and speech playback.
+                      </p>
+
+                      <div className="settings-provider-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                        <div
+                          className={`provider-grid-item ${voiceProvider === 'assemblyai' ? 'active' : ''}`}
+                          onClick={() => updateVoiceProvider('assemblyai')}
+                        >
+                          <Zap size={16} />
+                          <span className="provider-grid-item-label">AssemblyAI Realtime</span>
+                          <span style={{ fontSize: '10px', color: '#94a3b8' }}>Conversational Voice Agent</span>
+                        </div>
+                        <div
+                          className={`provider-grid-item ${voiceProvider === 'sarvam' ? 'active' : ''}`}
+                          onClick={() => updateVoiceProvider('sarvam')}
+                        >
+                          <Volume2 size={16} />
+                          <span className="provider-grid-item-label">Sarvam AI</span>
+                          <span style={{ fontSize: '10px', color: '#94a3b8' }}>Multilingual Indian Accents</span>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* TAB 2: KEYS & APIS */}
+                {settingsTab === 'keys' && (
+                  <>
+                    <div className="settings-section-card settings-key-card">
+                      <div className="settings-input-header">
+                        <label className="settings-label">
+                          <Zap size={14} style={{ color: '#ff5a36' }} />
+                          <span>Groq API Key (Agent 1 Actuator)</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="settings-btn-action"
+                          style={{ padding: '2px 8px', fontSize: '10px' }}
+                          onClick={() => handleTestPing('groq', groqApiKey, agent1Model)}
+                          disabled={pingTesting || !groqApiKey}
+                        >
+                          Test ⚡
+                        </button>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-text-input"
+                        placeholder="gsk_..."
+                        value={groqApiKey}
+                        onChange={(e) => updateGroqApiKey(e.target.value)}
+                      />
+                      <p className="settings-help-text">
+                        Powers ultra-fast token generation for UI clicking and screen guidance.
+                      </p>
+                    </div>
+
+                    <div className="settings-section-card settings-key-card">
+                      <div className="settings-input-header">
+                        <label className="settings-label">
+                          <Brain size={14} style={{ color: '#c084fc' }} />
+                          <span>Google Gemini API Key (Agent 2 RAG)</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="settings-btn-action"
+                          style={{ padding: '2px 8px', fontSize: '10px' }}
+                          onClick={() => handleTestPing('gemini', geminiApiKey, geminiModel)}
+                          disabled={pingTesting || !geminiApiKey}
+                        >
+                          Test ⚡
+                        </button>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-text-input"
+                        placeholder="AIzaSy..."
+                        value={geminiApiKey}
+                        onChange={(e) => updateGeminiApiKey(e.target.value)}
+                      />
+                      <p className="settings-help-text">
+                        Enables Gemini 2.5 Flash multimodal synthesis and Google Search grounding.
+                      </p>
+                    </div>
+
+                    <div className="settings-section-card settings-key-card">
+                      <div className="settings-input-header">
+                        <label className="settings-label">
+                          <Brain size={14} style={{ color: '#38bdf8' }} />
+                          <span>DeepSeek API Key</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="settings-btn-action"
+                          style={{ padding: '2px 8px', fontSize: '10px' }}
+                          onClick={() => handleTestPing('deepseek', deepseekApiKey, 'deepseek-chat')}
+                          disabled={pingTesting || !deepseekApiKey}
+                        >
+                          Test ⚡
+                        </button>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-text-input"
+                        placeholder="sk-..."
+                        value={deepseekApiKey}
+                        onChange={(e) => updateDeepseekApiKey(e.target.value)}
+                      />
+                      <p className="settings-help-text">
+                        Powers deep reasoning actuator routines.
+                      </p>
+                    </div>
+
+                    <div className="settings-section-card settings-key-card">
+                      <div className="settings-input-header">
+                        <label className="settings-label">
+                          <Mic size={14} style={{ color: '#4ade80' }} />
+                          <span>AssemblyAI API Key (Agent 3 Voice)</span>
+                        </label>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-text-input"
+                        placeholder="AssemblyAI Token..."
+                        value={assemblyaiApiKey}
+                        onChange={(e) => updateAssemblyaiApiKey(e.target.value)}
+                      />
+                      <p className="settings-help-text">
+                        Enables bidirectional streaming voice conversations.
+                      </p>
+                    </div>
+
+                    <div className="settings-section-card settings-key-card">
+                      <div className="settings-input-header">
+                        <label className="settings-label">
+                          <Volume2 size={14} style={{ color: '#f59e0b' }} />
+                          <span>Sarvam AI API Key</span>
+                        </label>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-text-input"
+                        placeholder="Sarvam API Token..."
+                        value={sarvamApiKey}
+                        onChange={(e) => updateSarvamApiKey(e.target.value)}
+                      />
+                      <p className="settings-help-text">
+                        Powers multilingual Indian voice synthesis and transcription.
+                      </p>
+                    </div>
+
+                    <div className="settings-section-card settings-key-card">
+                      <label className="settings-label">
+                        <Wrench size={14} style={{ color: '#e2e8f0' }} />
+                        <span>Custom OpenAI-Compatible Endpoint</span>
+                      </label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <input
+                          type="text"
+                          className="settings-text-input"
+                          placeholder="Endpoint URL (e.g. http://localhost:11434/v1)"
+                          value={customUrl}
+                          onChange={(e) => updateCustomUrl(e.target.value)}
+                        />
+                        <input
+                          type="text"
+                          className="settings-text-input"
+                          placeholder="Model Identifier (e.g. llama3.2)"
+                          value={customModel}
+                          onChange={(e) => updateCustomModel(e.target.value)}
+                        />
+                        <input
+                          type="password"
+                          className="settings-text-input"
+                          placeholder="API Key (optional for local Ollama)"
+                          value={customApiKey}
+                          onChange={(e) => updateCustomApiKey(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* TAB 3: MOBILE COMPANION */}
+                {settingsTab === 'mobile' && (
+                  <div className="settings-section-card" style={{ padding: '16px' }}>
+                    <div className="settings-section-title">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Smartphone size={16} style={{ color: '#ff5a36' }} />
+                        <span>Blinky Mobile Companion</span>
+                      </div>
+                      <span className="agent-badge-pill ember">Local Encrypted Link</span>
+                    </div>
+
+                    {pairingLoading && !pairingPayload && (
+                      <div className="wa-disconnected" style={{ padding: '24px 0' }}>
+                        <div className="wa-loader">
+                          <Loader2 className="spin" size={18} />
+                          <span>Preparing pairing credentials...</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {pairingError && (
+                      <div className="wa-error-container">
+                        <p className="wa-error-msg">{pairingError}</p>
+                        <button
+                          type="button"
+                          className="settings-btn-action"
+                          onClick={() => loadPairingPayload()}
+                          disabled={pairingLoading}
+                        >
+                          Retry Connection
+                        </button>
+                      </div>
+                    )}
+
+                    {pairingPayload && !pairingError && (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', textAlign: 'center' }}>
+                        <p style={{ margin: 0, fontSize: '12px', color: '#cbd5e1' }}>
+                          Scan this QR code from your Blinky Mobile app (Pair tab):
+                        </p>
+
+                        {pairingPayload.ips.length > 1 && (
+                          <div className="pairing-ip-row" style={{ alignSelf: 'center' }}>
+                            <span className="wa-help-text">Host PC IP:</span>
+                            <select
+                              className="pairing-ip-select"
+                              value={pairingIp}
+                              onChange={(e) => setPairingIp(e.target.value)}
+                            >
+                              {pairingPayload.ips.map((ip) => (
+                                <option key={ip} value={ip}>{ip}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        <div className="wa-qr-canvas-wrapper" style={{ background: '#fff', padding: '10px', borderRadius: '12px' }}>
+                          <canvas ref={mobileCanvasRef} className="wa-qr-canvas" />
+                          {pairingLoading && (
+                            <div className="wa-qr-overlay">
+                              <Loader2 className="spin" size={24} />
+                            </div>
+                          )}
+                        </div>
+
+                        <p className="settings-help-text">
+                          Manual address: IP <code style={{ color: '#38bdf8' }}>{pairingIp}</code>, Port <code style={{ color: '#38bdf8' }}>{pairingPayload.ws_port}</code>
+                        </p>
+
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button
+                            type="button"
+                            className="settings-btn-action settings-btn-secondary"
+                            onClick={handleRegenerateToken}
+                            disabled={pairingLoading}
+                          >
+                            {pairingLoading ? <Loader2 className="spin" size={13} /> : 'Regenerate Code'}
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-btn-action"
+                            onClick={() => {
+                              setShowSettings(false);
+                              setShowWaModal(true);
+                            }}
+                          >
+                            <MessageSquare size={13} />
+                            <span>WhatsApp Bridge ({waStatus})</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* TAB 4: SHORTCUTS */}
+                {settingsTab === 'shortcuts' && (
+                  <>
+                    <div className="settings-section-card">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Command size={16} style={{ color: '#ff5a36' }} />
+                          <span>Global Summon Shortcut</span>
+                        </div>
+                        <span className="agent-badge-pill ember">System-Wide</span>
+                      </div>
+                      <p className="settings-help-text">
+                        Press this key combination from any application on Windows to instantly summon Blinky.
+                      </p>
+
+                      <div className="settings-shortcut-grid">
+                        <button
+                          type="button"
+                          className={`shortcut-pill-btn ${shortcut === 'Enter' ? 'active' : ''}`}
+                          onClick={() => updateShortcut('Enter')}
+                        >
+                          <span>Ctrl + Shift + Enter</span>
+                          {shortcut === 'Enter' && <Check size={14} />}
+                        </button>
+                        <button
+                          type="button"
+                          className={`shortcut-pill-btn ${shortcut === 'Space' ? 'active' : ''}`}
+                          onClick={() => updateShortcut('Space')}
+                        >
+                          <span>Ctrl + Win + Space</span>
+                          {shortcut === 'Space' && <Check size={14} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="settings-section-card">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Mic size={16} style={{ color: '#4ade80' }} />
+                          <span>Push-To-Talk Voice Input</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div>
+                          <div style={{ fontSize: '12px', fontWeight: 600, color: '#f1f5f9' }}>Hold Mic Button / Hotkey</div>
+                          <div style={{ fontSize: '11px', color: '#94a3b8' }}>Streams speech directly to Blinky's voice pipeline</div>
+                        </div>
+                        <span className="agent-badge-pill emerald">Win + Space</span>
+                      </div>
+                    </div>
+
+                    <div className="settings-section-card">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <X size={16} style={{ color: '#cbd5e1' }} />
+                          <span>Dismiss &amp; Cancel</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div>
+                          <div style={{ fontSize: '12px', fontWeight: 600, color: '#f1f5f9' }}>Escape Key</div>
+                          <div style={{ fontSize: '11px', color: '#94a3b8' }}>Closes modals, dismisses result bubbles, or cancels autopilot</div>
+                        </div>
+                        <span className="agent-badge-pill" style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#cbd5e1' }}>Esc</span>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* TAB 5: ABOUT */}
+                {settingsTab === 'about' && (
+                  <div className="settings-section-card settings-about-hero">
+                    <div className="settings-about-logo">
+                      <Bot size={28} />
+                    </div>
+                    <div>
+                      <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', color: '#fff', fontFamily: 'Astonpoliz, Okine Sans, sans-serif' }}>
+                        Blinky Desktop
+                      </h3>
+                      <span className="agent-badge-pill ember">v1.0.0 Production</span>
+                    </div>
+                    <p style={{ margin: '4px 0 0 0', fontSize: '11.5px', color: '#94a3b8', maxWidth: '380px' }}>
+                      The Vision-Guided Autonomous AI Companion for Windows. Unified multi-agent intelligence with local computer-use actuation and streaming voice.
+                    </p>
+
+                    <div className="settings-about-grid">
+                      <div className="settings-about-stat">
+                        <span className="settings-about-stat-label">UI Design System</span>
+                        <span className="settings-about-stat-val">Ember &amp; Deep Space</span>
+                      </div>
+                      <div className="settings-about-stat">
+                        <span className="settings-about-stat-label">Actuator Engine</span>
+                        <span className="settings-about-stat-val">{provider.toUpperCase()} ({agent1Model})</span>
+                      </div>
+                      <div className="settings-about-stat">
+                        <span className="settings-about-stat-label">Knowledge Engine</span>
+                        <span className="settings-about-stat-val">Gemini ({geminiModel})</span>
+                      </div>
+                      <div className="settings-about-stat">
+                        <span className="settings-about-stat-label">Voice Pipeline</span>
+                        <span className="settings-about-stat-val">{voiceProvider === 'assemblyai' ? 'AssemblyAI Realtime' : 'Sarvam Multilingual'}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

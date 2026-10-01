@@ -1,60 +1,61 @@
-# OKF Notebook Functionality: Master Implementation Plan
+# Implementation Plan - Modern Settings Dialog & Modal Architecture
 
-This document outlines the complete multi-phase implementation plan for the **OKF (Offline Knowledge Format) Notebook Functionality** across Python Backend, Desktop Shell, and Standalone Mobile Companion (`Blinky.apk`).
-
----
-
-## Core Philosophy: OKF as a Substitute for RAG
-
-For small to medium documents, PDFs, notes, and application manuals (which fit into modern 128k–1M context windows), traditional vector RAG fragments text and creates unnecessary chunking loss.
-
-**OKF (Offline Knowledge Format)** acts as a direct, full-context substitute for RAG:
-* **Zero Fragment Loss:** Documents are parsed into high-density structured Markdown and injected directly into the LLM context.
-* **Inline Source Badging:** Answers cite sources using exact badges (`[Source: filename.pdf]`).
-* **Actionable Execution:** Contains desktop navigation metadata so clicking a citation offers a **"▶ Execute on PC"** button to perform shortcuts/clicks on Windows desktop.
+## 1. Problem Diagnosis & Why the Current Dropdown Looks Messy
+- **Spatial Constraint**: The desktop `CommandBar` is a floating launcher widget (560px wide). Squeezing multi-agent routing, dynamic model search dropdowns, API key inputs, voice switches, and mobile pairing into a 320px–400px floating dropdown causes severe visual crowding, text wrapping bugs (e.g. `& RAG` breaking onto new lines), and cramped button bars.
+- **Visual Clutter**: The popover dropdown overlays the input bar awkwardly and feels like a rushed widget instead of a professional desktop application.
 
 ---
 
-## Implementation Phases
+## 2. Proposed Architecture: Dedicated Settings Dialog Modal
 
-### Phase 1: Python Backend Core Engine (`common/python/notebooks/`)
-* [x] **Document Parser (`document_parser.py`):** Converts PDFs, Markdown, TXT, and HTML files into structured OKF Markdown blocks with source headers.
-* [x] **Notebook Store Manager (`notebook_manager.py`):** JSON-backed CRUD engine (`tmp/notebooks/notebooks_store.json`) for notebooks and source attachments.
-* [x] **OKF Prompt Builder (`okf_context_builder.py`):** Combines active notebook sources and live desktop app guides (`app_context/registry.py`) into full-context prompts with grounding rules.
-* [x] **Automated Tests (`tests/test_notebook_okf.py`):** Unit test suite for parsing, store operations, and prompt construction.
+Instead of a cramped floating dropdown, clicking the **Settings Gear (⚙️)** will open a **Centered Glassmorphic Settings Dialog** (`640px` wide, `480px` tall) with a rich two-column layout inspired by Raycast, Linear, and MacOS System Settings.
 
----
-
-### Phase 2: WebSocket API & Grounding Router (`common/python/main.py`)
-* [ ] **Grounded LLM Dispatcher:** Route queries through `ai/client.py` enforcing strict grounded output and citation format (`[Source: filename.pdf]`).
-* [ ] **WebSocket Protocol Handlers (`main.py`):**
-  * `notebook_create` (creates notebook)
-  * `notebook_list` (returns all active notebooks)
-  * `notebook_add_source` (parses file and attaches source)
-  * `notebook_query` (streams grounded answer + citations)
-* [ ] **PC Action Payload Generator:** Parse software shortcuts/navigation from OKF responses to include executable PC action triggers (`▶ Execute on PC`).
-
----
-
-### Phase 3: Desktop UI Component (`NotebookView.tsx` & `styles.css`)
-* [x] **3-Column Glassmorphism Workspace Interface:**
-  * **Design System Overhaul:** Redesigned `.notebook-overlay`, `.notebook-container`, `.notebook-input-area`, `.send-btn`, and `.message-bubble` with sleek dark glassmorphism, responsive grid column bounds, and glowing focus states.
-  * **Typography Control:** Scoped heading bounds (`font-family: "Space Grotesk"`, `font-size: 16px`) to prevent overflow collisions.
-  * **Left Column (Sources):** Upload PDFs/documents, drag-and-drop zone, source toggle checkboxes with file meta indicators.
-  * **Center Column (Grounded Chat):** Interactive streaming chat with clear user/AI bubble gradients, dense vector RAG toggle pill, and styled input controls.
-  * **Right Column (Studio Artifacts):** One-click artifact generator cards (*Executive Summary*, *FAQ*, *Study Guide*, *Action Checklist*) with structured flex layouts.
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ⚙️ Blinky Settings                                                      ✕  │
+├───────────────────┬─────────────────────────────────────────────────────────┤
+│                   │ 🖥️ AGENT 1: ACTUATOR (COMPUTER-USE)                     │
+│ 🤖 Agent Routing  │ Provider: [ Groq ] [ Ollama ] [ DeepSeek ] [ Custom ]   │
+│                   │ Model:    [ Search qwen, llama, gpt... 🔍 ] [Test ⚡]   │
+│ 🔑 API Keys       │ Latency:  ✓ Online (142ms) • qwen/qwen3.8-27b           │
+│                   ├─────────────────────────────────────────────────────────┤
+│ 📱 Mobile & Link  │ 📚 AGENT 2: KNOWLEDGE & RAG                             │
+│                   │ Model:    [ gemini-2.5-flash ] [ FastEmbed Hybrid ]     │
+│ ⚡ Shortcuts      ├─────────────────────────────────────────────────────────┤
+│                   │ 🎙️ AGENT 3: REALTIME VOICE                              │
+│ ℹ️ About & Theme  │ Engine:   (•) AssemblyAI Universal-3  ( ) Sarvam AI     │
+└───────────────────┴─────────────────────────────────────────────────────────┘
+```
 
 ---
 
-### Phase 4: Standalone Android App Integration (`NotebookScreen.tsx`)
-* [ ] **Mobile Notebooks Tab:** Add a **Notebooks** tab in `common/mobile/`.
-* [ ] **Document Picker:** Select PDFs and text files from Android phone storage via `expo-document-picker`.
-* [ ] **Encrypted KeyStore Sync:** Persist transferred API keys (`Groq`, `DeepSeek`, `Gemini`) in `Expo SecureStore` (`EncryptedSharedPreferences`) for offline mobile usage.
-* [ ] **Offline JS Search Engine:** Integrate `MiniSearch` JS index on mobile for offline document search when PC is turned off.
+## 3. Key Improvements & Features
+
+### A. Two-Column Desktop Settings Modal
+1. **Left Navigation Sidebar (180px)**:
+   - 🤖 **Agent Routing**: Multi-agent model assignments (Actuator, RAG, Voice)
+   - 🔑 **API Credentials**: Groq, Gemini, DeepSeek, AssemblyAI, Sarvam, Custom endpoints
+   - 📱 **Mobile & Integrations**: Integrated Pairing QR, LAN IP dropdown, WhatsApp bridge
+   - ⚡ **Shortcuts & Audio**: Activation hotkeys (`Ctrl+Shift+Enter` vs `Ctrl+Win+Space`), Push-to-Talk
+   - ℹ️ **About & Diagnostics**: Offline engine status, theme (`Ember`), version (`v1.0.0`)
+2. **Right Content Area (Spacious 440px with smooth scroll)**:
+   - Full-width, un-truncated model names and badges.
+   - Clean segmented cards with generous padding (`16px`), glowing flame borders (`#FF5A36`), and status badges.
+   - Real-time **"Test Ping ⚡"** latency check chips with animated spin loaders.
+
+### B. Polish & Interaction Enhancements
+- **Backdrop Blur & Escape Key**: Click-outside backdrop or pressing `Escape` smoothly dismisses the modal.
+- **Ember & Deep Space Styling**: High-contrast `#0c0a09` background, `rgba(255, 90, 54, 0.25)` active glowing borders, glassmorphic blur, and `Astonpoliz`/`Okine Sans` typography.
+- **Embedded Mobile Companion**: Direct QR scan canvas embedded in the "Mobile & Link" tab without needing nested secondary popups.
 
 ---
 
-## Verification & Final Handshake Plan
-1. **Backend Verification:** Validate `notebooks` package and unittest execution.
-2. **WebSocket Integration:** Test `notebook_query` frame handling on port 9001.
-3. **Standalone APK Build:** Compile `app-release.apk` via `npx expo run:android --variant release` and verify offline phone execution.
+## 4. Files to Update
+- [`common/frontend/src/CommandBar.tsx`](file:///c:/Users/khann/Projects/Blinky/common/frontend/src/CommandBar.tsx): Convert `showSettings` from a dropdown into the centered Settings Modal Dialog component with two-column navigation.
+- [`common/frontend/src/styles.css`](file:///c:/Users/khann/Projects/Blinky/common/frontend/src/styles.css): Add styles for `.settings-modal-backdrop`, `.settings-modal-dialog`, `.settings-sidebar`, `.settings-content-panel`, and clean card components.
+
+---
+
+## 5. Verification Plan
+- **Build Verification**: Run `bun run typecheck` and `bun run build`.
+- **UI Functional Check**: Verify all 5 sidebar tabs, model search filter, API key persistence, Test Ping latency triggers, and QR code rendering.
