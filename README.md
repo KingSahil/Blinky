@@ -1,4 +1,5 @@
 <div align="center">
+  <img width="1170" height="156" alt="shipaton" src="https://github.com/user-attachments/assets/1ab89628-d306-467f-a2ac-bbb319393eb5" />
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo_text.png">
   <source media="(prefers-color-scheme: light)" srcset="common/mobile/assets/logo-text-light.png">
