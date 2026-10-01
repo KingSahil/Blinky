@@ -1,7 +1,7 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen, Cpu, Zap, Brain, Cloud, Wrench, Key, Smartphone, MessageSquare, Command, Palette, Info } from 'lucide-react';
+import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen, Cpu, Zap, Brain, Cloud, Wrench, Key, Smartphone, MessageSquare, Command, Palette, Info, Clock, Trash2, Plus, Search, ChevronDown, Edit3, RefreshCw, Sliders } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -18,6 +18,12 @@ import {
 import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, setCommandWindowSize, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility, getSecureTransportInfo, getMobilePairingPayload, regenerateRemoteToken, openNotebookWindow } from './lib/tauri';
 
 import { linkCitationMarkers, preprocessMarkdown } from './lib/citations';
+import {
+  fetchDynamicModels,
+  type DynamicModelItem,
+  DEFAULT_GROQ_CATALOG,
+  DEFAULT_GEMINI_CATALOG,
+} from './lib/modelCatalog';
 import { getSarvamErrorMessage } from './lib/tts';
 import { SarvamSpeechToTextStream, SarvamTextToSpeechStream } from './lib/sarvamStream';
 import {
@@ -30,6 +36,18 @@ import {
 import { AdaptiveTransportManager } from './lib/adaptiveTransport';
 import type { TutorConversationMessage, TutorProgress, TutorResult } from './lib/types';
 import type { SecureTransportInfo, MobilePairingPayload } from './lib/tauri';
+import { pingModel, type PingResult } from './lib/modelPing';
+import {
+  listPcChatSessions,
+  getActivePcSession,
+  savePcChatSession,
+  createPcChatSession,
+  deletePcChatSession,
+  clearAllPcChatSessions,
+  switchPcChatSession,
+  generatePcSessionTitle,
+  type PcChatSession,
+} from './lib/sessionStorage';
 
 
 interface AttachedMedia {
@@ -96,6 +114,7 @@ function ExternalMarkdownLink({ href, children }: AnchorHTMLAttributes<HTMLAncho
     </a>
   );
 }
+
 
 /** Renders the desktop command bar and coordinates its interactive workflows. */
 export function CommandBar() {
@@ -224,6 +243,23 @@ export function CommandBar() {
   const [steps, setSteps] = useState<any[]>([]);
   const [showGuideCompletionSummary, setShowGuideCompletionSummary] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [pcSessions, setPcSessions] = useState<PcChatSession[]>([]);
+  const [activePcSession, setActivePcSession] = useState<PcChatSession | null>(null);
+  const historyDropdownRef = useRef<HTMLDivElement | null>(null);
+  const historyToggleRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    const initial = getActivePcSession();
+    setActivePcSession(initial);
+    setPcSessions(listPcChatSessions());
+    if (initial.messages.length > 0) {
+      conversationHistoryRef.current = initial.messages.slice(-8).map((m) => ({
+        role: m.role === 'user' ? 'student' : 'blinky',
+        content: m.text,
+      }));
+    }
+  }, []);
   const [provider, setProvider] = useState('groq');
   const [shortcut, setShortcut] = useState('Enter');
   const defaultAaiKey = (import.meta as any).env?.VITE_ASSEMBLY_AI_API_KEY || '';
@@ -243,6 +279,120 @@ export function CommandBar() {
   const [customModel, setCustomModel] = useState('');
   const [customApiKey, setCustomApiKey] = useState('');
   const [transportInfo, setTransportInfo] = useState<SecureTransportInfo | null>(null);
+  const [pingTesting, setPingTesting] = useState(false);
+  const [pingResult, setPingResult] = useState<PingResult | null>(null);
+
+  // Agent 1: Computer-Use / Actuator
+  const [agent1Model, setAgent1Model] = useState<string>(() => {
+    return localStorage.getItem('blinky_agent1_model') || 'qwen/qwen3.8-27b';
+  });
+  const [agent1SearchQuery, setAgent1SearchQuery] = useState<string>('');
+  const [isAgent1SearchOpen, setIsAgent1SearchOpen] = useState<boolean>(false);
+  const [showAgent1Config, setShowAgent1Config] = useState<boolean>(false);
+  const [agent1ModelsList, setAgent1ModelsList] = useState<DynamicModelItem[]>(DEFAULT_GROQ_CATALOG);
+  const [agent1ModelsLoading, setAgent1ModelsLoading] = useState<boolean>(false);
+  const agent1FetchSeqRef = useRef<number>(0);
+
+  const updateAgent1Model = (newModel: string) => {
+    const clean = newModel.trim();
+    if (!clean) return;
+    setAgent1Model(clean);
+    localStorage.setItem('blinky_agent1_model', clean);
+    if (provider.toLowerCase().trim() === 'custom') {
+      void updateCustomModel(clean);
+    }
+  };
+
+  const refreshAgent1Models = async (
+    prov = provider,
+    gKey = groqApiKey,
+    dKey = deepseekApiKey,
+    cUrl = customUrl,
+    cKey = customApiKey
+  ) => {
+    const seq = ++agent1FetchSeqRef.current;
+    setAgent1ModelsLoading(true);
+    const key = prov === 'groq' ? gKey : prov === 'deepseek' ? dKey : prov === 'custom' ? cKey : '';
+    try {
+      const res = await fetchDynamicModels(prov, key, cUrl);
+      if (seq === agent1FetchSeqRef.current && res.models && res.models.length > 0) {
+        setAgent1ModelsList(res.models);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch Agent 1 models dynamically:', e);
+    } finally {
+      if (seq === agent1FetchSeqRef.current) {
+        setAgent1ModelsLoading(false);
+      }
+    }
+  };
+
+  // Agent 2: Knowledge & RAG (Gemini) Model Configuration & Search
+  const [geminiModel, setGeminiModel] = useState<string>(() => {
+    return localStorage.getItem('blinky_gemini_model') || 'gemini-2.5-flash';
+  });
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
+    return localStorage.getItem('blinky_gemini_api_key') || '';
+  });
+  const [geminiSearchQuery, setGeminiSearchQuery] = useState<string>('');
+  const [isGeminiSearchOpen, setIsGeminiSearchOpen] = useState<boolean>(false);
+  const [showGeminiConfig, setShowGeminiConfig] = useState<boolean>(false);
+  const [geminiModelsList, setGeminiModelsList] = useState<DynamicModelItem[]>(DEFAULT_GEMINI_CATALOG);
+  const [geminiModelsLoading, setGeminiModelsLoading] = useState<boolean>(false);
+  const geminiFetchSeqRef = useRef<number>(0);
+  const [settingsTab, setSettingsTab] = useState<'agents' | 'keys' | 'mobile' | 'shortcuts' | 'about'>('agents');
+
+  const updateGeminiModel = (newModel: string) => {
+    const clean = newModel.trim();
+    if (!clean) return;
+    setGeminiModel(clean);
+    localStorage.setItem('blinky_gemini_model', clean);
+  };
+
+  const updateGeminiApiKey = (newKey: string) => {
+    setGeminiApiKey(newKey);
+    localStorage.setItem('blinky_gemini_api_key', newKey);
+    if (newKey.trim().length > 10) {
+      void refreshGeminiModels(newKey);
+    }
+  };
+
+  const refreshGeminiModels = async (key = geminiApiKey) => {
+    const seq = ++geminiFetchSeqRef.current;
+    setGeminiModelsLoading(true);
+    try {
+      const res = await fetchDynamicModels('gemini', key);
+      if (seq === geminiFetchSeqRef.current && res.models && res.models.length > 0) {
+        setGeminiModelsList(res.models);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch Gemini models dynamically:', e);
+    } finally {
+      if (seq === geminiFetchSeqRef.current) {
+        setGeminiModelsLoading(false);
+      }
+    }
+  };
+
+  const handleTestPing = async (prov: string, key: string, model?: string, url?: string) => {
+    setPingTesting(true);
+    setPingResult(null);
+    try {
+      const res = await pingModel(prov, key, model, url);
+      setPingResult(res);
+    } catch (e: any) {
+      setPingResult({
+        ok: false,
+        provider: prov,
+        model: model || 'unknown',
+        latency_ms: 0,
+        status_code: 0,
+        error: e?.message || 'Ping failed',
+      });
+    } finally {
+      setPingTesting(false);
+    }
+  };
   const sarvamApiKeyRef = useRef('');
 
   useEffect(() => {
@@ -287,8 +437,15 @@ export function CommandBar() {
         if (s.groq_api_key) setGroqApiKey(s.groq_api_key);
         if (s.deepseek_api_key) setDeepseekApiKey(s.deepseek_api_key);
         if (s.custom_url) setCustomUrl(s.custom_url);
-        if (s.custom_model) setCustomModel(s.custom_model);
+        if (s.custom_model) {
+          setCustomModel(s.custom_model);
+          if (s.provider === 'custom') setAgent1Model(s.custom_model);
+        }
         if (s.custom_api_key) setCustomApiKey(s.custom_api_key);
+
+        const prov = s.provider || 'groq';
+        void refreshAgent1Models(prov, s.groq_api_key, s.deepseek_api_key, s.custom_url, s.custom_api_key);
+        void refreshGeminiModels(geminiApiKey);
       } catch (err) {
         console.error('Failed to load initial settings in CommandBar:', err);
       }
@@ -528,7 +685,7 @@ export function CommandBar() {
 
   // Draw mobile-pairing QR code to canvas
   useEffect(() => {
-    if (showMobileModal && pairingQrText && mobileCanvasRef.current) {
+    if ((showMobileModal || (showSettings && settingsTab === 'mobile')) && pairingQrText && mobileCanvasRef.current) {
       QRCode.toCanvas(
         mobileCanvasRef.current,
         pairingQrText,
@@ -545,7 +702,13 @@ export function CommandBar() {
         }
       );
     }
-  }, [showMobileModal, pairingQrText]);
+  }, [showMobileModal, showSettings, settingsTab, pairingQrText]);
+
+  useEffect(() => {
+    if (showSettings && settingsTab === 'mobile' && !pairingPayload && !pairingLoading) {
+      void loadPairingPayload();
+    }
+  }, [showSettings, settingsTab, pairingPayload, pairingLoading]);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -1563,6 +1726,34 @@ export function CommandBar() {
         ...conversationHistoryRef.current,
         ...newHistoryEntries,
       ].slice(-10);
+
+      const currentActiveSession = getActivePcSession();
+      if (currentActiveSession) {
+        const isDefaultTitle =
+          currentActiveSession.title === 'New Conversation' ||
+          currentActiveSession.title === 'Initial Session' ||
+          currentActiveSession.title === 'Current Session';
+        const updatedTitle = isDefaultTitle ? generatePcSessionTitle(effectiveQuery) : currentActiveSession.title;
+        const updatedSession: PcChatSession = {
+          ...currentActiveSession,
+          title: updatedTitle,
+          messages: [
+            ...currentActiveSession.messages,
+            { role: 'user', text: effectiveQuery, timestamp: Date.now() },
+            {
+              role: 'assistant',
+              text: result.summary || (result as any).solution || (result as any).explanation || 'Completed instruction.',
+              timestamp: Date.now(),
+              steps: (currentGuideSteps || []).map((s: any) =>
+                typeof s === 'string' ? s : s.instruction || s.title || ''
+              ),
+            },
+          ],
+        };
+        savePcChatSession(updatedSession);
+        setActivePcSession(updatedSession);
+        setPcSessions(listPcChatSessions());
+      }
       setShowGuideCompletionSummary(
         (hasCompletedProgress && currentGuideSteps.length === 0 && Boolean(result.summary))
         || Boolean(result.computer_use)
@@ -1653,6 +1844,24 @@ export function CommandBar() {
       window.removeEventListener('keydown', handleVoiceShortcut);
     };
   }, [isRunning, isTranscribing, isRecording]);
+
+  // Global Escape key handler to close settings, history, and modals
+  useEffect(() => {
+    const handleGlobalEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showSettings) {
+          setShowSettings(false);
+          setIsAgent1SearchOpen(false);
+          setIsGeminiSearchOpen(false);
+        }
+        if (showHistory) setShowHistory(false);
+        if (showWaModal) setShowWaModal(false);
+        if (showMobileModal) setShowMobileModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalEscape);
+    return () => window.removeEventListener('keydown', handleGlobalEscape);
+  }, [showSettings, showHistory, showWaModal, showMobileModal]);
 
   // Setup native Tauri and web drag-and-drop listener
   useEffect(() => {
@@ -1806,6 +2015,7 @@ export function CommandBar() {
   const updateProvider = async (newProvider: string) => {
     const cleanProvider = newProvider.toLowerCase().trim();
     setProvider(cleanProvider);
+    void refreshAgent1Models(cleanProvider, groqApiKey, deepseekApiKey, customUrl, customApiKey);
     try {
       await saveSettings(
         cleanProvider,
@@ -1867,6 +2077,9 @@ export function CommandBar() {
 
   const updateGroqApiKey = async (newKey: string) => {
     setGroqApiKey(newKey);
+    if (newKey.trim().length > 10) {
+      void refreshAgent1Models('groq', newKey, deepseekApiKey, customUrl, customApiKey);
+    }
     try {
       await saveSettings(
         provider,
@@ -1887,6 +2100,9 @@ export function CommandBar() {
 
   const updateDeepseekApiKey = async (newKey: string) => {
     setDeepseekApiKey(newKey);
+    if (newKey.trim().length > 10) {
+      void refreshAgent1Models('deepseek', groqApiKey, newKey, customUrl, customApiKey);
+    }
     try {
       await saveSettings(
         provider,
@@ -1907,6 +2123,7 @@ export function CommandBar() {
 
   const updateCustomUrl = async (newUrl: string) => {
     setCustomUrl(newUrl);
+    void refreshAgent1Models('custom', groqApiKey, deepseekApiKey, newUrl, customApiKey);
     try {
       await saveSettings(
         provider,
@@ -2160,7 +2377,7 @@ export function CommandBar() {
 
 
 
-  // Handle clicking outside settings dropdown and window focus change/blur
+  // Handle clicking outside settings/history dropdown and window focus change/blur
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (
@@ -2171,10 +2388,20 @@ export function CommandBar() {
       ) {
         setShowSettings(false);
       }
+
+      if (
+        historyDropdownRef.current &&
+        !historyDropdownRef.current.contains(event.target as Node) &&
+        historyToggleRef.current &&
+        !historyToggleRef.current.contains(event.target as Node)
+      ) {
+        setShowHistory(false);
+      }
     }
 
     const handleBlur = () => {
       setShowSettings(false);
+      setShowHistory(false);
     };
 
     document.addEventListener('mousedown', handleClickOutside);
@@ -2184,6 +2411,7 @@ export function CommandBar() {
     const unlistenPromise = getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       if (!focused) {
         setShowSettings(false);
+        setShowHistory(false);
       }
     });
 
@@ -2203,12 +2431,14 @@ export function CommandBar() {
       const formRect = formElement.getBoundingClientRect();
       let height = formRect.height;
 
-      if (showSettings && dropdownRef.current) {
-        const dd = dropdownRef.current;
-        // Use scrollHeight (full content) instead of the capped visible rect,
-        // otherwise the window never grows enough and the menu gets cut off.
-        const dropdownHeight = Math.max(dd.scrollHeight, dd.getBoundingClientRect().height);
-        height = Math.max(height, 52 + dropdownHeight);
+      if (showSettings) {
+        height = Math.max(height, 580);
+      }
+
+      if (showHistory && historyDropdownRef.current) {
+        const hd = historyDropdownRef.current;
+        const historyHeight = Math.max(hd.scrollHeight, hd.getBoundingClientRect().height);
+        height = Math.max(height, 52 + historyHeight);
       }
 
       if (showWaModal) {
@@ -2235,11 +2465,14 @@ export function CommandBar() {
     if (showSettings && dropdownRef.current) {
       observer.observe(dropdownRef.current);
     }
+    if (showHistory && historyDropdownRef.current) {
+      observer.observe(historyDropdownRef.current);
+    }
     return () => {
       cancelAnimationFrame(raf);
       observer.disconnect();
     };
-  }, [showSettings, showWaModal, showMobileModal, waStatus, provider, voiceProvider]);
+  }, [showSettings, showHistory, showWaModal, showMobileModal, waStatus, provider, voiceProvider]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setQuestion(event.target.value);
@@ -2416,6 +2649,21 @@ export function CommandBar() {
 
           <div className="command-actions">
             <button
+              ref={historyToggleRef}
+              type="button"
+              className={`icon-action command-history-toggle ${showHistory ? 'active' : ''}`}
+              aria-label="History"
+              title="Command & Chat History"
+              onClick={() => {
+                setShowHistory(!showHistory);
+                if (!showHistory) {
+                  setPcSessions(listPcChatSessions());
+                }
+              }}
+            >
+              <Clock size={18} />
+            </button>
+            <button
               type="button"
               className={`icon-action ${showMobileModal ? 'active' : ''}`}
               aria-label="Connect Mobile"
@@ -2452,221 +2700,133 @@ export function CommandBar() {
           </div>
         </div>
 
-        {/* Google-Style Dropdown Menu */}
-        {showSettings && (
-          <div ref={dropdownRef} className="command-settings-dropdown">
-            <div className="dropdown-section">
-              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Cpu size={14} /> Change Model</h4>
-              <div className="dropdown-options">
-                {(['groq', 'ollama', 'deepseek', 'mimo', 'custom'] as const).map((p) => {
-                  const Icon = p === 'groq' ? Zap : p === 'ollama' ? Cpu : p === 'deepseek' ? Brain : p === 'mimo' ? Cloud : Wrench;
+        {/* Persistent Chat & Command History Dropdown */}
+        {showHistory && (
+          <div ref={historyDropdownRef} className="command-history-dropdown">
+            <div className="history-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, fontSize: '13px', color: '#fff' }}>
+                <Clock size={15} style={{ color: 'var(--accent-color, #ff5a36)' }} />
+                <span>Command & Chat History</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  type="button"
+                  className="history-new-btn"
+                  onClick={() => {
+                    const newSess = createPcChatSession();
+                    setActivePcSession(newSess);
+                    setPcSessions(listPcChatSessions());
+                    conversationHistoryRef.current = [];
+                    setQuestion('');
+                    setSteps([]);
+                    setShowHistory(false);
+                  }}
+                  title="Start a new chat session"
+                >
+                  <Plus size={13} />
+                  <span>New Chat</span>
+                </button>
+                <button
+                  type="button"
+                  className="icon-action"
+                  onClick={() => setShowHistory(false)}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            </div>
+
+            <div className="history-list">
+              {pcSessions.length === 0 ? (
+                <div className="history-empty">
+                  <Clock size={28} style={{ opacity: 0.3, marginBottom: '6px' }} />
+                  <div>No saved sessions yet</div>
+                  <div style={{ fontSize: '11px', opacity: 0.6 }}>Your commands and conversations will appear here.</div>
+                </div>
+              ) : (
+                pcSessions.map((s) => {
+                  const isActive = activePcSession?.id === s.id;
+                  const formatTime = (ms: number) => {
+                    const sec = Math.floor((Date.now() - ms) / 1000);
+                    if (sec < 60) return 'Just now';
+                    if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+                    if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+                    return new Date(ms).toLocaleDateString([], { month: 'short', day: 'numeric' });
+                  };
                   return (
-                    <button
-                      key={p}
-                      type="button"
-                      className={`dropdown-option ${provider.toLowerCase().trim() === p ? 'active' : ''}`}
-                      onClick={() => updateProvider(p)}
-                      style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+                    <div
+                      key={s.id}
+                      className={`history-item ${isActive ? 'active' : ''}`}
+                      onClick={() => {
+                        const switched = switchPcChatSession(s.id);
+                        if (switched) {
+                          setActivePcSession(switched);
+                          conversationHistoryRef.current = switched.messages.slice(-8).map((m) => ({
+                            role: m.role === 'user' ? 'student' : 'blinky',
+                            content: m.text,
+                          }));
+                          if (switched.messages.length > 0) {
+                            const lastUser = [...switched.messages].reverse().find((m) => m.role === 'user');
+                            if (lastUser) setQuestion(lastUser.text);
+                          }
+                          setShowHistory(false);
+                        }
+                      }}
                     >
-                      <Icon size={14} style={{ opacity: 0.7 }} />
-                      <span style={{ flex: 1, textAlign: 'left' }}>{p === 'custom' ? 'Custom (OpenAI)' : p.charAt(0).toUpperCase() + p.slice(1)}</span>
-                      {provider.toLowerCase().trim() === p && <Check size={14} className="active-dot" />}
-                    </button>
+                      <div className="history-item-left">
+                        <div className="history-item-title">{s.title}</div>
+                        <div className="history-item-meta">
+                          <span>{formatTime(s.updatedAt)}</span>
+                          <span>•</span>
+                          <span>{s.messages.length} msg{s.messages.length !== 1 ? 's' : ''}</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="history-item-delete"
+                        title="Delete session"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const next = deletePcChatSession(s.id);
+                          setActivePcSession(next);
+                          setPcSessions(listPcChatSessions());
+                          conversationHistoryRef.current = next.messages.slice(-8).map((m) => ({
+                            role: m.role === 'user' ? 'student' : 'blinky',
+                            content: m.text,
+                          }));
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   );
-                })}
-              </div>
+                })
+              )}
             </div>
 
-            <div className="dropdown-section">
-              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Command size={14} /> Shortcut Key</h4>
-              <div className="dropdown-options">
+            {pcSessions.length > 0 && (
+              <div className="history-footer">
                 <button
                   type="button"
-                  className={`dropdown-option ${shortcut === 'Enter' ? 'active' : ''}`}
-                  onClick={() => updateShortcut('Enter')}
-                >
-                  <span>Ctrl + Shift + Enter</span>
-                  {shortcut === 'Enter' && <Check size={14} className="active-dot" />}
-                </button>
-                <button
-                  type="button"
-                  className={`dropdown-option ${shortcut === 'Space' ? 'active' : ''}`}
-                  onClick={() => updateShortcut('Space')}
-                >
-                  <span>Ctrl + Win + Space</span>
-                  {shortcut === 'Space' && <Check size={14} className="active-dot" />}
-                </button>
-              </div>
-            </div>
-
-            {provider.toLowerCase().trim() === 'groq' && (
-              <div className="dropdown-section">
-                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> Groq API Key</h4>
-                <input
-                  type="password"
-                  className="settings-input"
-                  value={groqApiKey}
-                  onChange={(e) => updateGroqApiKey(e.target.value)}
-                  placeholder="Paste API Key..."
-                />
-              </div>
-            )}
-
-            {provider.toLowerCase().trim() === 'deepseek' && (
-              <div className="dropdown-section">
-                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> DeepSeek API Key</h4>
-                <input
-                  type="password"
-                  className="settings-input"
-                  value={deepseekApiKey}
-                  onChange={(e) => updateDeepseekApiKey(e.target.value)}
-                  placeholder="Paste API Key..."
-                />
-              </div>
-            )}
-
-            {provider.toLowerCase().trim() === 'custom' && (
-              <>
-                <div className="dropdown-section">
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Globe size={14} /> Custom API URL</h4>
-                  <input
-                    type="text"
-                    className="settings-input"
-                    value={customUrl}
-                    onChange={(e) => updateCustomUrl(e.target.value)}
-                    placeholder="https://opencode.ai/zen/v1"
-                  />
-                </div>
-                <div className="dropdown-section">
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Bot size={14} /> Model</h4>
-                  <input
-                    type="text"
-                    className="settings-input"
-                    value={customModel}
-                    onChange={(e) => updateCustomModel(e.target.value)}
-                    placeholder="minimax-m3"
-                  />
-                </div>
-                <div className="dropdown-section">
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> Custom API Key</h4>
-                  <input
-                    type="password"
-                    className="settings-input"
-                    value={customApiKey}
-                    onChange={(e) => updateCustomApiKey(e.target.value)}
-                    placeholder="Paste API Key..."
-                  />
-                </div>
-              </>
-            )}
-
-            <div className="dropdown-section">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Mic size={14} /> Voice Provider</h4>
-                <span style={{ fontSize: '10px', background: 'rgba(255, 110, 95, 0.2)', color: '#ff8b6a', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
-                  {voiceProvider === 'assemblyai' ? 'Universal-3 Pro' : 'Indic Voice'}
-                </span>
-              </div>
-              <div className="voice-provider-tabs">
-                <button
-                  type="button"
-                  className={`voice-provider-tab ${voiceProvider === 'assemblyai' ? 'active aai' : ''}`}
-                  onClick={() => void updateVoiceProvider('assemblyai')}
-                >
-                  <span>AssemblyAI</span>
-                </button>
-                <button
-                  type="button"
-                  className={`voice-provider-tab ${voiceProvider === 'sarvam' ? 'active' : ''}`}
-                  onClick={() => void updateVoiceProvider('sarvam')}
-                >
-                  <span>Sarvam AI</span>
-                </button>
-              </div>
-            </div>
-
-            {voiceProvider === 'assemblyai' ? (
-              <div className="dropdown-section">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
-                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> AssemblyAI API Key</h4>
-                  <span style={{ fontSize: '9.5px', color: 'rgba(255, 255, 255, 0.5)' }}>Universal-3 Pro</span>
-                </div>
-                <input
-                  type="password"
-                  className="settings-input"
-                  value={assemblyaiApiKey}
-                  onChange={(e) => void updateAssemblyaiApiKey(e.target.value)}
-                  placeholder="Paste AssemblyAI API Key..."
-                />
-              </div>
-            ) : (
-              <div className="dropdown-section">
-                <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Key size={14} /> Sarvam AI API Key</h4>
-                <input
-                  type="password"
-                  className="settings-input"
-                  value={sarvamApiKey}
-                  onChange={(e) => void updateSarvamApiKey(e.target.value)}
-                  placeholder="Paste Sarvam API Key..."
-                />
-              </div>
-            )}
-
-            <div className="dropdown-section">
-              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Smartphone size={14} /> Mobile Companion</h4>
-              <div style={{ fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', lineHeight: 1.45 }}>
-                <div>Pair your phone to control Blinky remotely over local Wi-Fi.</div>
-                <button
-                  type="button"
-                  className="dropdown-option"
-                  style={{ marginTop: '8px', width: '100%' }}
+                  className="history-clear-btn"
                   onClick={() => {
-                    setShowSettings(false);
-                    openMobileModal();
+                    if (confirm('Clear all conversation history?')) {
+                      const fresh = clearAllPcChatSessions();
+                      setActivePcSession(fresh);
+                      setPcSessions(listPcChatSessions());
+                      conversationHistoryRef.current = [];
+                    }
                   }}
                 >
-                  <QrCode size={16} /> Show Mobile Pairing QR
+                  <Trash2 size={12} />
+                  <span>Clear All History</span>
                 </button>
               </div>
-            </div>
-
-            <div className="dropdown-section">
-              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><MessageSquare size={14} /> WhatsApp</h4>
-              <div className="dropdown-options">
-                <button
-                  type="button"
-                  className="dropdown-option wa-dropdown-btn"
-                  onClick={() => {
-                    setShowWaModal(true);
-                    setShowSettings(false);
-                  }}
-                >
-                  <span>Link / Connection Status</span>
-                  <div className={`wa-indicator-dot ${waStatus === 'connected' ? 'connected' : 'disconnected'}`} />
-                </button>
-              </div>
-            </div>
-
-            <div className="dropdown-section">
-              <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Settings size={14} /> Shortcuts & Voice</h4>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', marginTop: '4px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>Toggle App</span>
-                  <code style={{ background: 'rgba(255, 255, 255, 0.08)', padding: '2px 6px', borderRadius: '4px', color: '#fff', fontSize: '11px' }}>Ctrl + Shift + {shortcut}</code>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>Push-to-Talk (Hold to speak)</span>
-                  <code style={{ background: 'rgba(255, 139, 106, 0.15)', color: 'var(--accent-strong, #ff8b6a)', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>Win + Space</code>
-                </div>
-              </div>
-            </div>
-
-            <div className="dropdown-section dropdown-about">
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Palette size={14} /> Theme: <strong>Ember</strong></span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Info size={14} /> About: <strong>v1.0.0</strong></span>
-            </div>
+            )}
           </div>
         )}
+
+
 
 
         {/* Workflow-save prompt (agent loop completed a task) */}
@@ -3127,6 +3287,716 @@ export function CommandBar() {
                   </button>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSettings && (
+        <div className="settings-modal-backdrop" onClick={() => setShowSettings(false)}>
+          <div className="settings-modal-dialog" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="settings-modal-header">
+              <div className="settings-modal-header-left">
+                <div className="settings-about-logo" style={{ width: '32px', height: '32px', borderRadius: '8px' }}>
+                  <Sliders size={16} />
+                </div>
+                <div>
+                  <h3>Settings &amp; Intelligence</h3>
+                  <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8' }}>
+                    Multi-agent orchestrator, endpoints, and credentials
+                  </p>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                {pingTesting && (
+                  <span className="settings-ping-chip" style={{ background: 'rgba(255, 90, 54, 0.15)', color: '#ff8b6a' }}>
+                    <Loader2 className="spin" size={12} /> Pinging...
+                  </span>
+                )}
+                {pingResult && !pingTesting && (
+                  <span className={`settings-ping-chip ${pingResult.ok ? 'success' : 'error'}`}>
+                    {pingResult.ok ? (
+                      <>⚡ {pingResult.latency_ms}ms ({pingResult.provider})</>
+                    ) : (
+                      <>❌ Ping Failed</>
+                    )}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="settings-modal-close"
+                  onClick={() => setShowSettings(false)}
+                  title="Close Settings (Esc)"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="settings-modal-body">
+              {/* Sidebar */}
+              <div className="settings-modal-sidebar">
+                <button
+                  type="button"
+                  className={`settings-sidebar-btn ${settingsTab === 'agents' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('agents')}
+                >
+                  <Bot size={15} />
+                  <span>Multi-Agent Core</span>
+                </button>
+                <button
+                  type="button"
+                  className={`settings-sidebar-btn ${settingsTab === 'keys' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('keys')}
+                >
+                  <Key size={15} />
+                  <span>Credentials &amp; APIs</span>
+                </button>
+                <button
+                  type="button"
+                  className={`settings-sidebar-btn ${settingsTab === 'mobile' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('mobile')}
+                >
+                  <Smartphone size={15} />
+                  <span>Mobile Companion</span>
+                </button>
+                <button
+                  type="button"
+                  className={`settings-sidebar-btn ${settingsTab === 'shortcuts' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('shortcuts')}
+                >
+                  <Command size={15} />
+                  <span>Keybindings</span>
+                </button>
+                <button
+                  type="button"
+                  className={`settings-sidebar-btn ${settingsTab === 'about' ? 'active' : ''}`}
+                  onClick={() => setSettingsTab('about')}
+                >
+                  <Info size={15} />
+                  <span>About &amp; System</span>
+                </button>
+              </div>
+
+              {/* Content Area */}
+              <div className="settings-modal-content">
+                {/* TAB 1: AGENTS */}
+                {settingsTab === 'agents' && (
+                  <>
+                    {/* Agent 1: Computer-Use Actuator */}
+                    <div className="settings-section-card settings-agent-card agent1-active">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Bot size={16} style={{ color: '#ff5a36' }} />
+                          <span>Agent 1: OS Actuator</span>
+                        </div>
+                        <span className="agent-badge-pill ember">Vision &amp; Computer Use</span>
+                      </div>
+                      <p className="settings-help-text">
+                        Orchestrates natural language commands into vision-guided OS clicks, keystrokes, and workflows.
+                      </p>
+
+                      <div className="settings-input-group">
+                        <label className="settings-label">Backend Actuator Provider</label>
+                        <div className="settings-provider-grid">
+                          <div
+                            className={`provider-grid-item ${provider === 'groq' ? 'active' : ''}`}
+                            onClick={() => updateProvider('groq')}
+                          >
+                            <Zap size={15} />
+                            <span className="provider-grid-item-label">Groq Llama/Qwen</span>
+                          </div>
+                          <div
+                            className={`provider-grid-item ${provider === 'deepseek' ? 'active' : ''}`}
+                            onClick={() => updateProvider('deepseek')}
+                          >
+                            <Brain size={15} />
+                            <span className="provider-grid-item-label">DeepSeek V3</span>
+                          </div>
+                          <div
+                            className={`provider-grid-item ${provider === 'custom' ? 'active' : ''}`}
+                            onClick={() => updateProvider('custom')}
+                          >
+                            <Wrench size={15} />
+                            <span className="provider-grid-item-label">Custom API</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Model Selector & Search for Agent 1 */}
+                      <div className="settings-input-group">
+                        <div className="settings-input-header">
+                          <label className="settings-label">Actuator Model</label>
+                          <button
+                            type="button"
+                            className="settings-btn-action settings-btn-secondary"
+                            style={{ padding: '3px 8px', fontSize: '10.5px' }}
+                            onClick={() => void refreshAgent1Models()}
+                            disabled={agent1ModelsLoading}
+                          >
+                            <RefreshCw className={agent1ModelsLoading ? 'spin' : ''} size={11} />
+                            <span>{agent1ModelsLoading ? 'Fetching...' : 'Sync Models'}</span>
+                          </button>
+                        </div>
+
+                        <div className="settings-search-container">
+                          <div className="settings-model-selector-row">
+                            <div className="settings-model-info">
+                              <span className="settings-model-name">{agent1Model}</span>
+                              <span className="settings-model-sub">Provider: {provider.toUpperCase()}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <button
+                                type="button"
+                                className="settings-btn-action"
+                                onClick={() => setIsAgent1SearchOpen(!isAgent1SearchOpen)}
+                              >
+                                <Search size={12} />
+                                <span>{isAgent1SearchOpen ? 'Close Search' : 'Change Model'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="settings-btn-action settings-btn-secondary"
+                                onClick={() => handleTestPing(provider, provider === 'groq' ? groqApiKey : provider === 'deepseek' ? deepseekApiKey : customApiKey, agent1Model, customUrl)}
+                                disabled={pingTesting}
+                              >
+                                ⚡ Ping
+                              </button>
+                            </div>
+                          </div>
+
+                          {isAgent1SearchOpen && (
+                            <div className="settings-search-dropdown-menu">
+                              <input
+                                type="text"
+                                className="settings-text-input"
+                                placeholder="Search models (e.g. qwen, llama, deepseek)..."
+                                value={agent1SearchQuery}
+                                onChange={(e) => setAgent1SearchQuery(e.target.value)}
+                                autoFocus
+                              />
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '4px' }}>
+                                {agent1ModelsList
+                                  .filter((m) =>
+                                    m.id.toLowerCase().includes(agent1SearchQuery.toLowerCase()) ||
+                                    (m.name && m.name.toLowerCase().includes(agent1SearchQuery.toLowerCase()))
+                                  )
+                                  .slice(0, 15)
+                                  .map((m) => (
+                                    <div
+                                      key={m.id}
+                                      className={`settings-search-item ${agent1Model === m.id ? 'selected' : ''}`}
+                                      onClick={() => {
+                                        updateAgent1Model(m.id);
+                                        setIsAgent1SearchOpen(false);
+                                      }}
+                                    >
+                                      <div>
+                                        <div style={{ fontWeight: 600 }}>{m.name || m.id}</div>
+                                        <div style={{ fontSize: '10px', color: '#94a3b8' }}>{m.id}</div>
+                                      </div>
+                                      {agent1Model === m.id && <Check size={14} style={{ color: '#ff5a36' }} />}
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Agent 2: Knowledge & RAG (Gemini) */}
+                    <div className="settings-section-card settings-agent-card agent2-active">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Brain size={16} style={{ color: '#c084fc' }} />
+                          <span>Agent 2: Knowledge &amp; RAG</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <span className="agent-badge-pill violet">Google Gemini</span>
+                          <span className="agent-badge-pill violet">FastEmbed</span>
+                        </div>
+                      </div>
+                      <p className="settings-help-text">
+                        Powers document synthesis, smart context grounding, offline/online vector search, and web citations.
+                      </p>
+
+                      <div className="settings-input-group">
+                        <div className="settings-input-header">
+                          <label className="settings-label">Gemini Model</label>
+                          <button
+                            type="button"
+                            className="settings-btn-action settings-btn-secondary"
+                            style={{ padding: '3px 8px', fontSize: '10.5px' }}
+                            onClick={() => void refreshGeminiModels()}
+                            disabled={geminiModelsLoading}
+                          >
+                            <RefreshCw className={geminiModelsLoading ? 'spin' : ''} size={11} />
+                            <span>{geminiModelsLoading ? 'Fetching...' : 'Sync Catalog'}</span>
+                          </button>
+                        </div>
+
+                        <div className="settings-search-container">
+                          <div className="settings-model-selector-row">
+                            <div className="settings-model-info">
+                              <span className="settings-model-name">{geminiModel}</span>
+                              <span className="settings-model-sub">Multimodal &amp; RAG Core</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <button
+                                type="button"
+                                className="settings-btn-action"
+                                onClick={() => setIsGeminiSearchOpen(!isGeminiSearchOpen)}
+                              >
+                                <Search size={12} />
+                                <span>{isGeminiSearchOpen ? 'Close Search' : 'Change Model'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="settings-btn-action settings-btn-secondary"
+                                onClick={() => handleTestPing('gemini', geminiApiKey, geminiModel)}
+                                disabled={pingTesting}
+                              >
+                                ⚡ Ping
+                              </button>
+                            </div>
+                          </div>
+
+                          {isGeminiSearchOpen && (
+                            <div className="settings-search-dropdown-menu">
+                              <input
+                                type="text"
+                                className="settings-text-input"
+                                placeholder="Search Gemini models (e.g. 2.5-flash, pro, exp)..."
+                                value={geminiSearchQuery}
+                                onChange={(e) => setGeminiSearchQuery(e.target.value)}
+                                autoFocus
+                              />
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '4px' }}>
+                                {geminiModelsList
+                                  .filter((m) =>
+                                    m.id.toLowerCase().includes(geminiSearchQuery.toLowerCase()) ||
+                                    (m.name && m.name.toLowerCase().includes(geminiSearchQuery.toLowerCase()))
+                                  )
+                                  .slice(0, 15)
+                                  .map((m) => (
+                                    <div
+                                      key={m.id}
+                                      className={`settings-search-item ${geminiModel === m.id ? 'selected' : ''}`}
+                                      onClick={() => {
+                                        updateGeminiModel(m.id);
+                                        setIsGeminiSearchOpen(false);
+                                      }}
+                                    >
+                                      <div>
+                                        <div style={{ fontWeight: 600 }}>{m.name || m.id}</div>
+                                        <div style={{ fontSize: '10px', color: '#94a3b8' }}>{m.id}</div>
+                                      </div>
+                                      {geminiModel === m.id && <Check size={14} style={{ color: '#c084fc' }} />}
+                                    </div>
+                                  ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Agent 3: Realtime Voice Intelligence */}
+                    <div className="settings-section-card settings-agent-card">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Mic size={16} style={{ color: '#4ade80' }} />
+                          <span>Agent 3: Realtime Voice Intelligence</span>
+                        </div>
+                        <span className="agent-badge-pill emerald">Streaming STT + TTS</span>
+                      </div>
+                      <p className="settings-help-text">
+                        Conversational voice streaming with real-time speech-to-text, audio chunking, and speech playback.
+                      </p>
+
+                      <div className="settings-provider-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                        <div
+                          className={`provider-grid-item ${voiceProvider === 'assemblyai' ? 'active' : ''}`}
+                          onClick={() => updateVoiceProvider('assemblyai')}
+                        >
+                          <Zap size={16} />
+                          <span className="provider-grid-item-label">AssemblyAI Realtime</span>
+                          <span style={{ fontSize: '10px', color: '#94a3b8' }}>Conversational Voice Agent</span>
+                        </div>
+                        <div
+                          className={`provider-grid-item ${voiceProvider === 'sarvam' ? 'active' : ''}`}
+                          onClick={() => updateVoiceProvider('sarvam')}
+                        >
+                          <Volume2 size={16} />
+                          <span className="provider-grid-item-label">Sarvam AI</span>
+                          <span style={{ fontSize: '10px', color: '#94a3b8' }}>Multilingual Indian Accents</span>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* TAB 2: KEYS & APIS */}
+                {settingsTab === 'keys' && (
+                  <>
+                    <div className="settings-section-card settings-key-card">
+                      <div className="settings-input-header">
+                        <label className="settings-label">
+                          <Zap size={14} style={{ color: '#ff5a36' }} />
+                          <span>Groq API Key (Agent 1 Actuator)</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="settings-btn-action"
+                          style={{ padding: '2px 8px', fontSize: '10px' }}
+                          onClick={() => handleTestPing('groq', groqApiKey, agent1Model)}
+                          disabled={pingTesting || !groqApiKey}
+                        >
+                          Test ⚡
+                        </button>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-text-input"
+                        placeholder="gsk_..."
+                        value={groqApiKey}
+                        onChange={(e) => updateGroqApiKey(e.target.value)}
+                      />
+                      <p className="settings-help-text">
+                        Powers ultra-fast token generation for UI clicking and screen guidance.
+                      </p>
+                    </div>
+
+                    <div className="settings-section-card settings-key-card">
+                      <div className="settings-input-header">
+                        <label className="settings-label">
+                          <Brain size={14} style={{ color: '#c084fc' }} />
+                          <span>Google Gemini API Key (Agent 2 RAG)</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="settings-btn-action"
+                          style={{ padding: '2px 8px', fontSize: '10px' }}
+                          onClick={() => handleTestPing('gemini', geminiApiKey, geminiModel)}
+                          disabled={pingTesting || !geminiApiKey}
+                        >
+                          Test ⚡
+                        </button>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-text-input"
+                        placeholder="AIzaSy..."
+                        value={geminiApiKey}
+                        onChange={(e) => updateGeminiApiKey(e.target.value)}
+                      />
+                      <p className="settings-help-text">
+                        Enables Gemini 2.5 Flash multimodal synthesis and Google Search grounding.
+                      </p>
+                    </div>
+
+                    <div className="settings-section-card settings-key-card">
+                      <div className="settings-input-header">
+                        <label className="settings-label">
+                          <Brain size={14} style={{ color: '#38bdf8' }} />
+                          <span>DeepSeek API Key</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="settings-btn-action"
+                          style={{ padding: '2px 8px', fontSize: '10px' }}
+                          onClick={() => handleTestPing('deepseek', deepseekApiKey, 'deepseek-chat')}
+                          disabled={pingTesting || !deepseekApiKey}
+                        >
+                          Test ⚡
+                        </button>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-text-input"
+                        placeholder="sk-..."
+                        value={deepseekApiKey}
+                        onChange={(e) => updateDeepseekApiKey(e.target.value)}
+                      />
+                      <p className="settings-help-text">
+                        Powers deep reasoning actuator routines.
+                      </p>
+                    </div>
+
+                    <div className="settings-section-card settings-key-card">
+                      <div className="settings-input-header">
+                        <label className="settings-label">
+                          <Mic size={14} style={{ color: '#4ade80' }} />
+                          <span>AssemblyAI API Key (Agent 3 Voice)</span>
+                        </label>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-text-input"
+                        placeholder="AssemblyAI Token..."
+                        value={assemblyaiApiKey}
+                        onChange={(e) => updateAssemblyaiApiKey(e.target.value)}
+                      />
+                      <p className="settings-help-text">
+                        Enables bidirectional streaming voice conversations.
+                      </p>
+                    </div>
+
+                    <div className="settings-section-card settings-key-card">
+                      <div className="settings-input-header">
+                        <label className="settings-label">
+                          <Volume2 size={14} style={{ color: '#f59e0b' }} />
+                          <span>Sarvam AI API Key</span>
+                        </label>
+                      </div>
+                      <input
+                        type="password"
+                        className="settings-text-input"
+                        placeholder="Sarvam API Token..."
+                        value={sarvamApiKey}
+                        onChange={(e) => updateSarvamApiKey(e.target.value)}
+                      />
+                      <p className="settings-help-text">
+                        Powers multilingual Indian voice synthesis and transcription.
+                      </p>
+                    </div>
+
+                    <div className="settings-section-card settings-key-card">
+                      <label className="settings-label">
+                        <Wrench size={14} style={{ color: '#e2e8f0' }} />
+                        <span>Custom OpenAI-Compatible Endpoint</span>
+                      </label>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <input
+                          type="text"
+                          className="settings-text-input"
+                          placeholder="Endpoint URL (e.g. http://localhost:11434/v1)"
+                          value={customUrl}
+                          onChange={(e) => updateCustomUrl(e.target.value)}
+                        />
+                        <input
+                          type="text"
+                          className="settings-text-input"
+                          placeholder="Model Identifier (e.g. llama3.2)"
+                          value={customModel}
+                          onChange={(e) => updateCustomModel(e.target.value)}
+                        />
+                        <input
+                          type="password"
+                          className="settings-text-input"
+                          placeholder="API Key (optional for local Ollama)"
+                          value={customApiKey}
+                          onChange={(e) => updateCustomApiKey(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* TAB 3: MOBILE COMPANION */}
+                {settingsTab === 'mobile' && (
+                  <div className="settings-section-card" style={{ padding: '16px' }}>
+                    <div className="settings-section-title">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Smartphone size={16} style={{ color: '#ff5a36' }} />
+                        <span>Blinky Mobile Companion</span>
+                      </div>
+                      <span className="agent-badge-pill ember">Local Encrypted Link</span>
+                    </div>
+
+                    {pairingLoading && !pairingPayload && (
+                      <div className="wa-disconnected" style={{ padding: '24px 0' }}>
+                        <div className="wa-loader">
+                          <Loader2 className="spin" size={18} />
+                          <span>Preparing pairing credentials...</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {pairingError && (
+                      <div className="wa-error-container">
+                        <p className="wa-error-msg">{pairingError}</p>
+                        <button
+                          type="button"
+                          className="settings-btn-action"
+                          onClick={() => loadPairingPayload()}
+                          disabled={pairingLoading}
+                        >
+                          Retry Connection
+                        </button>
+                      </div>
+                    )}
+
+                    {pairingPayload && !pairingError && (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', textAlign: 'center' }}>
+                        <p style={{ margin: 0, fontSize: '12px', color: '#cbd5e1' }}>
+                          Scan this QR code from your Blinky Mobile app (Pair tab):
+                        </p>
+
+                        {pairingPayload.ips.length > 1 && (
+                          <div className="pairing-ip-row" style={{ alignSelf: 'center' }}>
+                            <span className="wa-help-text">Host PC IP:</span>
+                            <select
+                              className="pairing-ip-select"
+                              value={pairingIp}
+                              onChange={(e) => setPairingIp(e.target.value)}
+                            >
+                              {pairingPayload.ips.map((ip) => (
+                                <option key={ip} value={ip}>{ip}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        <div className="wa-qr-canvas-wrapper" style={{ background: '#fff', padding: '10px', borderRadius: '12px' }}>
+                          <canvas ref={mobileCanvasRef} className="wa-qr-canvas" />
+                          {pairingLoading && (
+                            <div className="wa-qr-overlay">
+                              <Loader2 className="spin" size={24} />
+                            </div>
+                          )}
+                        </div>
+
+                        <p className="settings-help-text">
+                          Manual address: IP <code style={{ color: '#38bdf8' }}>{pairingIp}</code>, Port <code style={{ color: '#38bdf8' }}>{pairingPayload.ws_port}</code>
+                        </p>
+
+                        <div style={{ display: 'flex', gap: '8px' }}>
+                          <button
+                            type="button"
+                            className="settings-btn-action settings-btn-secondary"
+                            onClick={handleRegenerateToken}
+                            disabled={pairingLoading}
+                          >
+                            {pairingLoading ? <Loader2 className="spin" size={13} /> : 'Regenerate Code'}
+                          </button>
+                          <button
+                            type="button"
+                            className="settings-btn-action"
+                            onClick={() => {
+                              setShowSettings(false);
+                              setShowWaModal(true);
+                            }}
+                          >
+                            <MessageSquare size={13} />
+                            <span>WhatsApp Bridge ({waStatus})</span>
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* TAB 4: SHORTCUTS */}
+                {settingsTab === 'shortcuts' && (
+                  <>
+                    <div className="settings-section-card">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Command size={16} style={{ color: '#ff5a36' }} />
+                          <span>Global Summon Shortcut</span>
+                        </div>
+                        <span className="agent-badge-pill ember">System-Wide</span>
+                      </div>
+                      <p className="settings-help-text">
+                        Press this key combination from any application on Windows to instantly summon Blinky.
+                      </p>
+
+                      <div className="settings-shortcut-grid">
+                        <button
+                          type="button"
+                          className={`shortcut-pill-btn ${shortcut === 'Enter' ? 'active' : ''}`}
+                          onClick={() => updateShortcut('Enter')}
+                        >
+                          <span>Ctrl + Shift + Enter</span>
+                          {shortcut === 'Enter' && <Check size={14} />}
+                        </button>
+                        <button
+                          type="button"
+                          className={`shortcut-pill-btn ${shortcut === 'Space' ? 'active' : ''}`}
+                          onClick={() => updateShortcut('Space')}
+                        >
+                          <span>Ctrl + Win + Space</span>
+                          {shortcut === 'Space' && <Check size={14} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="settings-section-card">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Mic size={16} style={{ color: '#4ade80' }} />
+                          <span>Push-To-Talk Voice Input</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div>
+                          <div style={{ fontSize: '12px', fontWeight: 600, color: '#f1f5f9' }}>Hold Mic Button / Hotkey</div>
+                          <div style={{ fontSize: '11px', color: '#94a3b8' }}>Streams speech directly to Blinky's voice pipeline</div>
+                        </div>
+                        <span className="agent-badge-pill emerald">Win + Space</span>
+                      </div>
+                    </div>
+
+                    <div className="settings-section-card">
+                      <div className="settings-section-title">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <X size={16} style={{ color: '#cbd5e1' }} />
+                          <span>Dismiss &amp; Cancel</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <div>
+                          <div style={{ fontSize: '12px', fontWeight: 600, color: '#f1f5f9' }}>Escape Key</div>
+                          <div style={{ fontSize: '11px', color: '#94a3b8' }}>Closes modals, dismisses result bubbles, or cancels autopilot</div>
+                        </div>
+                        <span className="agent-badge-pill" style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#cbd5e1' }}>Esc</span>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* TAB 5: ABOUT */}
+                {settingsTab === 'about' && (
+                  <div className="settings-section-card settings-about-hero">
+                    <div className="settings-about-logo">
+                      <Bot size={28} />
+                    </div>
+                    <div>
+                      <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', color: '#fff', fontFamily: 'Astonpoliz, Okine Sans, sans-serif' }}>
+                        Blinky Desktop
+                      </h3>
+                      <span className="agent-badge-pill ember">v1.0.0 Production</span>
+                    </div>
+                    <p style={{ margin: '4px 0 0 0', fontSize: '11.5px', color: '#94a3b8', maxWidth: '380px' }}>
+                      The Vision-Guided Autonomous AI Companion for Windows. Unified multi-agent intelligence with local computer-use actuation and streaming voice.
+                    </p>
+
+                    <div className="settings-about-grid">
+                      <div className="settings-about-stat">
+                        <span className="settings-about-stat-label">UI Design System</span>
+                        <span className="settings-about-stat-val">Ember &amp; Deep Space</span>
+                      </div>
+                      <div className="settings-about-stat">
+                        <span className="settings-about-stat-label">Actuator Engine</span>
+                        <span className="settings-about-stat-val">{provider.toUpperCase()} ({agent1Model})</span>
+                      </div>
+                      <div className="settings-about-stat">
+                        <span className="settings-about-stat-label">Knowledge Engine</span>
+                        <span className="settings-about-stat-val">Gemini ({geminiModel})</span>
+                      </div>
+                      <div className="settings-about-stat">
+                        <span className="settings-about-stat-label">Voice Pipeline</span>
+                        <span className="settings-about-stat-val">{voiceProvider === 'assemblyai' ? 'AssemblyAI Realtime' : 'Sarvam Multilingual'}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

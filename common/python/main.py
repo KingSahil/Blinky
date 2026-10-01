@@ -1421,7 +1421,8 @@ def run_notebook_intelligence(
     if use_vector_search:
         try:
             v_store = VectorStore()
-            vector_matches = v_store.search_top_k(notebook_id, question, top_k=5)
+            active_source_names = [s.get("source_name") for s in active_sources if s.get("source_name")]
+            vector_matches = v_store.search_top_k(notebook_id, question, top_k=5, active_sources=active_source_names)
         except Exception as e:
             LOGGER.warning(f"Vector search failed, falling back: {e}")
             vector_matches = None
@@ -2097,6 +2098,17 @@ def merge_visible_items(ocr_items: list[dict], uia_items: list[dict]) -> list[di
 def main() -> None:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
+        if payload.get("action") in ("test_ai_model", "ping_model"):
+            from ai.model_tester import ping_ai_model
+            res = ping_ai_model(
+                provider=payload.get("provider", "groq"),
+                api_key=payload.get("api_key"),
+                model=payload.get("model"),
+                custom_url=payload.get("custom_url"),
+            )
+            print(json.dumps(res, ensure_ascii=True))
+            return
+
         question = str(payload.get("question", "")).strip()
         previous_question = payload.get("previous_question")
         if previous_question is not None:

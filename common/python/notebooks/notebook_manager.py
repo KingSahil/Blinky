@@ -128,6 +128,13 @@ class NotebookManager:
         if notebook_id in self.data:
             del self.data[notebook_id]
             self._save_store()
+            try:
+                from .vector_store import VectorStore
+                db_path = self.storage_dir / "vector_store.db" if self.storage_dir else None
+                v_store = VectorStore(db_path=db_path)
+                v_store.clear_notebook(notebook_id)
+            except Exception as e:
+                LOGGER.error(f"Failed clearing vector store for notebook {notebook_id}: {e}")
             LOGGER.info(f"Deleted notebook {notebook_id}")
             return True
         return False

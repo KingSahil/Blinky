@@ -12,13 +12,22 @@ from utils.logging import get_logger
 
 LOGGER = get_logger("blinky.gemini")
 
-# Priority model list: fastest first, then progressively more capable
+# Priority model list: active modern 2.5/2.0/1.5 family
 PREFERRED_GEMINI_MODELS = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.8-flash",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
     "gemini-flash-latest",
-    "gemini-2.5-flash-lite",
 ]
+
+
+def _get_candidate_models() -> list[str]:
+    """Returns prioritized candidate models honoring GEMINI_MODEL env var if present."""
+    pref = os.getenv("GEMINI_MODEL", "").strip()
+    if pref:
+        return [pref] + [m for m in PREFERRED_GEMINI_MODELS if m != pref]
+    return PREFERRED_GEMINI_MODELS
 
 
 def _get_gemini_client():
@@ -120,7 +129,7 @@ def _try_gemini_vision(prompt: str, img_bytes: bytes, mime_type: str) -> dict[st
         if client is None:
             return None
         part = types.Part.from_bytes(data=img_bytes, mime_type=mime_type)
-        for model_name in PREFERRED_GEMINI_MODELS:
+        for model_name in _get_candidate_models():
             try:
                 LOGGER.info("Calling Gemini Vision with model: %s", model_name)
                 resp = client.models.generate_content(
@@ -179,7 +188,7 @@ def ask_gemini_text(
         client = _get_gemini_client()
         if client is None:
             raise RuntimeError("Gemini client not available. Set GEMINI_API_KEY in .env.")
-        for model_name in PREFERRED_GEMINI_MODELS:
+        for model_name in _get_candidate_models():
             try:
                 resp = client.models.generate_content(
                     model=model_name,

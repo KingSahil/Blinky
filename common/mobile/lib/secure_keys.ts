@@ -27,6 +27,8 @@ export async function saveSyncedApiKeys(keys: SyncedApiKeys): Promise<void> {
       await SecureStore.setItemAsync(SECURE_KEYS_STORAGE_KEY, payload, {
         keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
       });
+      // Purge any lingering plaintext fallback copy once hardware keystore succeeds
+      await AsyncStorage.removeItem(ASYNC_KEYS_FALLBACK_KEY).catch(() => {});
       console.log('[SecureKeys] API Keys securely encrypted in Android KeyStore.');
     } else {
       await AsyncStorage.setItem(ASYNC_KEYS_FALLBACK_KEY, payload);
@@ -70,4 +72,20 @@ export async function getSyncedApiKeys(): Promise<SyncedApiKeys> {
 export async function hasSyncedApiKeys(): Promise<boolean> {
   const keys = await getSyncedApiKeys();
   return Boolean(keys.groq_key || keys.openai_key || keys.gemini_key || keys.deepseek_key);
+}
+
+/**
+ * Completely purges synced API keys from both SecureStore and AsyncStorage on disconnect/logout.
+ */
+export async function clearSyncedApiKeys(): Promise<void> {
+  try {
+    const isSecureAvailable = SecureStore ? await SecureStore.isAvailableAsync().catch(() => false) : false;
+    if (isSecureAvailable) {
+      await SecureStore.deleteItemAsync(SECURE_KEYS_STORAGE_KEY).catch(() => {});
+    }
+    await AsyncStorage.removeItem(ASYNC_KEYS_FALLBACK_KEY).catch(() => {});
+    console.log('[SecureKeys] Synced API keys successfully purged from mobile storage.');
+  } catch (err) {
+    console.warn('[SecureKeys] Error clearing synced API keys:', err);
+  }
 }

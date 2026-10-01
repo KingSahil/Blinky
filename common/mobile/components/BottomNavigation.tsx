@@ -15,7 +15,6 @@ interface BottomNavigationProps {
 const TABS: { id: TabScreen; icon: keyof typeof Ionicons.glyphMap; label: string }[] = [
   { id: 'Chat', icon: 'chatbubbles-outline', label: 'Chat' },
   { id: 'Actions', icon: 'flash-outline', label: 'Actions' },
-  { id: 'Notebook', icon: 'book-outline', label: 'Notebook' },
   { id: 'Files', icon: 'folder-outline', label: 'Files' },
   { id: 'PC', icon: 'grid-outline', label: 'PC' },
 ];

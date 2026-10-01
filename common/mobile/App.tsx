@@ -57,7 +57,23 @@ import { SystemScreen } from './components/SystemScreen';
 import { SettingsModal } from './components/SettingsModal';
 import { FilesScreen } from './components/FilesScreen';
 import { BottomNavigation } from './components/BottomNavigation';
-import { NotebookScreen } from './components/NotebookScreen';
+import { SessionHistoryModal } from './components/SessionHistoryModal';
+import {
+  listSessions,
+  getActiveSession,
+  saveSession,
+  createNewSession,
+  deleteSession,
+  clearAllSessions,
+  generateSessionTitle,
+  BlinkyChatSession,
+} from './lib/session_manager';
+import {
+  listMobileNotebooks,
+  buildMobileOkfContext,
+  createMobileNotebook,
+} from './lib/mobile_rag_db';
+import { getSyncedApiKeys } from './lib/secure_keys';
 import { PromoCodeModal } from './components/PromoCodeModal';
 import {
   initializePurchases,
@@ -733,6 +749,8 @@ export default function App() {
   ]);
   
   const activeBlinkyMsgIdRef = useRef<string | null>(null);
+  const activeBlinkySessionIdRef = useRef<string | null>(null);
+  const currentSessionIdRef = useRef<string | null>(null);
   const activeAntigravityMsgIdRef = useRef<string | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
 
@@ -743,6 +761,40 @@ export default function App() {
   const [isPcUnlocked, setIsPcUnlocked] = useState(false);
   const [showPromoModal, setShowPromoModal] = useState(false);
   const [isRestoringPurchases, setIsRestoringPurchases] = useState(false);
+
+  // Persistent Chat Sessions state
+  const [currentSession, setCurrentSession] = useState<BlinkyChatSession | null>(null);
+  currentSessionIdRef.current = currentSession?.id || null;
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [sessionsList, setSessionsList] = useState<BlinkyChatSession[]>([]);
+  const [chatMode, setChatMode] = useState<'autopilot' | 'grounded'>('autopilot');
+
+  useEffect(() => {
+    let mounted = true;
+    void getActiveSession().then((session) => {
+      if (!mounted) return;
+      setCurrentSession(session);
+      if (session.messages && session.messages.length > 0) {
+        setMessages(session.messages);
+      }
+      if (session.mode) {
+        setChatMode(session.mode === 'grounded' ? 'grounded' : 'autopilot');
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (currentSession && messages.length > 0) {
+      void saveSession({
+        ...currentSession,
+        mode: chatMode === 'grounded' ? 'grounded' : 'general',
+        messages,
+      });
+    }
+  }, [currentSession, messages, chatMode]);
 
   useEffect(() => {
     let mounted = true;
@@ -904,6 +956,7 @@ export default function App() {
     const blinkyMsgId = generateUuid();
 
     activeBlinkyMsgIdRef.current = blinkyMsgId;
+    activeBlinkySessionIdRef.current = currentSessionIdRef.current;
 
     setMessages(prev => [
       ...prev,
@@ -1041,6 +1094,16 @@ export default function App() {
       const { status: respStatus, data, error } = latestResponse;
       const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const currentActiveId = activeBlinkyMsgIdRef.current;
+      const isMatchingSession = !activeBlinkySessionIdRef.current || activeBlinkySessionIdRef.current === currentSessionIdRef.current;
+
+      if (!currentActiveId || !isMatchingSession) {
+        if (respStatus === 'success' || respStatus === 'error') {
+          setAgentStatus('idle');
+          activeBlinkyMsgIdRef.current = null;
+          activeBlinkySessionIdRef.current = null;
+        }
+        return;
+      }
 
       if (respStatus === 'processing') {
         setAgentStatus('processing');
@@ -1106,6 +1169,7 @@ export default function App() {
           }));
         }
         activeBlinkyMsgIdRef.current = null;
+        activeBlinkySessionIdRef.current = null;
 
         // Append final response bubble
         setMessages(prev => [
@@ -1139,6 +1203,7 @@ export default function App() {
           }));
         }
         activeBlinkyMsgIdRef.current = null;
+        activeBlinkySessionIdRef.current = null;
 
         setMessages(prev => [
           ...prev,
@@ -1237,6 +1302,100 @@ export default function App() {
       return false;
     }
 
+    if (currentSession && (currentSession.title === 'New Chat' || currentSession.title === 'Welcome Session' || currentSession.title === 'Current Session')) {
+      const generated = generateSessionTitle(query || 'Attachment');
+      setCurrentSession({ ...currentSession, title: generated });
+    }
+
+    // Grounded Knowledge mode: Query local vector store + LLM with document citations
+    if (chatMode === 'grounded' && attachedFiles.length === 0) {
+      const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const userMsgId = generateUuid();
+      const blinkyMsgId = generateUuid();
+      setMessages(prev => [
+        ...prev,
+        { id: userMsgId, sender: 'user' as const, text: query, timestamp: currentTime },
+        {
+          id: blinkyMsgId,
+          sender: 'blinky' as const,
+          text: '🔍 Grounding in local documents with vector search...',
+          timestamp: currentTime,
+          progress: { percent: 40, statusText: 'Synthesizing with verified citations...', duration: 0 },
+        },
+      ]);
+      setQueryText('');
+      setAgentStatus('processing');
+      triggerHaptic('medium');
+
+      void (async () => {
+        try {
+          const nbs = await listMobileNotebooks();
+          let activeNb = nbs[0];
+          if (!activeNb) {
+            activeNb = await createMobileNotebook('My Documents');
+          }
+          const { systemPrompt, userPrompt, matchCount } = buildMobileOkfContext(activeNb, query, true);
+          const keys = await getSyncedApiKeys();
+
+          let answer = '';
+          if (keys.groq_key) {
+            const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${keys.groq_key}`,
+              },
+              body: JSON.stringify({
+                model: 'qwen/qwen3.8-27b',
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: userPrompt },
+                ],
+                temperature: 0.2,
+              }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            answer = data?.choices?.[0]?.message?.content || 'No response generated from Groq.';
+          } else if (keys.gemini_key) {
+            const resp = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(keys.gemini_key)}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  system_instruction: { parts: [{ text: systemPrompt }] },
+                  contents: [{ parts: [{ text: userPrompt }] }],
+                }),
+              }
+            );
+            const data = await resp.json().catch(() => ({}));
+            answer = data?.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated from Gemini.';
+          } else {
+            // Forward to PC WebSocket tutor as grounded research query
+            sendQuery(`[Grounded Research in "${activeNb.title}"]: ${query}`, generateUuid());
+            return;
+          }
+
+          setMessages(prev => prev.map(m => m.id === blinkyMsgId ? {
+            ...m,
+            text: answer + (matchCount > 0 ? `\n\n*(Grounded across ${matchCount} local document sources in "${activeNb.title}")*` : ''),
+            progress: undefined,
+          } : m));
+          setAgentStatus('success');
+          triggerHaptic('medium');
+        } catch (err: any) {
+          setMessages(prev => prev.map(m => m.id === blinkyMsgId ? {
+            ...m,
+            text: `⚠️ Error during grounded retrieval: ${err?.message || 'Network error'}`,
+            progress: undefined,
+          } : m));
+          setAgentStatus('error');
+          triggerHaptic('heavy');
+        }
+      })();
+      return true;
+    }
+
     let attachmentRoute: AttachmentRoute | null = null;
     if (attachedFiles.length) {
       const attempt = ++attachmentPlanningAttempt.current;
@@ -1272,6 +1431,7 @@ export default function App() {
       const userMsgId = generateUuid();
       const blinkyMsgId = generateUuid();
       activeBlinkyMsgIdRef.current = blinkyMsgId;
+      activeBlinkySessionIdRef.current = currentSessionIdRef.current;
       setMessages(prev => [
         ...prev,
         { id: userMsgId, sender: 'user' as const, text: explainQuery, timestamp: currentTime, attachedFiles },
@@ -1411,6 +1571,7 @@ export default function App() {
     
     // Save reference of the active Blinky card to update later
     activeBlinkyMsgIdRef.current = blinkyMsgId;
+    activeBlinkySessionIdRef.current = currentSessionIdRef.current;
 
     setMessages(prev => [
       ...prev,
@@ -1677,6 +1838,7 @@ export default function App() {
       const blinkyMsgId = generateUuid();
 
       activeBlinkyMsgIdRef.current = blinkyMsgId;
+      activeBlinkySessionIdRef.current = currentSessionIdRef.current;
 
       setMessages(prev => [
         ...prev,
@@ -1759,6 +1921,7 @@ export default function App() {
       }));
     }
     activeBlinkyMsgIdRef.current = null;
+    activeBlinkySessionIdRef.current = null;
   };
 
   const formatTime = (totalSecs: number) => {
@@ -2238,6 +2401,56 @@ export default function App() {
             status={status}
             isConnected={isConnected}
             onPressConnection={() => setShowSettings(!showSettings)}
+            onPressHistory={() => {
+              void listSessions().then(setSessionsList);
+              setShowHistoryModal(true);
+            }}
+          />
+
+          {/* Session History Slide-Up Drawer */}
+          <SessionHistoryModal
+            visible={showHistoryModal}
+            onClose={() => setShowHistoryModal(false)}
+            sessions={sessionsList}
+            activeSessionId={currentSession?.id || ''}
+            onSelectSession={(sess) => {
+              activeBlinkyMsgIdRef.current = null;
+              activeBlinkySessionIdRef.current = null;
+              setAgentStatus('idle');
+              setCurrentSession(sess);
+              setMessages(sess.messages);
+              setChatMode(sess.mode === 'grounded' ? 'grounded' : 'autopilot');
+            }}
+            onNewSession={async () => {
+              activeBlinkyMsgIdRef.current = null;
+              activeBlinkySessionIdRef.current = null;
+              setAgentStatus('idle');
+              const fresh = await createNewSession(chatMode === 'grounded' ? 'grounded' : 'general');
+              setCurrentSession(fresh);
+              setMessages(fresh.messages);
+              const updated = await listSessions();
+              setSessionsList(updated);
+            }}
+            onDeleteSession={async (id) => {
+              activeBlinkyMsgIdRef.current = null;
+              activeBlinkySessionIdRef.current = null;
+              setAgentStatus('idle');
+              const next = await deleteSession(id);
+              setCurrentSession(next);
+              setMessages(next.messages);
+              const updated = await listSessions();
+              setSessionsList(updated);
+            }}
+            onClearAllSessions={async () => {
+              activeBlinkyMsgIdRef.current = null;
+              activeBlinkySessionIdRef.current = null;
+              setAgentStatus('idle');
+              const fresh = await clearAllSessions();
+              setCurrentSession(fresh);
+              setMessages(fresh.messages);
+              const updated = await listSessions();
+              setSessionsList(updated);
+            }}
           />
 
           {/* Settings modal extracted to SettingsModal.tsx */}
@@ -2378,6 +2591,61 @@ export default function App() {
                 commands={SLASH_COMMANDS}
               />
 
+              {/* Inline Grounding Mode Bar: PC Autopilot vs Grounded Knowledge */}
+              <View style={styles.groundingModeBar}>
+                <TouchableOpacity
+                  style={[
+                    styles.groundingPill,
+                    chatMode === 'autopilot' && styles.groundingPillActiveAutopilot,
+                  ]}
+                  onPress={() => {
+                    triggerHaptic('selection');
+                    setChatMode('autopilot');
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name="desktop-outline"
+                    size={13}
+                    color={chatMode === 'autopilot' ? '#FF5A36' : '#8A86AA'}
+                  />
+                  <Text
+                    style={[
+                      styles.groundingPillText,
+                      chatMode === 'autopilot' && styles.groundingPillTextActiveAutopilot,
+                    ]}
+                  >
+                    PC Autopilot
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.groundingPill,
+                    chatMode === 'grounded' && styles.groundingPillActiveGrounded,
+                  ]}
+                  onPress={() => {
+                    triggerHaptic('selection');
+                    setChatMode('grounded');
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name="book-outline"
+                    size={13}
+                    color={chatMode === 'grounded' ? '#A78BFA' : '#8A86AA'}
+                  />
+                  <Text
+                    style={[
+                      styles.groundingPillText,
+                      chatMode === 'grounded' && styles.groundingPillTextActiveGrounded,
+                    ]}
+                  >
+                    Grounded Knowledge
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
               {/* Command Composer */}
               <CommandComposer
                 queryText={queryText}
@@ -2421,11 +2689,6 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'Notebook' && (
-            <View style={{ flex: 1 }}>
-              <NotebookScreen />
-            </View>
-          )}
 
           {activeTab === 'PC' && (
             <SystemScreen 
@@ -3475,5 +3738,45 @@ const styles = StyleSheet.create({
   slashMenuDesc: {
     color: '#9CA3AF',
     fontSize: 11.5,
+  },
+  groundingModeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 6,
+  },
+  groundingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  groundingPillActiveAutopilot: {
+    backgroundColor: 'rgba(255, 90, 54, 0.12)',
+    borderColor: 'rgba(255, 90, 54, 0.4)',
+  },
+  groundingPillActiveGrounded: {
+    backgroundColor: 'rgba(167, 139, 250, 0.15)',
+    borderColor: 'rgba(167, 139, 250, 0.45)',
+  },
+  groundingPillText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#8A86AA',
+  },
+  groundingPillTextActiveAutopilot: {
+    color: '#FF5A36',
+    fontWeight: '700',
+  },
+  groundingPillTextActiveGrounded: {
+    color: '#C4B5FD',
+    fontWeight: '700',
   },
 });

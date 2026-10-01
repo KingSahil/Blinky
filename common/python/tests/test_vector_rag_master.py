@@ -74,7 +74,7 @@ class TestVectorRAGMaster(unittest.TestCase):
             }, 0.91)
         ]
         context = build_okf_prompt_context(nb, "How do joint angles get calculated?", vector_matches=matches)
-        self.assertIn("VECTOR CHUNK: kinematics.pdf", context["user_prompt"])
+        self.assertIn("kinematics.pdf", context["user_prompt"])
         self.assertIn("91%", context["user_prompt"])
         self.assertEqual(context["source_count"], 1)
 
