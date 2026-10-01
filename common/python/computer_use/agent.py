@@ -200,7 +200,6 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
 
         return shortcut_tool("alt+h")
 
-
     play_match = PLAY_SPOTIFY_RE.match(question_cleaned)
     if play_match:
         song = play_match.group("song1") or play_match.group("song2")

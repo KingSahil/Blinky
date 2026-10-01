@@ -9,7 +9,6 @@ export async function runTutor(
   conversationHistory?: TutorConversationMessage[],
   webSearchEnabled?: boolean,
   agentMode?: boolean,
-  attachedImage?: string,
 ): Promise<TutorResult> {
   return invoke<TutorResult>('run_tutor', {
     request: {
@@ -19,7 +18,6 @@ export async function runTutor(
       conversation_history: conversationHistory,
       web_search_enabled: webSearchEnabled,
       agent_mode: agentMode,
-      attached_image: attachedImage,
     },
   });
 }
@@ -47,6 +45,24 @@ export interface SecureSocketEvent {
 
 export function getSecureTransportInfo(): Promise<SecureTransportInfo> {
   return invoke<SecureTransportInfo>('get_secure_transport_info');
+}
+
+export interface MobilePairingPayload {
+  v: number;
+  ips: string[];
+  ws_port: number;
+  discovery_port: number;
+  token: string;
+  certificate_pin: string | null;
+  mode: 'development' | 'release';
+}
+
+export function getMobilePairingPayload(): Promise<MobilePairingPayload> {
+  return invoke<MobilePairingPayload>('get_mobile_pairing_payload');
+}
+
+export function regenerateRemoteToken(): Promise<string> {
+  return invoke<string>('regenerate_remote_token');
 }
 
 export function connectSecureSocket(
@@ -114,14 +130,20 @@ export async function resizeCommandWindow(height: number): Promise<void> {
   return invoke('resize_command_window', { height });
 }
 
+export async function setCommandWindowSize(width: number, height: number): Promise<void> {
+  return invoke('set_command_window_size', { width, height });
+}
+
 export async function resizeAndMoveCommandWindow(x: number, y: number, width: number, height: number): Promise<void> {
   return invoke('resize_and_move_command_window', { x, y, width, height });
 }
 
 export interface BlinkySettings {
   provider: string;
+  voice_provider?: string;
   shortcut: string;
   sarvam_api_key: string;
+  assemblyai_api_key?: string;
   groq_api_key: string;
   deepseek_api_key: string;
   custom_url: string;
@@ -141,9 +163,22 @@ export async function saveSettings(
   deepseekApiKey: string,
   customUrl: string = '',
   customModel: string = '',
-  customApiKey: string = ''
+  customApiKey: string = '',
+  assemblyaiApiKey: string = '',
+  voiceProvider: string = 'assemblyai'
 ): Promise<void> {
-  return invoke('save_settings', { provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, customModel, customApiKey });
+  return invoke('save_settings', {
+    provider,
+    shortcut,
+    sarvamApiKey,
+    assemblyaiApiKey,
+    voiceProvider,
+    groqApiKey,
+    deepseekApiKey,
+    customUrl,
+    customModel,
+    customApiKey
+  });
 }
 
 export async function confirmRecipeSave(recipeId: string, save: boolean): Promise<void> {
@@ -189,11 +224,26 @@ export async function logDebugMessage(message: string): Promise<void> {
 }
 
 export async function pauseWakeWord(): Promise<void> {
-  return invoke('pause_wake_word');
+  try {
+    if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+      await invoke('pause_wake_word');
+    }
+  } catch {
+    // Benign: hot-reload raced a Rust async op ("Couldn't find callback id")
+    // or the wake-word process isn't running. Never reject — all call sites
+    // use fire-and-forget `void pauseWakeWord()`.
+  }
 }
 
 export async function resumeWakeWord(): Promise<void> {
-  return invoke('resume_wake_word');
+  try {
+    if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+      await invoke('resume_wake_word');
+    }
+  } catch {
+    // Same as above — swallow reload-race rejections so Vite never reports
+    // "[Unhandled rejection] Unknown Error: [object Event]".
+  }
 }
 
 export async function setAgentCursorVisibility(visible: boolean): Promise<void> {
@@ -213,3 +263,16 @@ export async function getCursorPosition(): Promise<{ x: number; y: number }> {
   }
   return { x: 0, y: 0 };
 }
+
+export async function openNotebookWindow(): Promise<void> {
+  if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+    return invoke('open_notebook_window');
+  }
+}
+
+export async function closeNotebookWindow(): Promise<void> {
+  if (typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__) {
+    return invoke('close_notebook_window');
+  }
+}
+

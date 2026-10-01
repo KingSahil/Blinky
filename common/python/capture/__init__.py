@@ -46,16 +46,6 @@ def capture_screen() -> Screenshot:
     if os.name == "nt":
         try:
             start_time = time.perf_counter()
-            # Ensure the worker thread is attached to the interactive Default desktop
-            try:
-                import ctypes
-                user32 = ctypes.windll.user32
-                hdesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
-                if hdesk:
-                    user32.SetThreadDesktop(hdesk)
-            except Exception as desk_exc:
-                LOGGER.debug("SetThreadDesktop failed: %s", desk_exc)
-
             # Try PIL ImageGrab first as it is extremely reliable, instantaneous,
             # and does not lock up the DirectX duplication pipeline.
             image = ImageGrab.grab(all_screens=False)

@@ -164,7 +164,8 @@ public final class BlinkySecureSocketModule: Module, URLSessionWebSocketDelegate
       guard let data = try handle.read(upToCount: Int(requestBytes)), !data.isEmpty else {
         throw SecureSocketError("Selected file ended before its reported size")
       }
-      var request = URLRequest(url: endpoint, timeoutInterval: 300)
+      // The final response may include a cross-drive copy on the PC.
+      var request = URLRequest(url: endpoint, timeoutInterval: offset + UInt64(data.count) >= size ? 3600 : 300)
       request.httpMethod = "POST"
       request.httpBody = data
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

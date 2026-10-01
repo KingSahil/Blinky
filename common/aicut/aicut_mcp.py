@@ -192,14 +192,6 @@ def trim_video(
     """Execute AiCut trim command."""
     inp = Path(input_path).resolve()
     if not inp.exists():
-        try:
-            from tools.aicut_tool import find_candidate_file
-            cand = find_candidate_file(input_path)
-            if cand and Path(cand).exists():
-                inp = Path(cand).resolve()
-        except Exception:
-            pass
-    if not inp.exists():
         return {"success": False, "error": f"Input video file not found: {input_path}"}
 
     if start_seconds < 0 or end_seconds <= start_seconds:
@@ -249,24 +241,6 @@ def add_song(
     """Execute AiCut add-song command."""
     v_path = Path(video_path).resolve()
     s_path = Path(song_path).resolve()
-
-    if not v_path.exists():
-        try:
-            from tools.aicut_tool import find_candidate_file
-            cand = find_candidate_file(video_path)
-            if cand and Path(cand).exists():
-                v_path = Path(cand).resolve()
-        except Exception:
-            pass
-
-    if not s_path.exists():
-        try:
-            from tools.aicut_tool import find_candidate_file
-            cand = find_candidate_file(song_path)
-            if cand and Path(cand).exists():
-                s_path = Path(cand).resolve()
-        except Exception:
-            pass
 
     if not v_path.exists():
         return {"success": False, "error": f"Video file not found: {video_path}"}

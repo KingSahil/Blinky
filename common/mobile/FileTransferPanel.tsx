@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,6 +15,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import { Ionicons } from '@expo/vector-icons';
 import type { FileTransferMessage } from './usePCWebSocket';
+import { buildFileOffer, findTransferItem, transferIntent } from './lib/fileTransferOffer';
 
 type TransferModule = typeof import('./modules/blinky-secure-socket');
 
@@ -50,6 +51,7 @@ export type TransferSession = {
   items: FileTransferItem[];
   currentIndex: number;
   instruction: string;
+  destinationPath: string;
   isEdit: boolean;
   phase: BatchTransferPhase;
   totalBytes: number;
@@ -70,6 +72,18 @@ type Props = {
   sendMessage(message: Record<string, unknown>): boolean;
   getNativeModule(): TransferModule | null;
   onClose(): void;
+  /** Called with a human-readable status string while a chat-triggered transfer is running. */
+  onTransferStatusChange?: (status: string | null) => void;
+  /** Called when a chat-triggered transfer completes (done or error). */
+  onTransferDone?: (success: boolean, message: string) => void;
+};
+
+export type FileTransferPanelRef = {
+  /**
+   * Start a transfer programmatically (e.g. from the chat bar).
+   * The panel does NOT need to be visible — it runs silently in the background.
+   */
+  startTransfer(files: SelectedFile[], instruction: string, destination?: string, destinationHint?: string): void;
 };
 
 const CHUNK_SIZE = 16 * 1024 * 1024;
@@ -87,7 +101,7 @@ function formatBytes(size: number) {
 
 function getMediaType(name: string): 'video' | 'audio' | 'image' | 'other' {
   const ext = name.toLowerCase().split('.').pop() || '';
-  if (['mp4', 'mov', 'mkv', 'avi', 'webm', '3gp'].includes(ext)) return 'video';
+  if (['mp4', 'mov', 'mkv', 'avi', 'webm', 'flv', 'wmv', 'm4v'].includes(ext)) return 'video';
   if (['mp3', 'wav', 'aac', 'm4a', 'flac', 'ogg', 'wma'].includes(ext)) return 'audio';
   if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image';
   return 'other';
@@ -128,7 +142,7 @@ function ProgressBar({ bytes, total }: { bytes: number; total: number }) {
 }
 
 /** Picks, uploads, merges/edits, and receives multiple files over the authenticated PC link. */
-export function FileTransferPanel({
+export const FileTransferPanel = forwardRef<FileTransferPanelRef, Props>(function FileTransferPanel({
   visible,
   connected,
   hostAddress,
@@ -138,9 +152,12 @@ export function FileTransferPanel({
   sendMessage,
   getNativeModule,
   onClose,
-}: Props) {
+  onTransferStatusChange,
+  onTransferDone,
+}: Props, ref) {
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([]);
   const [instruction, setInstruction] = useState('');
+  const [destinationPath, setDestinationPath] = useState('');
   const [session, setSession] = useState<TransferSession | null>(null);
   const sessionRef = useRef<TransferSession | null>(null);
   const lastMessageRef = useRef<FileTransferMessage | null>(null);
@@ -166,20 +183,9 @@ export function FileTransferPanel({
     return selectedFiles.reduce((acc, f) => acc + (f.size || 0), 0);
   }, [selectedFiles]);
 
-  const mediaSummary = useMemo(() => {
-    let videos = 0;
-    let audios = 0;
-    for (const f of selectedFiles) {
-      const type = getMediaType(f.name);
-      if (type === 'video') videos++;
-      if (type === 'audio') audios++;
-    }
-    return { videos, audios };
-  }, [selectedFiles]);
-
   // Handle incoming websocket messages from the PC
   const handleServerMessage = useCallback((message: FileTransferMessage) => {
-    if (message.type === 'file_offer_result' && message.requestId) {
+    if ((message.type === 'file_offer_result' || message.type === 'file_error') && message.requestId) {
       const resolver = pendingOfferResolvers.current.get(message.requestId);
       if (resolver) {
         pendingOfferResolvers.current.delete(message.requestId);
@@ -188,7 +194,8 @@ export function FileTransferPanel({
       }
     }
 
-    if (message.type === 'file_edit_complete' || message.type === 'file_edit_error') {
+    if (message.type === 'file_edit_complete' || message.type === 'file_edit_error' ||
+        (message.type === 'file_error' && sessionRef.current?.phase === 'editing')) {
       if (editCompleteResolver.current) {
         const resolver = editCompleteResolver.current;
         editCompleteResolver.current = null;
@@ -213,6 +220,10 @@ export function FileTransferPanel({
 
   // Listen to transfer progress events across all active transfers
   useEffect(() => {
+    // The chat transfer panel is mounted invisibly. Do not load the custom
+    // native socket module during app startup; initialize it only when the
+    // panel is opened or a chat transfer has created a session.
+    if (!visible && !sessionRef.current) return;
     const native = getNativeModule();
     if (!native) return;
     const subscription = native.addListener('onTransferProgress', event => {
@@ -235,7 +246,11 @@ export function FileTransferPanel({
       });
     });
     return () => subscription.remove();
-  }, [getNativeModule, updateSession]);
+  }, [getNativeModule, updateSession, visible, session?.phase]);
+
+  const chatTransferQueueRef = useRef<{ files: SelectedFile[]; instruction: string; destination: string; destinationHint: string } | null>(null);
+  // Stable ref so that useImperativeHandle can call the latest startBatchTransferDirect
+  const startBatchTransferDirectRef = useRef<typeof startBatchTransferDirect | null>(null);
 
   const chooseFiles = useCallback(async (append = false) => {
     try {
@@ -277,35 +292,51 @@ export function FileTransferPanel({
     sessionRef.current = null;
   }, []);
 
-  const startBatchTransfer = useCallback(async (withEdit: boolean) => {
+  /**
+   * Core transfer logic shared between the UI "Upload" button and the
+   * chat-bar triggered path.  When called from chat, files/instruction/destination
+   * are passed directly so we don't depend on React state being flushed.
+   */
+  const startBatchTransferDirect = useCallback(async (
+    filesToSend: SelectedFile[],
+    instructionText: string,
+    destPath: string,
+    destinationHint = '',
+  ) => {
     if (!connected) {
-      Alert.alert('PC disconnected', 'Connect to Blinky before sending files.');
+      if (onTransferDone) onTransferDone(false, 'Not connected to PC.');
+      else Alert.alert('PC disconnected', 'Connect to Blinky before sending files.');
       return;
     }
-    if (selectedFiles.length === 0 || !transferBase) {
-      Alert.alert('Choose files', 'Select one or more files before starting a transfer.');
+    if (filesToSend.length === 0 || !transferBase) {
+      if (onTransferDone) onTransferDone(false, 'No files selected.');
+      else Alert.alert('Choose files', 'Select one or more files before starting a transfer.');
       return;
     }
     const native = getNativeModule();
     if (!native) {
-      Alert.alert('Transfer Unavailable', 'File transfer is not supported on this device.');
+      if (onTransferDone) onTransferDone(false, 'File transfer is not supported on this device.');
+      else Alert.alert('Transfer Unavailable', 'File transfer is not supported on this device.');
       return;
     }
     if (releaseTransport && !certificatePin.trim()) {
-      Alert.alert('Certificate pin required', 'Enter the PC release certificate pin in Local Link Setup.');
+      if (onTransferDone) onTransferDone(false, 'Certificate pin required.');
+      else Alert.alert('Certificate pin required', 'Enter the PC release certificate pin in Local Link Setup.');
       return;
     }
 
+    const withEdit = transferIntent(instructionText) === 'edit';
+    let batchDestination = destPath.trim();
+    let destinationWarning = '';
+
     abortRef.current = false;
 
-    // Prioritize videos before audios/other so that the video file serves as
-    // the primary transfer session on PC (correct naming and video stream handling)
-    const sortedFiles = [...selectedFiles].sort((a, b) => {
-      const isVidA = getMediaType(a.name) === 'video';
-      const isVidB = getMediaType(b.name) === 'video';
-      if (isVidA && !isVidB) return -1;
-      if (!isVidA && isVidB) return 1;
-      return 0;
+    const sortedFiles = [...filesToSend].sort((a, b) => {
+      const priority = (name: string) => {
+        const type = getMediaType(name);
+        return type === 'video' ? 0 : type === 'audio' ? 1 : 2;
+      };
+      return priority(a.name) - priority(b.name);
     });
 
     const initialItems: FileTransferItem[] = sortedFiles.map((f, i) => ({
@@ -317,20 +348,24 @@ export function FileTransferPanel({
       phase: 'pending',
     }));
 
+    const totalRaw = sortedFiles.reduce((acc, f) => acc + (f.size || 0), 0);
+
     const sessionData: TransferSession = {
       requestId: newRequestId(),
       items: initialItems,
       currentIndex: 0,
-      instruction: instruction.trim(),
+      instruction: instructionText.trim(),
+      destinationPath: batchDestination || 'Downloads/Blinky',
       isEdit: withEdit,
       phase: 'preparing',
-      totalBytes: totalRawSize,
+      totalBytes: totalRaw,
     };
     sessionRef.current = sessionData;
     setSession(sessionData);
 
+    const notifyStatus = (msg: string) => onTransferStatusChange?.(msg);
+
     try {
-      // 1. Process each file: Hash, Offer, and Upload
       for (let i = 0; i < initialItems.length; i++) {
         if (abortRef.current) break;
 
@@ -341,8 +376,8 @@ export function FileTransferPanel({
           phase: 'preparing',
           items: curr.items.map((it, idx) => (idx === i ? { ...it, phase: 'hashing' } : it)),
         }));
+        notifyStatus(`Verifying ${currentItem.file.name}…`);
 
-        // Hash
         const digest = await native.hashFile(currentItem.file.uri);
         if (abortRef.current) break;
 
@@ -357,32 +392,36 @@ export function FileTransferPanel({
           return { ...curr, items: updatedItems, totalBytes: newTotal };
         });
 
-        // Offer
         const offerReqId = newRequestId();
         const offerPromise = new Promise<FileTransferMessage>((resolve, reject) => {
           const timer = setTimeout(() => {
             pendingOfferResolvers.current.delete(offerReqId);
             reject(new Error(`Timed out waiting for PC to accept ${currentItem.file.name}.`));
-          }, 30000);
+          }, 75000);
           pendingOfferResolvers.current.set(offerReqId, msg => {
             clearTimeout(timer);
             resolve(msg);
           });
         });
 
-        const sent = sendMessage({
-          type: 'file_offer',
+        const sent = sendMessage(buildFileOffer({
           requestId: offerReqId,
           name: currentItem.file.name,
           size: digest.size,
           sha256: digest.sha256,
-          purpose: withEdit ? 'edit' : 'upload',
-        });
-        if (!sent) {
-          throw new Error('Could not send file offer. Check PC connection.');
-        }
+          instruction: instructionText,
+          destinationPath: batchDestination,
+          destinationHint,
+        }));
+        if (!sent) throw new Error('Could not send file offer. Check PC connection.');
 
+        notifyStatus(`Offering ${currentItem.file.name} to PC…`);
         const offerResult = await offerPromise;
+        if (offerResult.destinationPath) {
+          updateSession(curr => ({ ...curr, destinationPath: offerResult.destinationPath! }));
+          batchDestination = offerResult.destinationPath;
+        }
+        if (offerResult.destinationWarning) destinationWarning = offerResult.destinationWarning;
         if (!offerResult.transferId || !offerResult.temporaryToken) {
           throw new Error(offerResult.message || `PC rejected transfer of ${currentItem.file.name}.`);
         }
@@ -403,17 +442,13 @@ export function FileTransferPanel({
           primaryToken: i === 0 ? offerResult.temporaryToken : curr.primaryToken,
           items: curr.items.map((it, idx) =>
             idx === i
-              ? {
-                  ...it,
-                  transferId: offerResult.transferId,
-                  token: offerResult.temporaryToken,
-                  phase: 'uploading',
-                }
+              ? { ...it, transferId: offerResult.transferId, token: offerResult.temporaryToken, phase: 'uploading' }
               : it
           ),
         }));
 
-        // Upload
+        notifyStatus(`Uploading ${currentItem.file.name} (${i + 1}/${initialItems.length})…`);
+
         await native.uploadFile({
           sourceUri: currentItem.file.uri,
           transferId: offerResult.transferId,
@@ -429,7 +464,6 @@ export function FileTransferPanel({
 
         currentItem.phase = 'uploaded';
         currentItem.bytes = digest.size;
-
         updateSession(curr => ({
           ...curr,
           items: curr.items.map((it, idx) =>
@@ -440,25 +474,14 @@ export function FileTransferPanel({
 
       if (abortRef.current) return;
 
-      // 2. All files uploaded! Run AiCut edit/merge if requested
       if (withEdit) {
         const latestSession = sessionRef.current;
         if (!latestSession || !latestSession.primaryTransferId || !latestSession.primaryToken) {
           throw new Error('Transfer session details missing.');
         }
 
-        let effectiveInstruction = instruction.trim();
-        if (!effectiveInstruction) {
-          if (mediaSummary.videos >= 2) {
-            effectiveInstruction = 'merge these videos';
-          } else if (mediaSummary.videos === 1 && mediaSummary.audios >= 1) {
-            effectiveInstruction = 'add this song to the video';
-          } else {
-            effectiveInstruction = 'merge these files';
-          }
-        }
-
         updateSession(s => ({ ...s, phase: 'editing', error: undefined }));
+        notifyStatus('AiCut is processing on PC…');
 
         const editReqId = newRequestId();
         const primaryId = latestSession.primaryTransferId;
@@ -484,25 +507,19 @@ export function FileTransferPanel({
           temporaryToken: primaryTok,
           additionalTransferIds,
           transferIds: allTransferIds,
-          instruction: effectiveInstruction,
+          instruction: instructionText.trim(),
         });
-        if (!sent) {
-          throw new Error('Upload completed, but could not request AiCut edit from the PC.');
-        }
+        if (!sent) throw new Error('Upload completed, but could not request AiCut edit from the PC.');
 
         const editResult = await editPromise;
-        if (editResult.type === 'file_edit_error') {
+        if (editResult.type === 'file_edit_error' || editResult.type === 'file_error') {
           throw new Error(editResult.message || 'AiCut could not complete the edit.');
         }
         if (!editResult.name || !editResult.size || !editResult.sha256) {
           throw new Error('AiCut completed without returning output file details.');
         }
 
-        const outputMeta = {
-          name: editResult.name,
-          size: editResult.size,
-          sha256: editResult.sha256,
-        };
+        const outputMeta = { name: editResult.name, size: editResult.size, sha256: editResult.sha256 };
 
         updateSession(s => ({
           ...s,
@@ -510,8 +527,8 @@ export function FileTransferPanel({
           output: outputMeta,
           items: s.items.map((it, idx) => (idx === 0 ? { ...it, bytes: 0 } : it)),
         }));
+        notifyStatus('Downloading edited result…');
 
-        // Download edited output file to mobile
         const localUri = await native.downloadFile({
           transferId: primaryId,
           url: `${transferBase}/download/${primaryId}`,
@@ -522,36 +539,65 @@ export function FileTransferPanel({
           filename: outputMeta.name,
         });
 
-        updateSession(s => ({
-          ...s,
-          phase: 'done',
-          output: outputMeta,
-          localUri,
-          error: undefined,
-        }));
+        updateSession(s => ({ ...s, phase: 'done', output: outputMeta, localUri, error: undefined }));
+        onTransferStatusChange?.(null);
+        onTransferDone?.(true, `✅ Transfer & edit complete — ${outputMeta.name} saved on PC in ${sessionRef.current?.destinationPath || batchDestination} and copied to your device.${destinationWarning ? ` ${destinationWarning}` : ''}`);
       } else {
         updateSession(s => ({ ...s, phase: 'done', error: undefined }));
+        onTransferStatusChange?.(null);
+        const dest = sessionRef.current?.destinationPath || batchDestination || 'Downloads/Blinky';
+        const label = filesToSend.length > 1
+          ? `✅ ${filesToSend.length} files sent to PC (${dest})`
+          : `✅ ${filesToSend[0]?.name} sent to PC (${dest})`;
+        onTransferDone?.(true, destinationWarning ? `${label}. ${destinationWarning}` : label);
       }
     } catch (err: any) {
-      updateSession(s => ({
-        ...s,
-        phase: 'error',
-        error: err?.message || 'Transfer failed. Check connection and retry.',
-      }));
+      updateSession(s => ({ ...s, phase: 'error', error: err?.message || 'Transfer failed.' }));
+      onTransferStatusChange?.(null);
+      onTransferDone?.(false, `❌ Transfer failed: ${err?.message || 'unknown error'}`);
     }
   }, [
     certificatePin,
     connected,
     getNativeModule,
-    instruction,
-    mediaSummary,
     releaseTransport,
-    selectedFiles,
     sendMessage,
-    totalRawSize,
     transferBase,
     updateSession,
+    onTransferStatusChange,
+    onTransferDone,
   ]);
+
+  const startBatchTransfer = useCallback(async () => {
+    // Delegate to the unified core transfer, passing current UI state
+    return startBatchTransferDirect(selectedFiles, instruction, destinationPath);
+  }, [startBatchTransferDirect, selectedFiles, instruction, destinationPath]);
+
+  // Keep stable ref in sync with the latest startBatchTransferDirect so the
+  // imperative handle can call it without stale-closure issues.
+  startBatchTransferDirectRef.current = startBatchTransferDirect;
+
+  // Expose imperative startTransfer for chat-bar triggered transfers.
+  // The panel does NOT need to be visible — the transfer runs silently.
+  useImperativeHandle(ref, () => ({
+    startTransfer(files: SelectedFile[], instruction: string, destination?: string, destinationHint = '') {
+      if (!files.length) return;
+      setSelectedFiles(files);
+      setInstruction(instruction);
+      setDestinationPath(destination || '');
+      setSession(null);
+      sessionRef.current = null;
+      // Enqueue the transfer data and kick it off after React flushes state
+      chatTransferQueueRef.current = { files, instruction, destination: destination || '', destinationHint };
+      setTimeout(() => {
+        const q = chatTransferQueueRef.current;
+        if (q) {
+          chatTransferQueueRef.current = null;
+          void startBatchTransferDirectRef.current?.(q.files, q.instruction, q.destination, q.destinationHint);
+        }
+      }, 0);
+    },
+  }), []);
 
   const shareFile = useCallback(async () => {
     if (!session?.localUri) return;
@@ -583,10 +629,7 @@ export function FileTransferPanel({
       return `Uploading file ${currentNum} of ${totalCount}: ${currentItem?.file.name}…`;
     }
     if (session.phase === 'editing') {
-      if (session.items.length > 1) {
-        return 'AiCut is merging & processing files on the PC…';
-      }
-      return 'AiCut is editing video on the PC…';
+      return 'AiCut is processing your edit on the PC…';
     }
     if (session.phase === 'downloading') {
       return 'Downloading edited result to your device…';
@@ -594,8 +637,8 @@ export function FileTransferPanel({
     if (session.phase === 'done') {
       if (session.localUri) return 'Transfer & edit complete';
       return session.items.length > 1
-        ? `All ${session.items.length} files saved to Downloads/Blinky`
-        : 'File saved to Downloads/Blinky';
+        ? `All ${session.items.length} files saved to ${session.destinationPath}`
+        : `File saved to ${session.destinationPath}`;
     }
     return '';
   }, [session]);
@@ -617,18 +660,12 @@ export function FileTransferPanel({
     return session.totalBytes || totalRawSize || 1;
   }, [session, totalRawSize]);
 
-  // Default button label matching Windows CommandBar logic
   const primaryButtonLabel = useMemo(() => {
-    if (instruction.trim()) {
+    if (transferIntent(instruction) === 'edit') {
       return selectedFiles.length > 1 ? 'Upload & run edit' : 'Upload & edit';
     }
-    if (selectedFiles.length >= 2) {
-      if (mediaSummary.videos >= 2) return 'Upload & merge videos';
-      if (mediaSummary.videos === 1 && mediaSummary.audios >= 1) return 'Upload & combine audio';
-      return 'Upload & merge';
-    }
     return 'Upload to PC';
-  }, [instruction, mediaSummary, selectedFiles.length]);
+  }, [instruction, selectedFiles.length]);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -678,7 +715,7 @@ export function FileTransferPanel({
 
                 <View style={styles.fileList}>
                   {selectedFiles.map((file, index) => {
-                    const sessionItem = session?.items[index];
+                    const sessionItem = findTransferItem(session?.items, file);
                     return (
                       <View key={`${file.uri}-${index}`} style={styles.fileCard}>
                         <Ionicons name={getFileIcon(file.name)} size={22} color="#B7A8FF" />
@@ -730,6 +767,20 @@ export function FileTransferPanel({
               </View>
             )}
 
+            <Text style={styles.fieldLabel}>PC destination folder</Text>
+            <TextInput
+              value={destinationPath}
+              onChangeText={setDestinationPath}
+              placeholder="Downloads/Blinky (default) or absolute PC folder path"
+              placeholderTextColor="#817C98"
+              style={styles.instructionInput}
+              editable={!busy}
+              autoCapitalize="none"
+              autoCorrect={false}
+              accessibilityLabel="PC destination folder"
+            />
+            <Text style={styles.helpText}>Enter an existing writable folder path on your PC. Leave blank for Downloads/Blinky.</Text>
+
             {/* Instruction input */}
             <Text style={styles.fieldLabel}>AiCut instruction (optional)</Text>
             <TextInput
@@ -746,11 +797,7 @@ export function FileTransferPanel({
               editable={!busy && session?.phase !== 'done'}
               autoCorrect
             />
-            <Text style={styles.helpText}>
-              {selectedFiles.length >= 2
-                ? 'Multiple files can be merged (videos + audios). Leave blank to merge them automatically with Windows AiCut logic.'
-                : 'Without an instruction, files are saved to PC Downloads/Blinky. With an instruction, AiCut edits the video on PC and returns it here.'}
-            </Text>
+            <Text style={styles.helpText}>Leave blank to upload every selected file. Enter a merge, trim, audio, or captions request to run AiCut on uploaded media. PDFs and images are still transferred.</Text>
 
             {/* Progress Card */}
             {session && busy && (
@@ -771,7 +818,7 @@ export function FileTransferPanel({
                 <Text style={styles.errorText}>{session.error}</Text>
                 <Pressable
                   style={styles.secondaryButton}
-                  onPress={() => void startBatchTransfer(session.isEdit)}
+                  onPress={() => void startBatchTransfer()}
                 >
                   <Text style={styles.secondaryButtonText}>Retry transfer</Text>
                 </Pressable>
@@ -787,8 +834,8 @@ export function FileTransferPanel({
                   <Text style={styles.fileSize} numberOfLines={1}>
                     {session.output?.name ||
                       (selectedFiles.length > 1
-                        ? `${selectedFiles.length} files saved to PC Downloads/Blinky`
-                        : `${selectedFiles[0]?.name} · Saved to PC Downloads/Blinky`)}
+                        ? `${selectedFiles.length} files saved to ${session.destinationPath}`
+                        : `${selectedFiles[0]?.name} · Saved to ${session.destinationPath}`)}
                   </Text>
                 </View>
                 {!!session.localUri && (
@@ -807,23 +854,12 @@ export function FileTransferPanel({
               <Text style={styles.secondaryButtonText}>Close</Text>
             </Pressable>
 
-            {/* When multiple files are selected, allow "Upload only" as an option alongside "Upload & merge" */}
-            {selectedFiles.length >= 2 && !instruction.trim() && (
-              <Pressable
-                style={[styles.secondaryButton, (!connected || busy) && styles.disabledButton]}
-                onPress={() => void startBatchTransfer(false)}
-                disabled={!connected || busy}
-              >
-                <Text style={styles.secondaryButtonText}>Upload only</Text>
-              </Pressable>
-            )}
-
             <Pressable
               style={[
                 styles.primaryButton,
                 (!connected || selectedFiles.length === 0 || busy) && styles.disabledButton,
               ]}
-              onPress={() => void startBatchTransfer(selectedFiles.length >= 2 || !!instruction.trim())}
+              onPress={() => void startBatchTransfer()}
               disabled={!connected || selectedFiles.length === 0 || busy}
             >
               <Text style={styles.primaryButtonText}>{primaryButtonLabel}</Text>
@@ -833,7 +869,7 @@ export function FileTransferPanel({
       </View>
     </Modal>
   );
-}
+});
 
 const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.72)', justifyContent: 'flex-end' },

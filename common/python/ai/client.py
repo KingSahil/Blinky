@@ -9,15 +9,12 @@ from ai.ollama_client import ask_ollama, ask_ollama_text
 from ai.deepseek_client import ask_deepseek_text
 from ai.mimo_client import ask_mimo_text, ask_mimo_vision
 from ai.custom_client import ask_custom_text, ask_custom_vision
-from ai.gemini_client import ask_gemini_text, ask_gemini_vision
 
 
 def _resolve_provider() -> str:
     provider = os.getenv("BLINKY_AI_PROVIDER", "").strip().lower()
     if provider:
         return provider
-    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
-        return "gemini"
     if os.getenv("GROQ_API_KEY"):
         return "groq"
     if os.getenv("MIMO_API_KEY"):
@@ -29,8 +26,6 @@ def _resolve_provider() -> str:
 
 def ask_model(prompt: str, screenshot_path: Path) -> dict[str, Any]:
     provider = _resolve_provider()
-    if provider == "gemini":
-        return ask_gemini_vision(prompt=prompt, image_input=screenshot_path)
     if provider == "groq":
         return ask_groq_vision(prompt=prompt, screenshot_path=screenshot_path)
     if provider == "mimo":
@@ -43,14 +38,12 @@ def ask_model(prompt: str, screenshot_path: Path) -> dict[str, Any]:
         return ask_ollama(prompt)
 
     raise RuntimeError(
-        "Unsupported BLINKY_AI_PROVIDER. Use 'gemini', 'ollama', 'groq', 'deepseek', 'mimo', or 'custom'."
+        "Unsupported BLINKY_AI_PROVIDER. Use 'ollama', 'groq', 'deepseek', 'mimo', or 'custom'."
     )
 
 
 def ask_text_model(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
     provider = _resolve_provider()
-    if provider == "gemini":
-        return ask_gemini_text(prompt, max_tokens)
     if provider == "groq":
         return ask_groq_text(prompt, max_tokens)
     if provider == "mimo":
@@ -63,7 +56,7 @@ def ask_text_model(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
         return ask_ollama_text(prompt, max_tokens)
 
     raise RuntimeError(
-        "Unsupported BLINKY_AI_PROVIDER. Use 'gemini', 'ollama', 'groq', 'deepseek', 'mimo', or 'custom'."
+        "Unsupported BLINKY_AI_PROVIDER. Use 'ollama', 'groq', 'deepseek', 'mimo', or 'custom'."
     )
 
 
@@ -79,4 +72,4 @@ def has_vision_capability() -> bool:
         from ai.custom_client import has_vision_capability as _custom_vision
 
         return _custom_vision()
-    return provider in ("gemini", "groq", "mimo")
+    return provider in ("groq", "mimo")

@@ -87,23 +87,14 @@ async function tryStartDockerDaemon(dockerPath: string): Promise<boolean> {
     if (desktopExe) {
       console.log(`[Docker] 🐳 Docker is installed but daemon is not running. Launching Docker Desktop (${desktopExe})...`);
       try {
-        // Start Docker Desktop completely detached from terminal / console so Ctrl+C on Blinky never terminates Docker
-        const startProc = spawn(["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-Command", `Start-Process -FilePath "${desktopExe}"`], {
+        const startProc = spawn(["cmd.exe", "/c", "start", "", desktopExe], {
           detached: true,
           stdio: ["ignore", "ignore", "ignore"],
         });
         startProc.unref();
       } catch (err: any) {
-        try {
-          const startProc = spawn(["cmd.exe", "/c", "start", "", desktopExe], {
-            detached: true,
-            stdio: ["ignore", "ignore", "ignore"],
-          });
-          startProc.unref();
-        } catch {
-          console.warn(`[Docker] Failed to launch Docker Desktop: ${err?.message || err}`);
-          return false;
-        }
+        console.warn(`[Docker] Failed to launch Docker Desktop: ${err?.message || err}`);
+        return false;
       }
     } else {
       console.log("[Docker] 🐳 Docker Desktop executable not found at standard paths. Trying com.docker.service...");
@@ -128,11 +119,11 @@ async function tryStartDockerDaemon(dockerPath: string): Promise<boolean> {
     // Linux
     console.log("[Docker] 🐳 Attempting to start Docker daemon service...");
     try {
-      const startProc = spawn(["systemctl", "--user", "start", "docker"], { stdio: ["ignore", "ignore", "ignore"] });
+      const startProc = spawn(["systemctl", "--user", "start", "docker"], { stdio: "ignore" });
       await Promise.race([startProc.exited, new Promise((r) => setTimeout(r, 3000))]);
     } catch {
       try {
-        const sysStart = spawn(["sudo", "systemctl", "start", "docker"], { stdio: ["ignore", "ignore", "ignore"] });
+        const sysStart = spawn(["sudo", "systemctl", "start", "docker"], { stdio: "ignore" });
         await Promise.race([sysStart.exited, new Promise((r) => setTimeout(r, 3000))]);
       } catch {}
     }
@@ -229,22 +220,6 @@ function getAdbPath(): string | null {
   return null;
 }
 
-function getTailscaleIp(): string | null {
-  try {
-    const tailscaleExe = process.platform === "win32"
-      ? "C:\\Program Files\\Tailscale\\tailscale.exe"
-      : "tailscale";
-    const res = Bun.spawnSync([tailscaleExe, "ip", "-4"]);
-    if (res.exitCode === 0) {
-      const ip = res.stdout.toString().trim();
-      if (ip && ip.startsWith("100.")) {
-        return ip;
-      }
-    }
-  } catch {}
-  return null;
-}
-
 async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
   const adb = getAdbPath();
   if (!adb) {
@@ -272,11 +247,13 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
       console.log(`  - ${dev}`);
     }
 
-    console.log("[Mobile] Setting up USB reverse port forwarding (tcp:9001, tcp:9002, tcp:8081)...");
+    console.log("[Mobile] Setting up USB reverse port forwarding (tcp:9001, tcp:9002, tcp:9004, tcp:8081)...");
     const rev1 = spawn([adb, "reverse", "tcp:9001", "tcp:9001"]);
     await Promise.race([rev1.exited, new Promise(r => setTimeout(r, 1500))]);
     const rev2 = spawn([adb, "reverse", "tcp:9002", "tcp:9002"]);
     await Promise.race([rev2.exited, new Promise(r => setTimeout(r, 1500))]);
+    const rev4 = spawn([adb, "reverse", "tcp:9004", "tcp:9004"]);
+    await Promise.race([rev4.exited, new Promise(r => setTimeout(r, 1500))]);
     const rev3 = spawn([adb, "reverse", "tcp:8081", "tcp:8081"]);
     await Promise.race([rev3.exited, new Promise(r => setTimeout(r, 1500))]);
 
@@ -290,6 +267,7 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
 
     if (isRunning) {
       console.log("[Mobile] ⚡ Metro bundler is already running on port 8081 (IPv4).");
+    } else {
       if (process.platform === "win32") {
         try {
           const portCheck = Bun.spawnSync(["powershell", "-NoProfile", "-Command", "Get-NetTCPConnection -State Listen -LocalPort 8081 -ErrorAction SilentlyContinue | Select-Object LocalPort,OwningProcess -Unique | ForEach-Object { $owner = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; \"port $($_.LocalPort), PID $($_.OwningProcess), process $($owner.ProcessName)\" }"]);
@@ -299,7 +277,23 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
           }
         } catch {}
       }
-    } else {
+
+function getTailscaleIp(): string | null {
+  try {
+    const tailscaleExe = process.platform === "win32"
+      ? "C:\\Program Files\\Tailscale\\tailscale.exe"
+      : "tailscale";
+    const res = Bun.spawnSync([tailscaleExe, "ip", "-4"]);
+    if (res.exitCode === 0) {
+      const ip = res.stdout.toString().trim();
+      if (ip && ip.startsWith("100.")) {
+        return ip;
+      }
+    }
+  } catch {}
+  return null;
+}
+
       const tailscaleIp = getTailscaleIp();
       if (tailscaleIp) {
         console.log(`[Mobile] 🔒 Detected Tailscale IP: ${tailscaleIp}`);
@@ -317,6 +311,7 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
           ...(tailscaleIp ? { EXPO_PUBLIC_TAILSCALE_IP: tailscaleIp } : {}),
         },
       });
+
     }
 
     // Wait for Metro packager to be ready before opening the app on device
@@ -386,19 +381,6 @@ if (process.platform === "win32" && !existsSync("common/python_runtime/Python313
 
 const customPort = process.env.PORT ? parseInt(process.env.PORT, 10) : 5173;
 
-/** Forcefully terminates blinky.exe process tree if running. */
-const killBlinkyProcess = () => {
-  if (process.platform === "win32") {
-    try {
-      Bun.spawnSync(["taskkill", "/F", "/T", "/IM", "blinky.exe"]);
-    } catch {}
-  } else {
-    try {
-      Bun.spawnSync(["pkill", "-9", "-f", "blinky"]);
-    } catch {}
-  }
-};
-
 /** Stops only the Windows process tree started by this dev run. */
 const killWindowsProcessTree = (pid?: number) => {
   if (process.platform !== "win32" || !pid) return;
@@ -407,13 +389,14 @@ const killWindowsProcessTree = (pid?: number) => {
   } catch {}
 };
 
-/** Terminates lingering dev processes (node/bun/cargo) bound to Blinky ports to prevent port conflicts */
-const killDevPortListeners = () => {
+/** Kills any processes listening on Blinky dev ports. */
+const killBlinkyPorts = () => {
   if (process.platform !== "win32") return;
-  const ports = [...new Set([customPort, 8081, 9001, 9002, 9003])].filter(Number.isInteger);
-  const command = `$targets = @('node', 'bun', 'blinky', 'cargo'); Get-NetTCPConnection -State Listen -LocalPort ${ports.join(",")} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p -and $targets -contains $p.ProcessName.ToLower()) { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } }`;
+  const ports = [5173, 9001, 9002, 8081];
   try {
-    Bun.spawnSync(["powershell", "-NoProfile", "-Command", command]);
+    const cmd = `Get-NetTCPConnection -State Listen -LocalPort ${ports.join(",")} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess | Sort-Object -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }`;
+    Bun.spawnSync(["powershell", "-NoProfile", "-Command", cmd]);
+    console.log("[Blinky] 🧹 Cleared existing processes on dev ports (5173, 9001, 9002, 8081).");
   } catch {}
 };
 
@@ -451,10 +434,9 @@ const restoreWindowsSystemCursor = () => {
   }
 };
 
-// Pre-flight cleanup: terminate any orphaned blinky.exe or stale dev processes before starting
-killBlinkyProcess();
-killDevPortListeners();
+// Pre-flight cleanup to ensure the frontend and mobile service ports are free and the native cursor is active.
 restoreWindowsSystemCursor();
+killBlinkyPorts();
 reportWindowsPortConflicts();
 
 const tauriArgs = ["bun", "tauri", "dev"];
@@ -465,7 +447,7 @@ if (process.env.PORT) {
     },
     app: {
       security: {
-        csp: `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:9001 wss://api.sarvam.ai ws://localhost:${customPort} http://localhost:${customPort}`,
+        csp: `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:9001 wss://127.0.0.1:9001 wss://api.sarvam.ai wss://agents.assemblyai.com wss://streaming.assemblyai.com wss://api.assemblyai.com https://api.assemblyai.com ws://localhost:${customPort} http://localhost:${customPort}`,
       },
     },
   });
@@ -479,37 +461,18 @@ const tauriDev = spawn(tauriArgs, {
   stdin: "ignore",
 });
 
-let isCleaningUp = false;
 const cleanup = () => {
-  if (isCleaningUp) return;
-  isCleaningUp = true;
-
   restoreWindowsSystemCursor();
-
-  // 1. Terminate process trees first while parents are still alive
-  if (tauriDev?.pid) {
-    killWindowsProcessTree(tauriDev.pid);
-  }
-  if (mobileProcess?.pid) {
-    killWindowsProcessTree(mobileProcess.pid);
-  }
-
-  // 2. Explicitly kill blinky.exe and its child processes (e.g. WhatsApp backend, python)
-  killBlinkyProcess();
-
-  // 3. Clean up any leftover dev server listeners on 5173, 8081, 9001, 9002, 9003
-  killDevPortListeners();
-
-  // 4. Fallback process kill
-  try {
-    tauriDev.kill();
-  } catch {}
   if (mobileProcess) {
     try {
       mobileProcess.kill();
     } catch {}
   }
+  try {
+    tauriDev.kill();
+  } catch {}
 
+  killWindowsProcessTree(tauriDev.pid);
   restoreWindowsSystemCursor();
 };
 
@@ -522,9 +485,9 @@ if (process.stdin.isTTY) {
     process.stdin.setEncoding("utf8");
 
     process.stdin.on("data", (key: string) => {
-      // Handle Ctrl+C or Ctrl+D
-      if (key === "\u0003" || key === "\u0004") {
-        console.log("\n[Blinky] 🛑 Shutting down dev servers and closing Blinky PC app (Docker remains running in background)...");
+      // Handle Ctrl+C
+      if (key === "\u0003") {
+        console.log("\n[Blinky] 🛑 Shutting down dev servers and closing Blinky PC app...");
         cleanup();
         process.exit(0);
       }
@@ -580,12 +543,6 @@ process.on("SIGTERM", () => {
   cleanup();
   process.exit(0);
 });
-if (process.platform === "win32") {
-  process.on("SIGBREAK", () => {
-    cleanup();
-    process.exit(0);
-  });
-}
 process.on("exit", cleanup);
 
 // Wait for Tauri dev process to exit

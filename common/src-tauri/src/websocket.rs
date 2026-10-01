@@ -64,8 +64,6 @@ impl AgentDaemon {
         // Forward environment variables
         for var in &[
             "GROQ_API_KEY",
-            "GEMINI_API_KEY",
-            "GOOGLE_API_KEY",
             "BLINKY_AI_PROVIDER",
             "BLINKY_OLLAMA_URL",
             "BLINKY_OLLAMA_MODEL",
@@ -227,6 +225,18 @@ fn trim_env_value(value: &str) -> String {
     value.to_string()
 }
 
+pub(crate) fn write_env_file(root: &PathBuf, envs: &[(String, String)]) -> std::io::Result<()> {
+    let env_path = root.join(".env");
+    let mut content = String::new();
+    for (k, v) in envs {
+        content.push_str(k);
+        content.push('=');
+        content.push_str(v);
+        content.push('\n');
+    }
+    std::fs::write(env_path, content)
+}
+
 static ACTIVE_CLIENTS: OnceLock<Mutex<Vec<tokio::sync::mpsc::UnboundedSender<String>>>> = OnceLock::new();
 
 /// Returns the shared registry of connected WebSocket client senders.
@@ -361,6 +371,65 @@ async fn start_antigravity_hook_server(app: AppHandle) {
     }
 }
 
+async fn start_discovery_server(
+    app: AppHandle,
+    mode: crate::transport::TransportMode,
+    _tls_acceptor: Option<TlsAcceptor>,
+) {
+    use axum::{routing::get, Router, Json, http::HeaderMap};
+    use std::net::SocketAddr;
+    
+    let app_clone = app.clone();
+    let get_token = move || {
+        let token = crate::websocket::get_remote_token();
+        let cert_pin = match crate::tls_identity::TlsIdentity::load_or_generate(&app_clone) {
+            Ok(identity) => Some(identity.public_key_pin().to_string()),
+            Err(_) => None,
+        };
+        (token, cert_pin)
+    };
+
+    let app_router = Router::new()
+        .route("/discover", get(move || {
+            let (token, cert_pin) = get_token();
+            async move {
+                let mut headers = HeaderMap::new();
+                headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+                headers.insert("Access-Control-Allow-Methods", "GET, OPTIONS".parse().unwrap());
+                headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
+                let resp = serde_json::json!({
+                    "token": token,
+                    "certificate_pin": cert_pin,
+                    "mode": format!("{:?}", mode),
+                    "websocket_port": 9001,
+                });
+                (headers, Json(resp))
+            }
+        }))
+        .route("/discover", axum::routing::options(|| async {
+            let mut headers = HeaderMap::new();
+            headers.insert("Access-Control-Allow-Origin", "*".parse().unwrap());
+            headers.insert("Access-Control-Allow-Methods", "GET, OPTIONS".parse().unwrap());
+            headers.insert("Access-Control-Allow-Headers", "Content-Type".parse().unwrap());
+            (headers, "OK")
+        }));
+
+    let addr: SocketAddr = "0.0.0.0:9004".parse().unwrap();
+    println!("Discovery server listening on http://{}", addr);
+    
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to bind discovery server to {}: {}", addr, e);
+            return;
+        }
+    };
+    
+    if let Err(e) = axum::serve(listener, app_router).await {
+        eprintln!("Discovery server error: {}", e);
+    }
+}
+
 pub async fn start_websocket_server(app: AppHandle) {
     let addr = "0.0.0.0:9001";
     let listener = match TcpListener::bind(addr).await {
@@ -371,26 +440,36 @@ pub async fn start_websocket_server(app: AppHandle) {
         }
     };
     let mode = crate::transport::TransportMode::current();
-    let tls_acceptor = if mode.is_release() {
+    let tls_acceptor = {
         let identity = match crate::tls_identity::TlsIdentity::load_or_generate(&app) {
-            Ok(identity) => identity,
+            Ok(identity) => Some(identity),
             Err(error) => {
-                eprintln!("Failed to initialize release WSS identity: {error}");
-                return;
+                eprintln!("Failed to initialize WSS identity: {error}");
+                None
             }
         };
-        println!("Release WSS identity pin: {}", identity.public_key_pin());
-        match identity.server_config() {
-            Ok(config) => Some(TlsAcceptor::from(std::sync::Arc::new(config))),
-            Err(error) => {
-                eprintln!("Failed to initialize release WSS server: {error}");
-                return;
+        if let Some(identity) = identity {
+            println!("WSS identity pin: {}", identity.public_key_pin());
+            match identity.server_config() {
+                Ok(config) => Some(TlsAcceptor::from(std::sync::Arc::new(config))),
+                Err(error) => {
+                    eprintln!("Failed to initialize WSS server: {error}");
+                    None
+                }
             }
+        } else {
+            None
         }
-    } else {
-        None
     };
     println!("WebSocket server listening on {} ({:?})", addr, mode);
+
+    // Discovery endpoint for mobile auto-connect (returns token + cert pin)
+    let mode_clone = mode;
+    let app_discovery = app.clone();
+    let tls_acceptor_discovery = tls_acceptor.clone();
+    tauri::async_runtime::spawn(async move {
+        start_discovery_server(app_discovery, mode_clone, tls_acceptor_discovery).await;
+    });
 
     let app_hook = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -408,31 +487,6 @@ pub async fn start_websocket_server(app: AppHandle) {
         tokio::spawn(async move {
             broadcast_to_all_clients(&payload).await;
         });
-    });
-
-    // Background watcher: synchronize workstation lock/unlock state to connected clients in real time
-    let app_lock_watcher = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let mut last_locked = crate::platform::is_workstation_locked();
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
-            let current_locked = crate::platform::is_workstation_locked();
-            if current_locked != last_locked {
-                last_locked = current_locked;
-                let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-                let action = if current_locked { "lock" } else { "unlock" };
-                let evt = serde_json::json!({
-                    "type": "power_event",
-                    "action": action,
-                    "status": "triggered",
-                    "message": format!("Workstation {} detected.", if current_locked { "locked" } else { "unlocked" }),
-                    "timestamp": now,
-                    "is_locked": current_locked
-                });
-                let _ = app_lock_watcher.emit("blinky://power-event", evt.clone());
-                broadcast_to_all_clients(&evt.to_string()).await;
-            }
-        }
     });
 
     while let Ok((stream, peer_addr)) = listener.accept().await {
@@ -477,6 +531,80 @@ pub fn secure_transport_info(
         },
         "certificate_pin": pin,
     }))
+}
+
+/// Non-loopback LAN IPv4 addresses of this PC, for the mobile-pairing QR.
+/// Dependency-free: a UDP `connect()` transmits nothing but reveals the local
+/// address the OS would route with. Works offline.
+pub fn local_lan_ips() -> Vec<String> {
+    let mut ips: Vec<String> = Vec::new();
+    for remote in ["8.8.8.8:80", "1.1.1.1:80"] {
+        if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if sock.connect(remote).is_ok() {
+                if let Ok(local) = sock.local_addr() {
+                    let ip = local.ip().to_string();
+                    if !ip.starts_with("127.") && ip != "::1" && !ips.contains(&ip) {
+                        ips.push(ip);
+                    }
+                }
+            }
+        }
+        if !ips.is_empty() {
+            break;
+        }
+    }
+    ips
+}
+
+/// Payload for the "Connect Mobile" QR shown in the desktop UI.
+/// Ensures a usable token exists (generates + persists one even in dev),
+/// so scanning the QR connects with zero typing.
+pub fn mobile_pairing_payload(
+    app: &AppHandle,
+) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    let mode = crate::transport::TransportMode::current();
+    let pin = match crate::tls_identity::TlsIdentity::load_or_generate(app) {
+        Ok(identity) => Some(identity.public_key_pin().to_string()),
+        Err(e) => {
+            eprintln!("Warning: Could not generate TLS identity for pairing: {e}");
+            None
+        }
+    };
+
+    let mut token = get_remote_token();
+    if token.is_empty() {
+        token = generate_remote_token();
+        let root = project_root();
+        let mut envs = read_env_file(&root);
+        envs.retain(|(k, _)| k != "BLINKY_REMOTE_TOKEN");
+        envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
+        let _ = write_env_file(&root, &envs);
+    }
+
+    Ok(serde_json::json!({
+        "v": 1,
+        "ips": local_lan_ips(),
+        "ws_port": 9001,
+        "discovery_port": 9004,
+        "token": token,
+        "certificate_pin": pin,
+        "mode": if mode.is_release() { "release" } else { "development" },
+    }))
+}
+
+/// Regenerates `BLINKY_REMOTE_TOKEN` and persists it (old QR codes stop working).
+/// Also updates the process environment, since `get_remote_token()` prefers
+/// a nonempty `BLINKY_REMOTE_TOKEN` env var over `.env` — without this, a
+/// regenerate would leave the effective runtime credential unchanged.
+pub fn regenerate_remote_token() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let token = generate_remote_token();
+    let root = project_root();
+    let mut envs = read_env_file(&root);
+    envs.retain(|(k, _)| k != "BLINKY_REMOTE_TOKEN");
+    envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
+    write_env_file(&root, &envs).map_err(|err| format!("Failed to persist token: {err}"))?;
+    std::env::set_var("BLINKY_REMOTE_TOKEN", &token);
+    Ok(token)
 }
 
 pub async fn secure_socket_connect(
@@ -808,6 +936,24 @@ where
         return handle_sarvam_tts_proxy(ws_sender, ws_receiver).await;
     }
 
+    if active_path.starts_with("/assemblyai-agent") || active_path.starts_with("/assemblyai-stt") {
+        if !authenticated {
+            authenticated =
+                authenticate_websocket(&mut ws_receiver, &ws_sender, &server_token, mode).await?;
+        }
+        if !authenticated {
+            eprintln!(
+                "REJECTED unauthenticated AssemblyAI proxy connection from {}",
+                peer_addr
+            );
+            return Ok(());
+        }
+        if active_path.starts_with("/assemblyai-agent") {
+            return handle_assemblyai_agent_proxy(ws_sender, ws_receiver).await;
+        }
+        return handle_assemblyai_stt_proxy(ws_sender, ws_receiver).await;
+    }
+
     /// Builds an auth-denied JSON error frame for a command that requires a token.
     fn auth_denied(request_id: &str) -> String {
         serde_json::json!({
@@ -838,20 +984,18 @@ where
                 } else {
                     eprintln!("{} failed authentication", peer_addr);
                 }
-                if mode.is_release() {
-                    let _ = ws_sender
-                        .lock()
-                        .await
-                        .send(Message::Text(
-                            serde_json::json!({
-                                "type": "auth_result",
-                                "ok": authenticated,
-                            })
-                            .to_string()
-                            .into(),
-                        ))
-                        .await;
-                }
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(Message::Text(
+                        serde_json::json!({
+                            "type": "auth_result",
+                            "ok": authenticated,
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await;
                 continue;
             }
 
@@ -972,49 +1116,9 @@ where
                 crate::platform::execute_unlock(parsed_pin.as_deref());
             } else if trimmed == "screenshot" {
                 crate::platform::execute_screenshot();
-            } else if trimmed == "media_play_pause" || trimmed == "play_pause" {
-                crate::platform::execute_media_play_pause();
-            } else if trimmed == "open_browser" || trimmed == "browser" || trimmed == "chrome" {
-                crate::platform::execute_open_browser();
-            } else if trimmed == "open_terminal" || trimmed == "terminal" {
-                crate::platform::execute_open_terminal();
-            } else if trimmed == "toggle_lights" || trimmed == "lights" || trimmed == "turn_off_lights" || trimmed == "lights_off" || trimmed == "turn_on_lights" || trimmed == "lights_on" {
-                let root = project_root();
-                let python = python_executable(&root);
-                let script = root.join("common").join("python").join("tools").join("esp32_light_tool.py");
-                let action_arg = if trimmed == "turn_off_lights" || trimmed == "lights_off" {
-                    "off"
-                } else if trimmed == "turn_on_lights" || trimmed == "lights_on" {
-                    "on"
-                } else {
-                    "toggle"
-                };
-                let app_handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let out = TokioCommand::new(python)
-                        .arg("-u")
-                        .arg(&script)
-                        .arg(action_arg)
-                        .current_dir(&root)
-                        .output()
-                        .await;
-                    if let Ok(output) = out {
-                        let stdout_str = String::from_utf8_lossy(&output.stdout);
-                        let trimmed_out = stdout_str.trim();
-                        println!("blinky: esp32 light action ({}) output: {}", action_arg, trimmed_out);
-                        let json_val = serde_json::from_str::<serde_json::Value>(trimmed_out)
-                            .unwrap_or_else(|_| serde_json::json!({ "raw": trimmed_out }));
-                        let evt = serde_json::json!({
-                            "type": "light_event",
-                            "action": action_arg,
-                            "data": json_val
-                        });
-                        let _ = app_handle.emit("blinky://light-event", evt.clone());
-                        broadcast_to_all_clients(&evt.to_string()).await;
-                    }
-                });
             } else if trimmed == "get_sarvam_key" {
                 let key = get_sarvam_api_key();
+                eprintln!("get_sarvam_key: key_present = {}", !key.is_empty());
                 let resp = serde_json::json!({
                     "type": "sarvam_key",
                     "key": key
@@ -1026,11 +1130,12 @@ where
                         resp.to_string().into(),
                     ))
                     .await;
-            } else if trimmed == "get_fs_quick_access" || trimmed == "fs_quick_access" {
-                let folders = crate::platform::fs_sync::get_quick_access_folders();
+            } else if trimmed == "get_assemblyai_key" {
+                let key = get_assemblyai_api_key();
+                eprintln!("get_assemblyai_key: key_present = {}", !key.is_empty());
                 let resp = serde_json::json!({
-                    "type": "fs_quick_access",
-                    "folders": folders
+                    "type": "assemblyai_key",
+                    "key": key
                 });
                 let _ = ws_sender
                     .lock()
@@ -1039,11 +1144,60 @@ where
                         resp.to_string().into(),
                     ))
                     .await;
-            } else if trimmed == "get_fs_recent" || trimmed == "fs_recent" {
-                let files = crate::platform::fs_sync::get_recent_files();
+            } else if trimmed == "get_voice_provider" {
+                let provider = get_voice_provider();
+                eprintln!("get_voice_provider: provider = {}", provider);
                 let resp = serde_json::json!({
-                    "type": "fs_recent_files",
-                    "files": files
+                    "type": "voice_provider",
+                    "provider": provider
+                });
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        resp.to_string().into(),
+                    ))
+                    .await;
+            } else if trimmed == "get_api_keys" || trimmed == "{\"type\":\"get_api_keys\"}" {
+                let root = project_root();
+                let envs = read_env_file(&root);
+                let find_env = |key: &str| -> String {
+                    envs.iter()
+                        .find(|(k, _)| k == key)
+                        .map(|(_, v)| v.clone())
+                        .or_else(|| std::env::var(key).ok())
+                        .unwrap_or_default()
+                };
+                let resp = serde_json::json!({
+                    "type": "api_keys_sync",
+                    "keys": {
+                        "groq_key": find_env("GROQ_API_KEY"),
+                        "openai_key": find_env("OPENAI_API_KEY"),
+                        "gemini_key": find_env("GEMINI_API_KEY"),
+                        "deepseek_key": find_env("DEEPSEEK_API_KEY"),
+                    }
+                });
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(tokio_tungstenite::tungstenite::Message::Text(
+                        resp.to_string().into(),
+                    ))
+                    .await;
+            } else if trimmed == "notebook_sync_pull" || trimmed == "{\"type\":\"notebook_sync_pull\"}" {
+                let root = project_root();
+                let store_path = root.join("tmp").join("notebooks").join("notebooks_store.json");
+                let notebooks_json: serde_json::Value = if store_path.exists() {
+                    match std::fs::read_to_string(&store_path) {
+                        Ok(content) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
+                        Err(_) => serde_json::json!({}),
+                    }
+                } else {
+                    serde_json::json!({})
+                };
+                let resp = serde_json::json!({
+                    "type": "notebook_sync_data",
+                    "notebooks": notebooks_json
                 });
                 let _ = ws_sender
                     .lock()
@@ -1097,6 +1251,56 @@ where
                                     .await;
                             });
                         }
+                        continue;
+                    } else if msg_type == "get_api_keys" {
+                        let root = project_root();
+                        let envs = read_env_file(&root);
+                        let find_env = |key: &str| -> String {
+                            envs.iter()
+                                .find(|(k, _)| k == key)
+                                .map(|(_, v)| v.clone())
+                                .or_else(|| std::env::var(key).ok())
+                                .unwrap_or_default()
+                        };
+                        let resp = serde_json::json!({
+                            "type": "api_keys_sync",
+                            "keys": {
+                                "groq_key": find_env("GROQ_API_KEY"),
+                                "openai_key": find_env("OPENAI_API_KEY"),
+                                "gemini_key": find_env("GEMINI_API_KEY"),
+                                "deepseek_key": find_env("DEEPSEEK_API_KEY"),
+                            }
+                        });
+                        let _ = ws_sender
+                            .lock()
+                            .await
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                resp.to_string().into(),
+                            ))
+                            .await;
+                        continue;
+                    } else if msg_type == "notebook_sync_pull" {
+                        let root = project_root();
+                        let store_path = root.join("tmp").join("notebooks").join("notebooks_store.json");
+                        let notebooks_json: serde_json::Value = if store_path.exists() {
+                            match std::fs::read_to_string(&store_path) {
+                                Ok(content) => serde_json::from_str(&content).unwrap_or(serde_json::json!({})),
+                                Err(_) => serde_json::json!({}),
+                            }
+                        } else {
+                            serde_json::json!({})
+                        };
+                        let resp = serde_json::json!({
+                            "type": "notebook_sync_data",
+                            "notebooks": notebooks_json
+                        });
+                        let _ = ws_sender
+                            .lock()
+                            .await
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                resp.to_string().into(),
+                            ))
+                            .await;
                         continue;
                     } else if msg_type == "fs_get_quick_access" {
                         let folders = crate::platform::fs_sync::get_quick_access_folders();
@@ -1195,7 +1399,10 @@ where
                         continue;
                     } else if msg_type == "fs_read_file" {
                         let path = parsed.get("path").and_then(|p| p.as_str()).unwrap_or("");
-                        match crate::platform::fs_sync::read_file_base64(path, 30 * 1024 * 1024) {
+                        match crate::platform::fs_sync::read_file_base64(
+                            path,
+                            crate::file_transfer::configured_max_size(),
+                        ) {
                             Ok((name, b64, size)) => {
                                 let resp = serde_json::json!({
                                     "type": "fs_file_data",
@@ -1265,46 +1472,9 @@ where
                     trimmed.to_string()
                 };
 
-                let attached_image = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    parsed
-                        .get("attachedImage")
-                        .or_else(|| parsed.get("attached_image"))
-                        .and_then(|img| img.as_str())
-                        .map(|s| s.to_string())
-                } else {
-                    None
-                };
-
-                let mut resolved_query = query_text.clone();
-                let mut attached_file_path: Option<String> = None;
-
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    if let Some(file_obj) = parsed.get("attachedFile").or_else(|| parsed.get("attached_file")) {
-                        let file_name = file_obj.get("name").and_then(|n| n.as_str()).unwrap_or("uploaded_file");
-                        let b64_content = file_obj.get("base64").and_then(|b| b.as_str());
-
-                        if let Some(b64) = b64_content {
-                            if let Ok(decoded_bytes) = BASE64.decode(b64) {
-                                let uploads_dir = std::env::temp_dir().join("blinky_uploads");
-                                let _ = std::fs::create_dir_all(&uploads_dir);
-                                let target_file = uploads_dir.join(file_name);
-                                if std::fs::write(&target_file, &decoded_bytes).is_ok() {
-                                    let saved_path_str = target_file.to_string_lossy().to_string();
-                                    println!("blinky: saved uploaded mobile file to: {}", saved_path_str);
-                                    attached_file_path = Some(saved_path_str.clone());
-                                    // Replace referenced file name in query with absolute path
-                                    let ref_pattern = format!("[Referenced Files: {}]", file_name);
-                                    let ref_replacement = format!("[Referenced Files: {}]", saved_path_str);
-                                    resolved_query = resolved_query.replace(&ref_pattern, &ref_replacement);
-                                }
-                            }
-                        }
-                    }
-                }
-
                 println!(
-                    "blinky: received remote query from mobile: '{}' (req_id: {}, has_image: {}, has_file: {})",
-                    resolved_query, request_id, attached_image.is_some(), attached_file_path.is_some()
+                    "blinky: received remote query from mobile: '{}' (req_id: {})",
+                    query_text, request_id
                 );
 
                 // PC & Mobile Command Unification:
@@ -1315,9 +1485,7 @@ where
                     "blinky://mobile-query",
                     serde_json::json!({
                         "requestId": request_id,
-                        "query": resolved_query,
-                        "attachedImage": attached_image,
-                        "attachedFile": attached_file_path
+                        "query": query_text
                     }),
                 );
             } else {
@@ -1328,19 +1496,17 @@ where
     Ok(())
 }
 
-fn auth_token_from_frame(frame: &str, mode: crate::transport::TransportMode) -> Option<String> {
+fn auth_token_from_frame(frame: &str, _mode: crate::transport::TransportMode) -> Option<String> {
     if let Some(token) = frame.strip_prefix("auth:") {
-        return (mode == crate::transport::TransportMode::Development)
-            .then(|| token.trim().to_string());
+        return Some(token.trim().to_string());
     }
 
-    if mode.is_release() {
-        let payload = serde_json::from_str::<serde_json::Value>(frame).ok()?;
+    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(frame) {
         if payload.get("type").and_then(|kind| kind.as_str()) == Some("auth") {
             return payload
                 .get("token")
                 .and_then(|token| token.as_str())
-                .map(str::to_string);
+                .map(|s| s.trim().to_string());
         }
     }
 
@@ -1369,20 +1535,18 @@ where
         .map(|token| token_equals(token, server_token))
         .unwrap_or(false);
 
-    if mode.is_release() {
-        sender
-            .lock()
-            .await
-            .send(Message::Text(
-                serde_json::json!({
-                    "type": "auth_result",
-                    "ok": authenticated,
-                })
-                .to_string()
-                .into(),
-            ))
-            .await?;
-    }
+    let _ = sender
+        .lock()
+        .await
+        .send(Message::Text(
+            serde_json::json!({
+                "type": "auth_result",
+                "ok": authenticated,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await;
 
     Ok(authenticated)
 }
@@ -1888,7 +2052,7 @@ mod tests {
         );
         assert_eq!(
             super::auth_token_from_frame("auth:secret", crate::transport::TransportMode::Release),
-            None
+            Some("secret".to_string())
         );
     }
 
@@ -1905,16 +2069,92 @@ mod tests {
 }
 
 fn get_sarvam_api_key() -> String {
+    if let Ok(val) = std::env::var("SARVAM_API_KEY") {
+        let trimmed = val.trim().to_string();
+        if !trimmed.is_empty() {
+            eprintln!("get_sarvam_api_key: found in env var SARVAM_API_KEY");
+            return trimmed;
+        }
+    }
+
     let root = project_root();
+    eprintln!("get_sarvam_api_key: project_root = {:?}", root);
     let envs = read_env_file(&root);
-    envs.into_iter()
+    eprintln!("get_sarvam_api_key: found {} env vars in .env", envs.len());
+
+    let key = envs
+        .into_iter()
         .find(|(k, _)| k == "SARVAM_API_KEY")
         .map(|(_, v)| v)
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    eprintln!("get_sarvam_api_key: key_present = {}", !key.is_empty());
+    key
+}
+
+fn get_assemblyai_api_key() -> String {
+    // First check environment variables
+    if let Ok(val) = std::env::var("ASSEMBLY_AI_API_KEY") {
+        let trimmed = val.trim().to_string();
+        if !trimmed.is_empty() {
+            eprintln!("get_assemblyai_api_key: found in env var ASSEMBLY_AI_API_KEY");
+            return trimmed;
+        }
+    }
+    if let Ok(val) = std::env::var("ASSEMBLYAI_API_KEY") {
+        let trimmed = val.trim().to_string();
+        if !trimmed.is_empty() {
+            eprintln!("get_assemblyai_api_key: found in env var ASSEMBLYAI_API_KEY");
+            return trimmed;
+        }
+    }
+
+    // Fall back to .env file
+    let root = project_root();
+    eprintln!("get_assemblyai_api_key: project_root = {:?}", root);
+    let envs = read_env_file(&root);
+    eprintln!("get_assemblyai_api_key: found {} env vars in .env", envs.len());
+
+    let key = envs
+        .into_iter()
+        .find(|(k, _)| k == "ASSEMBLY_AI_API_KEY" || k == "ASSEMBLYAI_API_KEY")
+        .map(|(_, v)| v.trim().to_string())
+        .unwrap_or_default();
+
+    eprintln!("get_assemblyai_api_key: key_present = {}", !key.is_empty());
+    key
+}
+
+fn get_voice_provider() -> String {
+    if let Ok(val) = std::env::var("BLINKY_VOICE_PROVIDER") {
+        let trimmed = val.trim().to_string();
+        if !trimmed.is_empty() {
+            eprintln!("get_voice_provider: found in env var BLINKY_VOICE_PROVIDER = {}", trimmed);
+            return trimmed;
+        }
+    }
+
+    let root = project_root();
+    eprintln!("get_voice_provider: project_root = {:?}", root);
+    let envs = read_env_file(&root);
+    eprintln!("get_voice_provider: found {} env vars in .env", envs.len());
+
+    let provider = envs
+        .into_iter()
+        .find(|(k, _)| k == "BLINKY_VOICE_PROVIDER")
+        .map(|(_, v)| v.trim().to_string())
+        .unwrap_or_else(|| {
+            eprintln!("get_voice_provider: not found, defaulting to assemblyai");
+            "assemblyai".to_string()
+        });
+
+    eprintln!("get_voice_provider: provider = {}", provider);
+    provider
 }
 
 /// Reads the remote token if explicitly configured by the user in environment or .env.
 /// Development may continue without one for compatibility; release remote peers then fail auth.
+/// In release mode, auto-generates and persists a token on first run.
 fn get_remote_token() -> String {
     if let Ok(val) = std::env::var("BLINKY_REMOTE_TOKEN") {
         let trimmed = val.trim().to_string();
@@ -1923,11 +2163,24 @@ fn get_remote_token() -> String {
         }
     }
     let root = project_root();
-    let envs = read_env_file(&root);
-    envs.iter()
-        .find(|(k, _)| k == "BLINKY_REMOTE_TOKEN")
-        .map(|(_, v)| v.trim().to_string())
-        .unwrap_or_default()
+    let mut envs = read_env_file(&root);
+    if let Some((_, v)) = envs.iter().find(|(k, _)| k == "BLINKY_REMOTE_TOKEN") {
+        let trimmed = v.trim().to_string();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+    // Auto-generate token for release mode if not configured
+    let mode = crate::transport::TransportMode::current();
+    if mode.is_release() {
+        let token = generate_remote_token();
+        // Persist to .env file
+        envs.push(("BLINKY_REMOTE_TOKEN".to_string(), token.clone()));
+        let _ = write_env_file(&root, &envs);
+        println!("Generated and saved BLINKY_REMOTE_TOKEN to .env");
+        return token;
+    }
+    String::new()
 }
 
 /// Reject an unconfigured secret, then compare equal-length token bytes without early exit.
@@ -2138,3 +2391,146 @@ where
     }
     Ok(())
 }
+
+async fn handle_assemblyai_agent_proxy<S>(
+    client_write: WsSender<S>,
+    mut client_read: SplitStream<WebSocketStream<S>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let api_key = get_assemblyai_api_key();
+    if api_key.is_empty() {
+        return Err("ASSEMBLY_AI_API_KEY is not configured in environment".into());
+    }
+
+    let url = "wss://agents.assemblyai.com/v1/ws";
+    let mut request = url.into_client_request()?;
+    request
+        .headers_mut()
+        .insert("Authorization", api_key.parse()?);
+
+    let (aai_ws, _) = connect_async(request).await?;
+    println!("Successfully connected proxy to AssemblyAI Voice Agent WebSocket");
+
+    let (mut aai_write, mut aai_read) = aai_ws.split();
+
+    let client_to_aai = async {
+        while let Some(msg) = client_read.next().await {
+            let msg = msg?;
+            if msg.is_close() {
+                println!("AssemblyAI Agent: Client sent close");
+                let _ = aai_write.send(msg).await;
+                break;
+            }
+            if let Err(e) = aai_write.send(msg).await {
+                eprintln!("AssemblyAI Agent: Error sending to AssemblyAI: {:?}", e);
+                break;
+            }
+        }
+        println!("AssemblyAI Agent: client_to_aai ended");
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    };
+
+    let aai_to_client = async {
+        while let Some(msg) = aai_read.next().await {
+            let msg = msg?;
+            if msg.is_close() {
+                println!("AssemblyAI Agent: AssemblyAI sent close");
+                let _ = client_write.lock().await.send(msg).await;
+                break;
+            }
+            if let Err(e) = client_write.lock().await.send(msg).await {
+                eprintln!("AssemblyAI Agent: Error sending to client: {:?}", e);
+                break;
+            }
+        }
+        println!("AssemblyAI Agent: aai_to_client ended");
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    };
+
+    let res = tokio::select! {
+        r1 = client_to_aai => r1,
+        r2 = aai_to_client => r2,
+    };
+
+    if let Err(e) = res {
+        let err_str = e.to_string();
+        if !err_str.contains("closed") && !err_str.contains("Closing") && !err_str.contains("reset") {
+            eprintln!("AssemblyAI Agent proxy error: {}", err_str);
+        }
+    }
+    Ok(())
+}
+
+async fn handle_assemblyai_stt_proxy<S>(
+    client_write: WsSender<S>,
+    mut client_read: SplitStream<WebSocketStream<S>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let api_key = get_assemblyai_api_key();
+    if api_key.is_empty() {
+        return Err("ASSEMBLY_AI_API_KEY is not configured in environment".into());
+    }
+
+    let url = "wss://streaming.assemblyai.com/v3/ws?sample_rate=16000&speech_model=universal-3-5-pro";
+    let mut request = url.into_client_request()?;
+    request
+        .headers_mut()
+        .insert("Authorization", api_key.parse()?);
+
+    let (aai_ws, _) = connect_async(request).await?;
+    println!("Successfully connected proxy to AssemblyAI Realtime STT WebSocket");
+
+    let (mut aai_write, mut aai_read) = aai_ws.split();
+
+    let client_to_aai = async {
+        while let Some(msg) = client_read.next().await {
+            let msg = msg?;
+            if msg.is_close() {
+                println!("AssemblyAI STT: Client sent close");
+                let _ = aai_write.send(msg).await;
+                break;
+            }
+            if let Err(e) = aai_write.send(msg).await {
+                eprintln!("AssemblyAI STT: Error sending to AssemblyAI: {:?}", e);
+                break;
+            }
+        }
+        println!("AssemblyAI STT: client_to_aai ended");
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    };
+
+    let aai_to_client = async {
+        while let Some(msg) = aai_read.next().await {
+            let msg = msg?;
+            if msg.is_close() {
+                println!("AssemblyAI STT: AssemblyAI sent close");
+                let _ = client_write.lock().await.send(msg).await;
+                break;
+            }
+            if let Err(e) = client_write.lock().await.send(msg).await {
+                eprintln!("AssemblyAI STT: Error sending to client: {:?}", e);
+                break;
+            }
+        }
+        println!("AssemblyAI STT: aai_to_client ended");
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    };
+
+    let res = tokio::select! {
+        r1 = client_to_aai => r1,
+        r2 = aai_to_client => r2,
+    };
+
+    if let Err(e) = res {
+        let err_str = e.to_string();
+        if !err_str.contains("closed") && !err_str.contains("Closing") && !err_str.contains("reset") {
+            eprintln!("AssemblyAI STT proxy error: {}", err_str);
+        }
+    }
+    Ok(())
+}
+

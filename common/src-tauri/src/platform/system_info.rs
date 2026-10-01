@@ -75,7 +75,6 @@ pub fn get_system_telemetry() -> Value {
             })
             .unwrap_or((0, 0, 0));
 
-        let cpu_percent = read_linux_cpu();
         let battery = read_linux_battery();
         let network = read_linux_network();
 
@@ -86,10 +85,6 @@ pub fn get_system_telemetry() -> Value {
             "platform": "linux",
             "compositor": compositor,
             "uptime_seconds": uptime_seconds,
-            "cpu": {
-                "percent": cpu_percent
-            },
-            "cpu_percent": cpu_percent,
             "memory": {
                 "total_mb": total_mb,
                 "used_mb": used_mb,
@@ -105,7 +100,7 @@ pub fn get_system_telemetry() -> Value {
     #[cfg(target_os = "windows")]
     {
         let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows-PC".to_string());
-        let (os_name, cpu_percent, total_mb, used_mb, mem_percent, uptime_seconds, battery, network) = read_windows_telemetry();
+        let (os_name, total_mb, used_mb, mem_percent, uptime_seconds, battery, network) = read_windows_telemetry();
 
         json!({
             "type": "system_info",
@@ -114,10 +109,6 @@ pub fn get_system_telemetry() -> Value {
             "platform": "windows",
             "compositor": "Windows Desktop (DWM)",
             "uptime_seconds": uptime_seconds,
-            "cpu": {
-                "percent": cpu_percent
-            },
-            "cpu_percent": cpu_percent,
             "memory": {
                 "total_mb": total_mb,
                 "used_mb": used_mb,
@@ -131,19 +122,6 @@ pub fn get_system_telemetry() -> Value {
     }
 }
 
-/// Discovers active local network IP address using a non-blocking dummy UDP connection.
-fn get_local_ip() -> Option<String> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("8.8.8.8:80").ok()?;
-    let addr = socket.local_addr().ok()?;
-    let ip = addr.ip().to_string();
-    if ip != "0.0.0.0" && !ip.is_empty() {
-        Some(ip)
-    } else {
-        None
-    }
-}
-
 /// Parses a `/proc/meminfo` value expressed in kilobytes.
 #[cfg(target_os = "linux")]
 fn parse_meminfo_kb(line: &str) -> u64 {
@@ -153,135 +131,41 @@ fn parse_meminfo_kb(line: &str) -> u64 {
         .unwrap_or(0)
 }
 
-#[cfg(target_os = "linux")]
-static PREV_CPU_TIMES: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
-
-#[cfg(target_os = "linux")]
-fn read_linux_cpu() -> f64 {
-    let read_stat = || -> Option<(u64, u64)> {
-        let content = fs::read_to_string("/proc/stat").ok()?;
-        let first_line = content.lines().next()?;
-        if !first_line.starts_with("cpu ") {
-            return None;
-        }
-        let values: Vec<u64> = first_line
-            .split_whitespace()
-            .skip(1)
-            .filter_map(|s| s.parse::<u64>().ok())
-            .collect();
-        if values.len() < 4 {
-            return None;
-        }
-        let idle = values[3] + values.get(4).unwrap_or(&0);
-        let total: u64 = values.iter().sum();
-        Some((total, idle))
-    };
-
-    let mut guard = PREV_CPU_TIMES.lock().unwrap_or_else(|e| e.into_inner());
-    let current = match read_stat() {
-        Some(c) => c,
-        None => return 0.0,
-    };
-
-    let (prev_total, prev_idle) = match *guard {
-        Some(prev) => prev,
-        None => {
-            *guard = Some(current);
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            let next_current = read_stat().unwrap_or(current);
-            *guard = Some(next_current);
-            let delta_total = next_current.0.saturating_sub(current.0);
-            let delta_idle = next_current.1.saturating_sub(current.1);
-            if delta_total > 0 {
-                let usage = (1.0 - (delta_idle as f64 / delta_total as f64)) * 100.0;
-                return (usage.clamp(0.0, 100.0) * 10.0).round() / 10.0;
-            }
-            return 0.0;
-        }
-    };
-
-    *guard = Some(current);
-    let delta_total = current.0.saturating_sub(prev_total);
-    let delta_idle = current.1.saturating_sub(prev_idle);
-    if delta_total > 0 {
-        let usage = (1.0 - (delta_idle as f64 / delta_total as f64)) * 100.0;
-        (usage.clamp(0.0, 100.0) * 10.0).round() / 10.0
-    } else {
-        0.0
-    }
-}
-
 /// Reads battery capacity and charging state from Linux sysfs.
 #[cfg(target_os = "linux")]
 fn read_linux_battery() -> Value {
     let power_path = Path::new("/sys/class/power_supply");
-    let mut power_plugged = false;
-    let mut battery_found = false;
-    let mut capacity = None;
-    let mut status = "Unknown".to_string();
-    let mut is_charging = false;
-
     if let Ok(entries) = fs::read_dir(power_path) {
         for entry in entries.flatten() {
             let p = entry.path();
             let p_type = fs::read_to_string(p.join("type")).unwrap_or_default();
-            let p_type_trimmed = p_type.trim();
-
-            if p_type_trimmed.eq_ignore_ascii_case("mains") || p_type_trimmed.eq_ignore_ascii_case("ac") {
-                if let Ok(online) = fs::read_to_string(p.join("online")) {
-                    if online.trim() == "1" {
-                        power_plugged = true;
-                    }
-                }
-            }
-
-            if p_type_trimmed.eq_ignore_ascii_case("battery") || entry.file_name().to_string_lossy().starts_with("BAT") {
-                battery_found = true;
-                capacity = fs::read_to_string(p.join("capacity"))
+            if p_type.trim().eq_ignore_ascii_case("battery") || entry.file_name().to_string_lossy().starts_with("BAT") {
+                let capacity = fs::read_to_string(p.join("capacity"))
                     .ok()
                     .and_then(|c| c.trim().parse::<u32>().ok());
-                status = fs::read_to_string(p.join("status"))
+                let status = fs::read_to_string(p.join("status"))
                     .map(|s| s.trim().to_string())
                     .unwrap_or_else(|_| "Unknown".to_string());
-                is_charging = status.eq_ignore_ascii_case("charging");
+                let is_charging = status.eq_ignore_ascii_case("charging");
+                return json!({
+                    "has_battery": true,
+                    "percent": capacity,
+                    "is_charging": is_charging,
+                    "status": status
+                });
             }
         }
-    }
-
-    if battery_found {
-        let final_status = if power_plugged {
-            if is_charging {
-                "Charging".to_string()
-            } else if capacity == Some(100) || status.eq_ignore_ascii_case("full") {
-                "Fully Charged".to_string()
-            } else {
-                "Plugged In".to_string()
-            }
-        } else if status.eq_ignore_ascii_case("discharging") || status == "Unknown" {
-            "Discharging".to_string()
-        } else {
-            status
-        };
-
-        return json!({
-            "has_battery": true,
-            "percent": capacity,
-            "is_charging": is_charging,
-            "power_plugged": power_plugged,
-            "status": final_status
-        });
     }
 
     json!({
         "has_battery": false,
         "percent": null,
         "is_charging": false,
-        "power_plugged": true,
         "status": "AC Mains Nominal"
     })
 }
 
-/// Selects an active physical network interface and reports its MAC address and local IP.
+/// Selects an active physical network interface and reports its MAC address.
 #[cfg(target_os = "linux")]
 fn read_linux_network() -> Value {
     let net_path = Path::new("/sys/class/net");
@@ -311,90 +195,16 @@ fn read_linux_network() -> Value {
         }
     }
 
-    let ip = get_local_ip();
-
     json!({
         "mac_address": best_mac,
-        "interface": best_iface,
-        "ip_address": ip
+        "interface": best_iface
     })
 }
 
+/// Returns the currently supported Windows telemetry fields including memory, uptime, battery, and physical network MAC.
 #[cfg(target_os = "windows")]
-extern "system" {
-    fn GetSystemTimes(
-        lpIdleTime: *mut windows_sys::Win32::Foundation::FILETIME,
-        lpKernelTime: *mut windows_sys::Win32::Foundation::FILETIME,
-        lpUserTime: *mut windows_sys::Win32::Foundation::FILETIME,
-    ) -> windows_sys::Win32::Foundation::BOOL;
-}
-
-#[cfg(target_os = "windows")]
-fn filetime_to_u64(ft: windows_sys::Win32::Foundation::FILETIME) -> u64 {
-    ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64)
-}
-
-#[cfg(target_os = "windows")]
-static PREV_SYSTEM_TIMES: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
-
-#[cfg(target_os = "windows")]
-fn read_windows_cpu() -> f64 {
-    let get_times = || -> Option<(u64, u64)> {
-        unsafe {
-            let mut idle_time = std::mem::zeroed();
-            let mut kernel_time = std::mem::zeroed();
-            let mut user_time = std::mem::zeroed();
-            if GetSystemTimes(&mut idle_time, &mut kernel_time, &mut user_time) != 0 {
-                let idle = filetime_to_u64(idle_time);
-                let kernel = filetime_to_u64(kernel_time);
-                let user = filetime_to_u64(user_time);
-                let total = kernel.saturating_add(user);
-                Some((total, idle))
-            } else {
-                None
-            }
-        }
-    };
-
-    let mut guard = PREV_SYSTEM_TIMES.lock().unwrap_or_else(|e| e.into_inner());
-    let current = match get_times() {
-        Some(c) => c,
-        None => return 0.0,
-    };
-
-    let (prev_total, prev_idle) = match *guard {
-        Some(prev) => prev,
-        None => {
-            *guard = Some(current);
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            let next_current = get_times().unwrap_or(current);
-            *guard = Some(next_current);
-            let delta_total = next_current.0.saturating_sub(current.0);
-            let delta_idle = next_current.1.saturating_sub(current.1);
-            if delta_total > 0 {
-                let usage = (1.0 - (delta_idle as f64 / delta_total as f64)) * 100.0;
-                return (usage.clamp(0.0, 100.0) * 10.0).round() / 10.0;
-            }
-            return 0.0;
-        }
-    };
-
-    *guard = Some(current);
-    let delta_total = current.0.saturating_sub(prev_total);
-    let delta_idle = current.1.saturating_sub(prev_idle);
-    if delta_total > 0 {
-        let usage = (1.0 - (delta_idle as f64 / delta_total as f64)) * 100.0;
-        (usage.clamp(0.0, 100.0) * 10.0).round() / 10.0
-    } else {
-        0.0
-    }
-}
-
-/// Returns the currently supported Windows telemetry fields including CPU, memory, uptime, battery, and physical network adapter.
-#[cfg(target_os = "windows")]
-fn read_windows_telemetry() -> (String, f64, u64, u64, u32, u64, Value, Value) {
+fn read_windows_telemetry() -> (String, u64, u64, u32, u64, Value, Value) {
     let os_name = "Windows".to_string();
-    let cpu_percent = read_windows_cpu();
 
     // 1. Memory stats via GlobalMemoryStatusEx
     let (total_mb, used_mb, mem_percent) = unsafe {
@@ -425,18 +235,11 @@ fn read_windows_telemetry() -> (String, f64, u64, u64, u32, u64, Value, Value) {
             } else {
                 None
             };
-            let power_plugged = power.ACLineStatus == 1;
             let is_charging = (power.BatteryFlag & 8) != 0;
             let status = if !has_battery {
                 "AC Mains Nominal".to_string()
-            } else if power_plugged {
-                if is_charging {
-                    "Charging".to_string()
-                } else if percent == Some(100) {
-                    "Fully Charged".to_string()
-                } else {
-                    "Plugged In".to_string()
-                }
+            } else if is_charging {
+                "Charging".to_string()
             } else {
                 "Discharging".to_string()
             };
@@ -444,7 +247,6 @@ fn read_windows_telemetry() -> (String, f64, u64, u64, u32, u64, Value, Value) {
                 "has_battery": has_battery,
                 "percent": percent,
                 "is_charging": is_charging,
-                "power_plugged": power_plugged,
                 "status": status
             })
         } else {
@@ -452,59 +254,53 @@ fn read_windows_telemetry() -> (String, f64, u64, u64, u32, u64, Value, Value) {
                 "has_battery": false,
                 "percent": null,
                 "is_charging": false,
-                "power_plugged": true,
                 "status": "AC Mains Nominal"
             })
         }
     };
 
-    // 4. Physical network adapter, MAC address, and IP
+    // 4. Physical network adapter and MAC address
     let network = read_windows_network();
 
-    (os_name, cpu_percent, total_mb, used_mb, mem_percent, uptime_seconds, battery, network)
+    (os_name, total_mb, used_mb, mem_percent, uptime_seconds, battery, network)
 }
 
-/// Reads the active physical network adapter MAC address, interface name, and IP address on Windows.
+/// Reads the active physical network adapter MAC address and name on Windows.
 #[cfg(target_os = "windows")]
 fn read_windows_network() -> Value {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
-    static NET_CACHE: Mutex<Option<(Instant, String, String, Option<String>)>> = Mutex::new(None);
+    static NET_CACHE: Mutex<Option<(Instant, String, String)>> = Mutex::new(None);
 
     if let Ok(mut guard) = NET_CACHE.lock() {
-        if let Some((cached_at, ref mac, ref iface, ref ip)) = *guard {
-            if !mac.is_empty() && cached_at.elapsed() < Duration::from_secs(15) {
+        if let Some((cached_at, ref mac, ref iface)) = *guard {
+            if !mac.is_empty() && cached_at.elapsed() < Duration::from_secs(30) {
                 return json!({
                     "mac_address": mac,
-                    "interface": iface,
-                    "ip_address": ip
+                    "interface": iface
                 });
             }
         }
 
-        let (mac, iface, ip_fallback) = query_windows_mac_and_iface();
-        let ip = get_local_ip().or(ip_fallback);
-        *guard = Some((Instant::now(), mac.clone(), iface.clone(), ip.clone()));
+        let (mac, iface) = query_windows_mac_and_iface();
+        *guard = Some((Instant::now(), mac.clone(), iface.clone()));
         return json!({
             "mac_address": mac,
-            "interface": iface,
-            "ip_address": ip
+            "interface": iface
         });
     }
 
-    let (mac, iface, ip_fallback) = query_windows_mac_and_iface();
-    let ip = get_local_ip().or(ip_fallback);
+    let (mac, iface) = query_windows_mac_and_iface();
     json!({
         "mac_address": mac,
-        "interface": iface,
-        "ip_address": ip
+        "interface": iface
     })
 }
 
-/// Discovers active physical network adapter MAC and IP using getmac with PowerShell WMI fallback.
+/// Discovers active physical network adapter MAC using getmac with PowerShell WMI fallback.
 #[cfg(target_os = "windows")]
-fn query_windows_mac_and_iface() -> (String, String, Option<String>) {
+fn query_windows_mac_and_iface() -> (String, String) {
     use std::process::Command;
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -540,7 +336,7 @@ fn query_windows_mac_and_iface() -> (String, String, Option<String>) {
                             } else {
                                 transport.to_string()
                             };
-                            return (clean_mac, iface, None);
+                            return (clean_mac, iface);
                         }
                     }
                 }
@@ -548,29 +344,23 @@ fn query_windows_mac_and_iface() -> (String, String, Option<String>) {
         }
     }
 
-    // 2. Fallback: PowerShell WMI query for active adapter MAC and IP
+    // 2. Fallback: PowerShell WMI query for active adapter MAC
     if let Ok(output) = Command::new("powershell")
         .args([
             "-NoProfile",
             "-Command",
-            "$a = Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled = TRUE and MACAddress IS NOT NULL' | Select-Object -First 1; if ($a) { \"$($a.MACAddress)|$($a.IPAddress[0])\" }",
+            "Get-CimInstance Win32_NetworkAdapterConfiguration -Filter 'IPEnabled = TRUE and MACAddress IS NOT NULL' | Select-Object -ExpandProperty MACAddress -First 1",
         ])
         .creation_flags(CREATE_NO_WINDOW)
         .output()
     {
         if output.status.success() {
-            let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let parts: Vec<&str> = line.split('|').collect();
-            if parts.len() >= 2 {
-                let mac = parts[0].trim().to_lowercase();
-                let ip_str = parts[1].trim().to_string();
-                let ip = if ip_str.is_empty() { None } else { Some(ip_str) };
-                if mac.split(':').count() == 6 {
-                    return (mac, "Physical Adapter".to_string(), ip);
-                }
+            let mac = String::from_utf8_lossy(&output.stdout).trim().to_lowercase();
+            if mac.split(':').count() == 6 {
+                return (mac, "Physical Adapter".to_string());
             }
         }
     }
 
-    (String::new(), String::new(), None)
+    (String::new(), String::new())
 }

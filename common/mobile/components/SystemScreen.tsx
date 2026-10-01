@@ -24,6 +24,11 @@ interface SystemScreenProps {
   isSendingWol?: boolean;
   isWorkstationLocked?: boolean;
   onRefresh?: () => void;
+  isLocked?: boolean;
+  onUnlockPress?: () => void;
+  onPromoCodePress?: () => void;
+  onRestorePress?: () => void;
+  isRestoring?: boolean;
 }
 
 export function SystemScreen({
@@ -34,6 +39,11 @@ export function SystemScreen({
   isSendingWol = false,
   isWorkstationLocked = false,
   onRefresh,
+  isLocked = false,
+  onUnlockPress,
+  onPromoCodePress,
+  onRestorePress,
+  isRestoring = false,
 }: SystemScreenProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [pendingAction, setPendingAction] = useState<'restart' | 'sleep' | 'lock' | 'hibernate' | null>(null);
@@ -163,7 +173,20 @@ export function SystemScreen({
         ) : undefined
       }
     >
-      <Text style={styles.headerTitle}>System Monitor</Text>
+      <View style={styles.headerRow}>
+        <Text style={styles.headerTitle}>System Monitor</Text>
+        {isLocked ? (
+          <View style={styles.proBadgeLocked}>
+            <Ionicons name="lock-closed" size={11} color={colors.accent} />
+            <Text style={styles.proBadgeText}>PRO LOCKED</Text>
+          </View>
+        ) : (
+          <View style={styles.proBadgeUnlocked}>
+            <Ionicons name="shield-checkmark" size={11} color={colors.success} />
+            <Text style={[styles.proBadgeText, { color: colors.success }]}>PRO</Text>
+          </View>
+        )}
+      </View>
       <View style={styles.statusRow}>
         <View style={[styles.statusIndicator, { backgroundColor: isConnected ? colors.success : colors.danger }]} />
         <Text style={styles.statusText}>
@@ -171,78 +194,158 @@ export function SystemScreen({
         </Text>
       </View>
 
-      <Text style={styles.sectionTitle}>METRICS</Text>
-      <View style={styles.metricsGrid}>
-        <MetricCard 
-          icon="hardware-chip" 
-          title="CPU" 
-          value={`${cpuUsage.toFixed(1)}%`} 
-          color="#3B82F6" 
-          subtitle={systemInfo?.platform ? `${systemInfo.platform.toUpperCase()} Host` : undefined}
-        />
-        <MetricCard 
-          icon="server" 
-          title="RAM" 
-          value={`${ramUsage.toFixed(1)}%`} 
-          color="#8B5CF6" 
-          subtitle={ramSubtitle}
-        />
-        <MetricCard 
-          icon={!hasBattery ? "power" : (isPluggedIn ? "battery-charging" : (batteryLevel < 20 ? "battery-dead" : "battery-half"))} 
-          title={!hasBattery ? "Power" : "Battery"} 
-          value={batteryValue} 
-          color={isPluggedIn || !hasBattery ? colors.success : (batteryLevel < 20 ? colors.danger : "#10B981")} 
-          subtitle={batterySubtitle}
-        />
-        <MetricCard 
-          icon="wifi" 
-          title="Network" 
-          value={networkValue} 
-          color="#06B6D4" 
-          isSmallText={networkValue.length > 13} 
-          subtitle={networkSubtitle}
-        />
-      </View>
+      {isLocked && (
+        <View style={styles.paywallHeroCard}>
+          <View style={styles.paywallHeaderRow}>
+            <View style={styles.paywallIconCircle}>
+              <Ionicons name="lock-closed" size={22} color={colors.accent} />
+            </View>
+            <View style={styles.paywallHeaderTextCol}>
+              <Text style={styles.paywallTitle}>PC Controls Locked</Text>
+              <Text style={styles.paywallSubtitle}>
+                Unlock remote hardware telemetry and power actions
+              </Text>
+            </View>
+          </View>
 
-      <Text style={[styles.sectionTitle, { marginTop: spacing.lg }]}>POWER CONTROLS</Text>
-      
-      {onWakePc && (
-        <TouchableOpacity
-          style={[styles.wakeBtn, isSendingWol && styles.wakeBtnActive]}
-          onPress={handleWakePc}
-          disabled={isSendingWol}
-          activeOpacity={0.7}
-        >
-          <View style={styles.wakeIconBox}>
-            {isSendingWol ? (
-              <ActivityIndicator size="small" color={colors.success} />
-            ) : (
-              <Ionicons name="flash" size={22} color={colors.success} />
-            )}
+          <View style={styles.paywallFeaturesList}>
+            <View style={styles.paywallFeatureItem}>
+              <Ionicons name="flash-outline" size={14} color={colors.accent} />
+              <Text style={styles.paywallFeatureText}>Sleep, Restart, Lock & Hibernate controls</Text>
+            </View>
+            <View style={styles.paywallFeatureItem}>
+              <Ionicons name="hardware-chip-outline" size={14} color={colors.accent} />
+              <Text style={styles.paywallFeatureText}>Real-time CPU, RAM & Battery telemetry</Text>
+            </View>
+            <View style={styles.paywallFeatureItem}>
+              <Ionicons name="radio-outline" size={14} color={colors.accent} />
+              <Text style={styles.paywallFeatureText}>Remote Wake-on-LAN (WoL) Magic Packets</Text>
+            </View>
           </View>
-          <View style={styles.wakeTextContainer}>
-            <Text style={styles.wakeLabel}>
-              {isSendingWol ? 'Waking PC...' : isWorkstationLocked ? 'Wake / Unlock PC' : 'Wake PC (WoL)'}
-            </Text>
-            <Text style={styles.wakeSubtext}>
-              {isSendingWol
-                ? 'Broadcasting Magic Packet...'
-                : !isConnected
-                ? 'Send Wake-on-LAN magic packet over network'
-                : isWorkstationLocked
-                ? 'Unlock display or send magic packet'
-                : 'Send Wake-on-LAN magic packet'}
-            </Text>
+
+          <View style={styles.paywallBtnGroup}>
+            <TouchableOpacity
+              style={styles.paywallUnlockBtn}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                onUnlockPress?.();
+              }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="sparkles" size={16} color={colors.white} />
+              <Text style={styles.paywallUnlockBtnText}>Unlock PC Controls (Pro)</Text>
+            </TouchableOpacity>
+
+            <View style={styles.paywallSecondaryRow}>
+              <TouchableOpacity
+                style={styles.paywallPromoBtn}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  onPromoCodePress?.();
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="ticket-outline" size={15} color={colors.accent} />
+                <Text style={styles.paywallPromoBtnText}>Redeem Promo Code</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.paywallRestoreBtn}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  onRestorePress?.();
+                }}
+                disabled={isRestoring}
+                activeOpacity={0.8}
+              >
+                {isRestoring ? (
+                  <ActivityIndicator size="small" color={colors.textSecondary} />
+                ) : (
+                  <>
+                    <Ionicons name="reload-outline" size={13} color={colors.textSecondary} />
+                    <Text style={styles.paywallRestoreBtnText}>Restore</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
-          <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
-        </TouchableOpacity>
+        </View>
       )}
 
-      <View style={styles.powerGrid}>
-        <PowerButton icon="moon" label="Sleep" color="#8B5CF6" onPress={() => handlePromptPowerAction('sleep')} disabled={!isConnected} />
-        <PowerButton icon="lock-closed" label="Lock" color="#F59E0B" onPress={() => handlePromptPowerAction('lock')} disabled={!isConnected} />
-        <PowerButton icon="refresh" label="Restart" color="#06B6D4" onPress={() => handlePromptPowerAction('restart')} disabled={!isConnected} />
-        <PowerButton icon="power" label="Hibernate" color={colors.danger} onPress={() => handlePromptPowerAction('hibernate')} disabled={!isConnected} />
+      <View style={isLocked ? styles.lockedContentWrapper : undefined} pointerEvents={isLocked ? 'none' : 'auto'}>
+        <Text style={styles.sectionTitle}>METRICS</Text>
+        <View style={styles.metricsGrid}>
+          <MetricCard 
+            icon="hardware-chip" 
+            title="CPU" 
+            value={`${cpuUsage.toFixed(1)}%`} 
+            color="#3B82F6" 
+            subtitle={systemInfo?.platform ? `${systemInfo.platform.toUpperCase()} Host` : undefined}
+          />
+          <MetricCard 
+            icon="server" 
+            title="RAM" 
+            value={`${ramUsage.toFixed(1)}%`} 
+            color="#8B5CF6" 
+            subtitle={ramSubtitle}
+          />
+          <MetricCard 
+            icon={!hasBattery ? "power" : (isPluggedIn ? "battery-charging" : (batteryLevel < 20 ? "battery-dead" : "battery-half"))} 
+            title={!hasBattery ? "Power" : "Battery"} 
+            value={batteryValue} 
+            color={isPluggedIn || !hasBattery ? colors.success : (batteryLevel < 20 ? colors.danger : "#10B981")} 
+            subtitle={batterySubtitle}
+          />
+          <MetricCard 
+            icon="wifi" 
+            title="Network" 
+            value={networkValue} 
+            color="#06B6D4" 
+            isSmallText={networkValue.length > 13} 
+            subtitle={networkSubtitle}
+          />
+        </View>
+
+        <Text style={[styles.sectionTitle, { marginTop: spacing.lg }]}>POWER CONTROLS</Text>
+        
+        {onWakePc && (
+          <TouchableOpacity
+            style={[styles.wakeBtn, isSendingWol && styles.wakeBtnActive]}
+            onPress={handleWakePc}
+            disabled={isSendingWol}
+            activeOpacity={0.7}
+          >
+            <View style={styles.wakeIconBox}>
+              {isSendingWol ? (
+                <ActivityIndicator size="small" color={colors.success} />
+              ) : (
+                <Ionicons name="flash" size={22} color={colors.success} />
+              )}
+            </View>
+            <View style={styles.wakeTextContainer}>
+              <Text style={styles.wakeLabel}>
+                {isSendingWol ? 'Waking PC...' : isWorkstationLocked ? 'Wake / Unlock PC' : 'Wake PC (WoL)'}
+              </Text>
+              <Text style={styles.wakeSubtext}>
+                {isSendingWol
+                  ? 'Broadcasting Magic Packet...'
+                  : !isConnected
+                  ? 'Send Wake-on-LAN magic packet over network'
+                  : isWorkstationLocked
+                  ? 'Unlock display or send magic packet'
+                  : 'Send Wake-on-LAN magic packet'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+          </TouchableOpacity>
+        )}
+
+        <View style={styles.powerGrid}>
+          <PowerButton icon="moon" label="Sleep" color="#8B5CF6" onPress={() => handlePromptPowerAction('sleep')} disabled={!isConnected} />
+          <PowerButton icon="lock-closed" label="Lock" color="#F59E0B" onPress={() => handlePromptPowerAction('lock')} disabled={!isConnected} />
+          <PowerButton icon="refresh" label="Restart" color="#06B6D4" onPress={() => handlePromptPowerAction('restart')} disabled={!isConnected} />
+          <PowerButton icon="power" label="Hibernate" color={colors.danger} onPress={() => handlePromptPowerAction('hibernate')} disabled={!isConnected} />
+        </View>
       </View>
 
       {/* Confirmation Bottom Toastbar with Slide-down to Close */}
@@ -644,5 +747,150 @@ const styles = StyleSheet.create({
   cancelActionBtnText: {
     ...typography.bodyMedium,
     color: colors.textMuted,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.xs,
+  },
+  proBadgeLocked: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.accentMuted,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 90, 54, 0.3)',
+  },
+  proBadgeUnlocked: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.successMuted,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radius.round,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  proBadgeText: {
+    ...typography.label,
+    fontSize: 10,
+    color: colors.accent,
+  },
+  paywallHeroCard: {
+    backgroundColor: '#0d0e14',
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 90, 54, 0.35)',
+    padding: spacing.md,
+    marginTop: spacing.md,
+    marginBottom: spacing.md,
+  },
+  paywallHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  paywallIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.accentMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 90, 54, 0.4)',
+  },
+  paywallHeaderTextCol: {
+    flex: 1,
+  },
+  paywallTitle: {
+    ...typography.heading3,
+    color: colors.textPrimary,
+    fontSize: 16,
+  },
+  paywallSubtitle: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    marginTop: 2,
+    fontSize: 12,
+  },
+  paywallFeaturesList: {
+    gap: 6,
+    paddingVertical: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  paywallFeatureItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  paywallFeatureText: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    fontSize: 12,
+  },
+  paywallBtnGroup: {
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  paywallUnlockBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.accent,
+    paddingVertical: 12,
+    borderRadius: radius.md,
+  },
+  paywallUnlockBtnText: {
+    ...typography.bodyMedium,
+    color: colors.white,
+    fontWeight: '700',
+  },
+  paywallSecondaryRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  paywallPromoBtn: {
+    flex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.surfaceElevated,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+  },
+  paywallPromoBtnText: {
+    ...typography.bodySmall,
+    color: colors.accent,
+    fontWeight: '600',
+  },
+  paywallRestoreBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+  },
+  paywallRestoreBtnText: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+  },
+  lockedContentWrapper: {
+    opacity: 0.35,
   },
 });

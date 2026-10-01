@@ -71,12 +71,10 @@ pub fn execute_unlock(pin: Option<&str>) {
         use std::thread::sleep;
         use std::time::Duration;
 
-        // Wake display and dismiss lock screen curtain (requires pulsing across monitor wake latency)
+        // Wake display first
         let _ = send_mouse_click();
-        sleep(Duration::from_millis(250));
-        let _ = send_vk_key(0x20, false); // Spacebar
-        sleep(Duration::from_millis(350));
-        let _ = send_vk_key(0x0D, false); // Enter
+        sleep(Duration::from_millis(150));
+        let _ = send_vk_key(0x20, false);
         sleep(Duration::from_millis(300));
 
         if let Some(ref pin_str) = pin_owned {
@@ -93,15 +91,11 @@ pub fn execute_unlock(pin: Option<&str>) {
                     }
                 }
 
-                // Fallback: If Credential Provider is not registered or failed, wait for curtain animation
+                // Fallback: If Credential Provider is not registered, wait for the lock curtain animation to finish
                 // and attempt virtual key typing
-                sleep(Duration::from_millis(500));
-                let _ = send_vk_key(0x1B, false); // VK_ESCAPE
-                sleep(Duration::from_millis(150));
-                let _ = send_vk_key(0x20, false); // VK_SPACE
-                sleep(Duration::from_millis(250));
+                sleep(Duration::from_millis(600));
 
-                for _ in 0..6 {
+                for _ in 0..4 {
                     let _ = send_vk_key(0x08, false); // VK_BACK
                     sleep(Duration::from_millis(25));
                 }
@@ -131,71 +125,43 @@ fn try_named_pipe_unlock(pin_or_password: &str) -> Result<(), String> {
 
     println!("blinky: attempting unlock via named pipe {pipe_path} for user '{username}' (domain: '{domain}')");
 
-    let mut last_err = String::new();
-    // Attempt connecting to the named pipe with retries (LogonUI might take up to ~3-5s to initialize upon display wake)
-    for attempt in 1..=30 {
-        // While waiting for LogonUI to initialize and create the pipe, pulse wake events periodically to dismiss the lock curtain
-        if attempt > 1 && attempt % 3 == 0 {
-            let _ = wake_monitors_mouse_jitter();
-            let _ = send_mouse_click();
-            let _ = send_vk_key(0x20, false); // Space
-            let _ = send_vk_key(0x0D, false); // Enter
-        }
-
+    // Attempt connecting to the named pipe with retries (LogonUI might take up to ~2-3s to initialize upon display wake)
+    for attempt in 1..=20 {
         match std::fs::OpenOptions::new().read(true).write(true).open(pipe_path) {
             Ok(mut file) => {
-                // Prepare candidates: try with explicit domain first, then fallback without domain
-                let cmds = if !domain.is_empty() && domain != "." && !domain.eq_ignore_ascii_case(&username) {
-                    vec![
-                        format!("UNLOCK:{domain}\\{username}:{pin_or_password}"),
-                        format!("UNLOCK:{username}:{pin_or_password}"),
-                    ]
-                } else {
-                    vec![format!("UNLOCK:{username}:{pin_or_password}")]
-                };
-
-                for cmd in cmds {
-                    println!("blinky: dispatching credential command to CredentialProviderPipe");
-                    if let Err(e) = file.write_all(cmd.as_bytes()) {
-                        last_err = format!("Failed to write command to pipe: {e}");
-                        continue;
-                    }
-                    let mut resp_buf = [0u8; 64];
-                    let n = file.read(&mut resp_buf).unwrap_or(0);
-                    let resp_str = String::from_utf8_lossy(&resp_buf[..n]);
-                    println!("blinky: CredentialProviderPipe response: {resp_str}");
-
-                    if resp_str.starts_with("OK") {
-                        // Give LogonUI time to complete logon transition and verify unlock state
-                        for _ in 0..15 {
-                            std::thread::sleep(Duration::from_millis(200));
-                            if !is_workstation_locked() {
-                                println!("blinky: Workstation confirmed unlocked!");
-                                return Ok(());
-                            }
-                        }
-                    } else {
-                        last_err = format!("Unlock provider returned: {resp_str}");
-                    }
+                // Format accepted by UnlockProvider: UNLOCK:domain\username:password or UNLOCK:username:password
+                let cmd = format!("UNLOCK:{username}:{pin_or_password}");
+                if let Err(e) = file.write_all(cmd.as_bytes()) {
+                    return Err(format!("Failed to write command to pipe: {e}"));
                 }
-
-                if !is_workstation_locked() {
+                let mut resp_buf = [0u8; 64];
+                let n = file.read(&mut resp_buf).unwrap_or(0);
+                let resp_str = String::from_utf8_lossy(&resp_buf[..n]);
+                println!("blinky: CredentialProviderPipe response: {resp_str}");
+                if resp_str.starts_with("OK") {
+                    // Give LogonUI time to complete logon transition
+                    for _ in 0..10 {
+                        std::thread::sleep(Duration::from_millis(200));
+                        if !is_workstation_locked() {
+                            println!("blinky: Workstation confirmed unlocked!");
+                            return Ok(());
+                        }
+                    }
                     return Ok(());
                 } else {
-                    return Err(if !last_err.is_empty() { last_err } else { "LogonUI did not unlock workstation".to_string() });
+                    return Err(format!("Unlock provider returned: {resp_str}"));
                 }
             }
             Err(e) => {
-                last_err = e.to_string();
-                if attempt == 30 {
-                    println!("blinky: CredentialProviderPipe not reachable after 30 attempts ({e})");
+                if attempt == 20 {
+                    println!("blinky: CredentialProviderPipe not reachable after 20 attempts ({e})");
                 }
-                std::thread::sleep(Duration::from_millis(250));
+                std::thread::sleep(Duration::from_millis(200));
             }
         }
     }
 
-    Err(format!("Named pipe \\\\.\\pipe\\CredentialProviderPipe not available ({last_err})"))
+    Err("Named pipe \\\\.\\pipe\\CredentialProviderPipe not available (is UnlockProvider registered as Administrator?)".to_string())
 }
 
 fn send_mouse_click() -> Result<(), String> {
@@ -443,21 +409,5 @@ pub fn execute_volume_down() {
 
 pub fn execute_volume_mute() {
     let _ = send_keypress(0xAD);
-}
-
-pub fn execute_media_play_pause() {
-    let _ = send_keypress(0xB3);
-}
-
-pub fn execute_open_browser() {
-    let _ = Command::new("cmd")
-        .args(["/c", "start", "https://www.google.com"])
-        .spawn();
-}
-
-pub fn execute_open_terminal() {
-    if Command::new("wt").spawn().is_err() {
-        let _ = Command::new("powershell").spawn();
-    }
 }
 

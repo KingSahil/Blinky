@@ -70,3 +70,8 @@ config.h
 esp32_firmware/**/config.h
 scratch/
 
+docs/history.md
+ skills/
+enhancement/
+/releases/
+hackathon-cover-16x9.png

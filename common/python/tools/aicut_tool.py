@@ -50,7 +50,7 @@ except ImportError:
 
 
 def find_candidate_file(filename_or_path: str, active_dir: str | None = None, file_type: str | None = None) -> str | None:
-    """Find the full absolute path of a file across Explorer, uploads, and project paths."""
+    """Find the full absolute path of a file across Explorer and project paths."""
     if not filename_or_path:
         return None
 
@@ -63,15 +63,7 @@ def find_candidate_file(filename_or_path: str, active_dir: str | None = None, fi
     if active_dir and os.path.isdir(active_dir):
         candidates_dirs.append(Path(active_dir))
 
-    # Add Blinky mobile upload locations
-    temp_env = os.environ.get("TEMP") or os.environ.get("TMP")
-    if temp_env:
-        candidates_dirs.append(Path(temp_env) / "blinky_uploads")
     candidates_dirs.extend([
-        Path.home() / "AppData" / "Local" / "Temp" / "blinky_uploads",
-        _COMMON_DIR.parent / "uploads",
-        _COMMON_DIR / "uploads",
-        Path.cwd(),
         AICUT_ROOT / "sample" / "input",
         AICUT_ROOT / "sample" / "output",
         AICUT_ROOT / "sample",
@@ -106,54 +98,7 @@ def find_candidate_file(filename_or_path: str, active_dir: str | None = None, fi
         except Exception:
             continue
 
-    return str(raw_path.resolve()) if raw_path.exists() else None
-
-
-def _parse_time_token(val: str, unit: str | None = None) -> float:
-    """Parse time string like '1:30', '90', '1.5' with unit into seconds."""
-    if ":" in val:
-        parts = val.split(":")
-        return float(parts[0]) * 60.0 + float(parts[1])
-    n = float(val)
-    if unit and any(unit.startswith(u) for u in ["m", "min"]):
-        return n * 60.0
-    return n
-
-
-def _extract_trim_times(q_lower: str) -> tuple[float, float] | None:
-    """Extract start and end seconds from natural language trim queries."""
-    # Clean query to avoid matching digits in filenames (e.g. video.mp4 -> 4)
-    clean_q = re.sub(r"\[referenced files:\s*.*?\]", "", q_lower, flags=re.I)
-    clean_q = re.sub(r"\S+\.(?:mp4|mov|mkv|avi|webm|flv|wmv|m4v|mp3|wav|aac)\b", "", clean_q, flags=re.I)
-
-    # 1. Range match: from X to Y or X to Y (supports sec, min, mm:ss)
-    range_match = re.search(
-        r"(?:trim|cut)\b.*?(?:from\s+)?(?P<s_val>\d+(?::\d+)?(?:\.\d+)?)\s*(?P<s_unit>m|min|mins|minutes|s|sec|secs|seconds)?\s*(?:to|till|until|-)\s*(?P<e_val>\d+(?::\d+)?(?:\.\d+)?)\s*(?P<e_unit>m|min|mins|minutes|s|sec|secs|seconds)?",
-        clean_q,
-    )
-    if range_match:
-        try:
-            s = _parse_time_token(range_match.group("s_val"), range_match.group("s_unit"))
-            e = _parse_time_token(range_match.group("e_val"), range_match.group("e_unit"))
-            if e > s:
-                return s, e
-        except Exception:
-            pass
-
-    # 2. Single duration match: "trim to 1 minute", "trim to 30s", "cut first 45 seconds", "trim 60s"
-    single_match = re.search(
-        r"(?:trim|cut)\b.*?(?:to|first|initial|duration\s+of)?\s*(?P<val>\d+(?::\d+)?(?:\.\d+)?)\s*(?P<unit>m|min|mins|minutes|s|sec|secs|seconds)?",
-        clean_q,
-    )
-    if single_match and single_match.group("val"):
-        try:
-            dur = _parse_time_token(single_match.group("val"), single_match.group("unit"))
-            if dur > 0:
-                return 0.0, dur
-        except Exception:
-            pass
-
-    return None
+    return str(raw_path) if raw_path.exists() else None
 
 
 def _detect_whisper_model(q_lower: str) -> str:
@@ -304,6 +249,7 @@ def resolve_aicut_request(
     *,
     context_files: list[str] | None = None,
     explorer_context: dict[str, Any] | None = None,
+    infer_operations_from_selection: bool = True,
 ) -> dict[str, Any] | None:
     """Deterministically parse and classify an AiCut video editor query, supporting multi-step pipelines."""
     if not query:
@@ -312,10 +258,6 @@ def resolve_aicut_request(
     manual_script, clean_instruction = _extract_manual_script(query)
     q = clean_instruction.strip() if manual_script else query.strip()
     q_lower = q.lower()
-
-    # Get active Explorer context
-    explorer = explorer_context if explorer_context is not None else get_active_explorer_context()
-    active_dir = explorer.get("active_directory")
 
     # Check for explicitly referenced / dragged-in files in query
     referenced_files = []
@@ -331,18 +273,15 @@ def resolve_aicut_request(
         if ref_match:
             for p in ref_match.group(1).split(","):
                 p_clean = p.strip()
-                if p_clean:
-                    cand = find_candidate_file(p_clean, active_dir)
-                    if cand:
-                        referenced_files.append(cand)
-                    elif Path(p_clean).exists() or Path(p_clean).is_file():
-                        referenced_files.append(str(Path(p_clean).resolve()))
-                    else:
-                        referenced_files.append(p_clean)
+                if p_clean and (Path(p_clean).exists() or Path(p_clean).is_file()):
+                    referenced_files.append(str(Path(p_clean).resolve()))
 
     ref_videos = [f for f in referenced_files if Path(f).suffix.lower() in MEDIA_EXTENSIONS.get("video", {".mp4", ".mov", ".mkv", ".avi", ".webm"})]
     ref_audios = [f for f in referenced_files if Path(f).suffix.lower() in MEDIA_EXTENSIONS.get("audio", {".mp3", ".wav", ".aac", ".m4a"})]
 
+    # Get active Explorer context
+    explorer = explorer_context if explorer_context is not None else get_active_explorer_context()
+    active_dir = explorer.get("active_directory")
     selected_videos = ref_videos if ref_videos else explorer.get("selected_videos", [])
     selected_audios = ref_audios if ref_audios else explorer.get("selected_audios", [])
     media_in_folder = explorer.get("media_files_in_folder", [])
@@ -380,13 +319,31 @@ def resolve_aicut_request(
     has_subtitles = (bool(re.search(subtitle_pattern, q_lower)) or bool(manual_script)) and not is_transcribe_only
 
     merge_pattern = r"\b(?:merge|combine|join|stitch|concat|concatenate)\b"
-    has_merge = bool(re.search(merge_pattern, q_lower)) or (len(ref_videos) >= 2 and not re.search(r"\b(?:trim|cut)\b", q_lower))
+    has_merge = bool(re.search(merge_pattern, q_lower)) or (
+        infer_operations_from_selection
+        and len(ref_videos) >= 2
+        and not re.search(r"\b(?:trim|cut)\b", q_lower)
+    )
 
-    trim_times = _extract_trim_times(q_lower)
-    has_trim = trim_times is not None
+    trim_time_match = re.search(
+        r"(?:trim|cut)\s+(?:(?:the|this|that|selected|referenced)?\s*(?:video|clip|it)?\s+)?(?:(?P<file>[^\s\"\']+\.(?:mp4|mov|mkv|avi|webm))\s+)?(?:from\s+)?(?P<start>\d+(?:\.\d+)?)\s*(?:s|sec|seconds)?\s*(?:to|till|until|-)\s*(?P<end>\d+(?:\.\d+)?)\s*(?:s|sec|seconds)?",
+        q_lower
+    )
+    has_trim = bool(trim_time_match)
 
     add_song_pattern = r"\b(?:add|put|mix|insert|attach|set|apply|overlay|combine|merge)\b.*?\b(?:song|music|audio|track|sound|bgm|beats)\b|\b(?:background\s+music|bgm)\b|\b(?:song|music|audio)\b.*?\b(?:video|clip)\b|\b(?:video|clip)\b.*?\b(?:with|and)\b.*?\b(?:song|music|audio|sound|beats)\b|\b(?:with\s+audio|with\s+music|with\s+song|with\s+beats)\b"
-    has_audio_keyword = bool(re.search(add_song_pattern, q_lower)) or any(k in q_lower for k in ["song", "music", "audio", "beats", "bgm", "track"])
+    explicitly_added_audio = any(
+        re.search(
+            rf"\b(?:add|put|mix|insert|attach|set|apply|overlay|combine|merge)\s+(?:the\s+)?{re.escape(Path(path).name.lower())}(?!\w)",
+            q_lower,
+        )
+        for path in ref_audios
+    )
+    has_audio_keyword = (
+        bool(re.search(add_song_pattern, q_lower))
+        or any(k in q_lower for k in ["song", "music", "audio", "beats", "bgm", "track"])
+        or explicitly_added_audio
+    )
 
     # ── Candidate Resolution ──
     # Videos
@@ -424,13 +381,13 @@ def resolve_aicut_request(
     audio_match = None if context_files is not None else re.search(r"([^\s\"\']+\.(?:mp3|wav|aac|m4a|flac|ogg))", q_lower)
     has_explicit_media_in_query = bool(video_matches) or bool(ref_videos)
     if has_explicit_media_in_query:
-        has_audio = bool(audio_match) or bool(ref_audios) or has_audio_keyword
+        has_audio = bool(audio_match) or has_audio_keyword or (infer_operations_from_selection and bool(ref_audios))
     else:
         has_audio = (
             bool(audio_match)
-            or bool(ref_audios)
+            or (infer_operations_from_selection and bool(ref_audios))
             or has_audio_keyword
-            or (bool(selected_audios) and (has_merge or any(w in q_lower for w in ["all", "them all", "merged them", "everything", "both", "these", "with audio", "beats", "music", "song"])))
+            or (infer_operations_from_selection and bool(selected_audios) and (has_merge or any(w in q_lower for w in ["all", "them all", "merged them", "everything", "both", "these", "with audio", "beats", "music", "song"])))
         )
 
     resolved_audio: str | None = None
@@ -500,8 +457,8 @@ def resolve_aicut_request(
 
     # If multiple operations requested (e.g. merge + captions, merge + audio + captions, trim + captions, audio + captions)
     if active_ops_count >= 2:
-        trim_start = trim_times[0] if trim_times else None
-        trim_end = trim_times[1] if trim_times else None
+        trim_start = float(trim_time_match.group("start")) if trim_time_match else None
+        trim_end = float(trim_time_match.group("end")) if trim_time_match else None
         return {
             "action": "pipeline",
             "input_paths": resolved_videos if len(resolved_videos) >= 2 else None,
@@ -522,7 +479,7 @@ def resolve_aicut_request(
 
     # ── Single-Action Handlers (Backwards Compatibility) ──
     # 1. Referenced files high-priority add_song
-    if ref_videos and ref_audios and len(ref_videos) == 1 and not has_merge:
+    if ref_videos and ref_audios and len(ref_videos) == 1 and not has_merge and (infer_operations_from_selection or has_audio_keyword):
         return {
             "action": "add_song",
             "video_path": ref_videos[0],
@@ -532,8 +489,9 @@ def resolve_aicut_request(
         }
 
     # 2. Trim
-    if op_trim and trim_times:
-        start_sec, end_sec = trim_times
+    if op_trim and trim_time_match:
+        start_sec = float(trim_time_match.group("start"))
+        end_sec = float(trim_time_match.group("end"))
         vid = resolved_videos[0] if resolved_videos else None
         return {
             "action": "trim",
@@ -628,27 +586,6 @@ def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
         has_subtitles = payload.get("subtitles") or (action == "subtitles")
         target_output = payload.get("output_path")
         music_vol = float(payload.get("music_volume", 0.25))
-
-        # Auto-resolve relative or candidate file paths across Explorer / standard dirs / uploads
-        if video_path and not Path(video_path).exists():
-            cand = find_candidate_file(video_path)
-            if cand:
-                video_path = cand
-
-        if song_path and not Path(song_path).exists():
-            cand = find_candidate_file(song_path)
-            if cand:
-                song_path = cand
-
-        if input_paths:
-            resolved_inputs = []
-            for ip in input_paths:
-                if not Path(ip).exists():
-                    cand = find_candidate_file(ip)
-                    resolved_inputs.append(cand or ip)
-                else:
-                    resolved_inputs.append(ip)
-            input_paths = resolved_inputs
 
         # Check if this is a pipeline or composite execution
         is_pipeline = (
@@ -809,17 +746,8 @@ def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
             if not video_path:
                 return {
                     "success": False,
-                    "error": "No video file specified or found in File Explorer. Please open a folder in Explorer or specify a video file (e.g. 'trim dance.mp4 to 1 minute').",
+                    "error": "No video file specified or found in File Explorer. Please open a folder in Explorer or specify a video file (e.g. 'trim dance.mp4 from 10 to 25').",
                 }
-            if not Path(video_path).exists():
-                cand = find_candidate_file(video_path)
-                if cand:
-                    video_path = cand
-                else:
-                    return {
-                        "success": False,
-                        "error": f"Input video file not found: {video_path}. If you selected this file from mobile, please attach it so it can be uploaded to your PC for editing.",
-                    }
             return aicut_mcp.trim_video(
                 input_path=video_path,
                 start_seconds=float(payload.get("start_seconds", 0)),

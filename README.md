@@ -1,486 +1,254 @@
-<img width="4320" height="1440" alt="hh26 main poster 2 with sponsors 3x1 (4320 x 1440 px) (2)" src="https://github.com/user-attachments/assets/c698b2cd-da84-4cb0-9276-125c6a7244aa" />
-
 <div align="center">
 
-# 🧠 Blinky — AI Desktop Tutor & Agent
+<img src="common/mobile/assets/logo_text.png" alt="Blinky" width="72%">
 
-> An offline-first, privacy-respecting AI desktop tutor that reads your screen and guides you visually or runs autopilot computer automation.
+### The AI desktop tutor that sees your screen, guides you through it, and can act on your behalf.
 
-<br>
-
-### _Ask. Learn. Click. Done._
+Screen-aware tutoring · Voice interaction · Desktop automation · Mobile control
 
 <br>
 
-<p align="center">
-
-<img src="https://img.shields.io/badge/Tauri-2.x-orange?style=for-the-badge">
-<img src="https://img.shields.io/badge/React-TypeScript-61dafb?style=for-the-badge">
-<img src="https://img.shields.io/badge/Bun-1.3.14-f9f1e1?style=for-the-badge">
-<img src="https://img.shields.io/badge/Python-3.11-yellow?style=for-the-badge">
-<img src="https://img.shields.io/badge/Playwright-Edge-green?style=for-the-badge">
-
-</p>
-
-<p align="center">
-
-<img src="https://img.shields.io/badge/Ollama-gemma4:e4b-green?style=for-the-badge">
-<img src="https://img.shields.io/badge/Groq-Llama4Scout-purple?style=for-the-badge">
-<img src="https://img.shields.io/badge/OCR-Windows%20OCR-blue?style=for-the-badge">
-
-</p>
-
-<p align="center">
-
-<img src="https://img.shields.io/badge/EasyOCR-Fallback-red?style=for-the-badge">
-<img src="https://img.shields.io/badge/dxcam-Screen%20Capture-black?style=for-the-badge">
-<img src="https://img.shields.io/badge/pywinauto-Window%20Detection-darkgreen?style=for-the-badge">
-
-</p>
+[![Demo](https://img.shields.io/badge/Watch_Demo-YouTube-red?style=for-the-badge)](https://youtu.be/CHFF9J_Jqgw)
+[![Website](https://img.shields.io/badge/Website-blinkyy.vercel.app-6C47FF?style=for-the-badge)](https://blinkyy.vercel.app)
+[![Pitch Deck](https://img.shields.io/badge/Pitch_Deck-Google_Slides-4285F4?style=for-the-badge)](https://docs.google.com/presentation/d/10isbvsbzb3Xm2RzeHyaA_FQqcjUTUzRipflrhuyABRY/edit)
+[![Blog](https://img.shields.io/badge/Blog-Medium-000000?style=for-the-badge)](https://medium.com/@khannasparsh0001/building-blinky-fighting-captchas-invisible-windows-and-the-agony-of-visualizing-ai-b1247b9fc324?sharedUserId=khannasparsh0001)
 
 <br>
 
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-blue)
-![License](https://img.shields.io/badge/license-MIT-purple)
+![Tauri](https://img.shields.io/badge/Tauri-2.x-FFC131?logo=tauri&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![Bun](https://img.shields.io/badge/Bun-1.3+-F9F1E1?logo=bun&logoColor=black)
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![Ollama](https://img.shields.io/badge/Ollama-gemma4:e4b-black?logo=ollama&logoColor=white)
+![Platform](https://img.shields.io/badge/Windows%20%7C%20Linux%20%7C%20Android-supported-blue)
+![License](https://img.shields.io/badge/License-MIT-green)
 
 </div>
 
----
+<br>
 
-An AI-powered Windows desktop tutor that teaches users software directly on their screen using local AI. In web mode it can also open/search in your default Edge browser and run a bounded safe-click autopilot loop after reading the screen. In **Agent Mode** it can launch apps, play Spotify tracks, and press keyboard shortcuts entirely autonomously.
+## Overview
 
----
+Learning complex desktop software often means switching between tutorials, documentation, and the application itself. Blinky brings help into the workflow: ask a question about the current screen, get a grounded next step, and see the relevant control highlighted in the app. When requested, Blinky can also carry out bounded desktop actions. A companion app extends selected controls to an Android phone.
 
-## 📌 Problem & Domain
+| **Element** | **Description** |
+|---|---|
+| **For** | Students, developers, and anyone learning unfamiliar desktop software |
+| **Problem** | Tutorials and documentation are disconnected from the interface being learned |
+| **Approach** | Screen understanding, contextual guidance, visual highlights, voice interaction, and optional automation |
 
-Learning complex software (like VS Code, Blender, or system configurations) typically involves a lot of context switching between tutorials, videos, static documentation, and the application itself. This creates "tutorial hell" and slows down software onboarding.
+## Features
 
-Blinky brings the learning experience directly into the active application. By capturing the screen, running local OCR + Windows UIA, and leveraging local or cloud LLMs, Blinky guides users step-by-step with real-time visual highlights directly on their screen.
+| Capability | What it does |
+|---|---|
+| **Screen-aware tutoring** | Captures the active screen, combines OCR with accessibility or visual UI detection, and gives step-by-step guidance with on-screen highlights. |
+| **Voice interaction** | Supports realtime speech input, voice-agent tool calls, spoken responses, turn-taking, and synchronized readback through configured voice providers. |
+| **Hey Blinky wake word** | Runs the bundled `python/hey_blinky.onnx` model locally through ONNX Runtime to detect the wake phrase and start hands-free interaction. |
+| **Agent Mode** | Uses a bounded observe-and-act loop for app launching, keyboard shortcuts, typing, scrolling, and grounded clicks. |
+| **Linux desktop support** | Provides native capture, OCR, application launching, input, scrolling, and system controls. Hyprland is the primary Wayland path; available behavior varies by desktop environment. |
+| **WhatsApp and AI summaries** | Connects WhatsApp Web by QR code, reports connection status, lists chats, and creates recaps of selected group or direct conversations. |
+| **AiCut video editing** | Handles natural-language trim and merge requests, audio, captions, subtitle generation, script alignment, and caption styles with FFmpeg and faster-whisper. |
+| **Web research** | Uses the Web Intelligence Layer and SearXNG to retrieve pages and return synthesized answers with clickable sources. Public search fallbacks are available when configured local search is unavailable. |
+| **Browser and app tools** | Provides persistent browser automation, application launching, Spotify playback, product search, YouTube channel statistics, cryptocurrency prices, and Wikipedia lookups. |
+| **Android companion** | Connects to the desktop over an authenticated WebSocket for remote chat, voice, quick actions, and PC controls over LAN, USB, or Tailscale. |
+| **Remote files and camera transfer** | Browses PC files, transfers files between phone and computer, syncs camera selections, and sends media into supported AiCut workflows. |
+| **PC power and Wake-on-LAN** | Shows system telemetry and supports lock, sleep, hibernate, restart, shutdown, and Wake-on-LAN for appropriately configured hardware and networks. |
+| **Antigravity IDE bridge** | Sends prompts from mobile, streams IDE activity, and reports final responses or requests for user input. |
+| **ESP32 lighting** | Controls RGB color and brightness through the Blinky ESP32 daemon. |
+| **Android access options** | Integrates RevenueCat purchase and entitlement handling, with configured promo codes available for PC-control access. |
 
-**Themes Selected (at least one):**
-- [x] Human Experience & Productivity  
-- [x] Learning & Knowledge Systems  
-- [x] Developer Tools & Software Infrastructure  
+Some capabilities need API credentials, optional system packages, or connected hardware. Local Ollama inference is available; selecting a cloud AI or voice provider sends the relevant request data to that provider.
 
----
+## Architecture
 
-## 🎯 Objective
+```mermaid
+flowchart LR
+    U[User] --> UI[React command bar and overlay]
+    UI <--> T[Tauri and Rust desktop host]
+    T <--> P[Python assistant and tool router]
 
-Blinky serves students, developers, and general users learning to navigate desktop software.
+    P --> R{Request router}
+    R -->|Screen guidance| C[Platform screen capture]
+    C --> O[OCR, accessibility, and visual grounding]
+    O --> AI[Ollama or configured cloud model]
+    AI --> H[Guidance and highlight overlay]
+    R -->|Desktop actions| A[Platform computer-use tools]
+    R -->|Search and integrations| X[Web, WhatsApp, AiCut, Spotify, and other tools]
 
-- **Target Users**: Software learners, junior developers, and remote users looking for hands-on, contextual guide steps.
-- **Pain Point**: Context-switching, static text manuals, video pacing issues, and lack of visual mapping.
-- **Value Provided**: Real-time visual overlay highlighting on the actual screen, offline-first voice read-aloud via Sarvam AI, and hands-free desktop autopilot execution.
+    M[Android companion] <-->|Authenticated WebSocket| T
+    T --> F[Files, system controls, and telemetry]
+    P --> I[ESP32 and external integrations]
+```
 
----
+| Layer | Main components |
+|---|---|
+| Desktop interface | React 19, TypeScript, Tauri 2, and Rust |
+| Assistant | Python 3.11+, request routing, AI clients, tools, and screen understanding |
+| Vision and input | Windows capture/UIA, Linux desktop backends, OCR, and configurable OmniParser grounding |
+| AI and voice | Ollama, optional Groq and other configured providers, AssemblyAI and Sarvam voice integrations |
+| Search and media | SearXNG/WIL, Playwright, FFmpeg, faster-whisper, and the AiCut service |
+| Mobile | Expo and React Native with authenticated desktop transport |
 
-## 🧠 Team & Approach
+## Installation
 
-### Team Name:  
-`Tech Nerds`
+### Requirements
 
-### Team Members:  
-- **Sparsh Khanna** (GitHub: [KhannaSparsh0001](https://github.com/KhannaSparsh0001) / Role: Voice & UI-UX Architect)
-- **Sahil** (GitHub: [KingSahil](https://github.com/KingSahil) / Role: Backend & Tauri Developer)
-- **FeV-06** (GitHub: [FeV-06](https://github.com/FeV-06) / Role: Mobile and Linux Developer)
-- **meharwanfr** (GitHub: [meharwanfr](https://github.com/meharwanfr) / Role: Linux Developer)
+| Requirement | Needed for |
+|---|---|
+| Git | Clone the repository |
+| Bun 1.3 or newer | Desktop JavaScript dependencies and development scripts |
+| Python 3.11 or newer | Assistant backend and platform packages |
+| Rust stable toolchain | Tauri desktop application |
+| Ollama or a configured cloud AI provider | Assistant responses |
+| Docker Compose | Optional local SearXNG search service |
+| Android Studio/SDK and ADB | Building or connecting the Android companion |
 
-### Your Approach:
-- **Why we chose this problem**: Traditional training methods fail because they are separated from the workspace. We wanted a tool that feels like a teacher looking over your shoulder.
-- **Key challenges addressed**:
-  - **Flicker-Free Screenshots**: Using Windows display affinity flags to exclude Blinky's overlay and command windows from screenshots without closing them.
-  - **OCR Coordinates Mapping**: Matching local WinRT OCR box dimensions to physical monitor DPI scales for pixel-perfect overlays and clicking.
-  - **Dynamic App Context**: Auto-generating keyboard shortcuts and menus documentation on first app run.
-  - **Voice Synchronization**: Creating word-by-word active highlighting synchronized with the Sarvam TTS audio timeline.
-- **Pivots & Iterations**: Shifted from pure on-screen highlighting to full autonomous Agent Mode, allowing users to choose between manual guidance and automatic autopilot execution. We also revamped the command bar to place actions at the bottom right like modern assistants (ChatGPT/Copilot).
+Windows is the primary desktop setup. Linux has a separate setup path and additional desktop packages; consult the Linux guide for supported environments and requirements.
 
----
+### Windows desktop
 
-## 🛠️ Tech Stack
+```powershell
+git clone https://github.com/KingSahil/Blinky.git
+cd Blinky
+powershell -ExecutionPolicy Bypass -File setup.ps1
+```
 
-### Core Technologies Used:
+The setup script installs the project dependencies, prepares the Python environment, installs the Playwright browser, and creates `.env` from the example when needed. It does not add API keys for you.
 
-| Component                            | Technology                                         |
-| ------------------------------------ | -------------------------------------------------- |
-| **Desktop Framework**                | Tauri 2 (Rust desktop shell)                       |
-| **Frontend**                         | React 19 + TypeScript                              |
-| **Package Manager / Runtime**        | Bun 1.3.14                                         |
-| **Backend Runtime**                  | Python 3.11+                                       |
-| **AI Runtime**                       | Ollama (Local)                                     |
-| **AI Model**                         | `gemma4:e4b`                                       |
-| **Cloud AI (optional)**              | Groq — `llama-3.3-70b-versatile` |
-| **OCR**                              | Windows OCR API (WinRT), Falls back to pytesseract  |
-| **Screen Capture**                   | `dxcam` (DirectX-based high-frame capture)         |
-| **Window Detection**                 | `pywinauto`                                        |
-| **Browser Automation**               | Playwright + Microsoft Edge                        |
-| **Local Web Search**                 | SearXNG + Docker Compose                           |
-| **Overlay System**                   | Transparent Tauri Window                           |
-| **Hosting & Prototyping**           | Base44 App Hosting (blinky.base44.app)             |
-| **Voice Input**                      | Sarvam AI `saaras:v3` (STT)                        |
-| **Voice Output**                     | Sarvam AI `bulbul:v3` (TTS)                        |
-| **Agent Actions**                    | `computer_use/` — app launch, Spotify, shortcuts   |
+Install Ollama and pull the configured local model if you want local inference:
 
-### Additional Technologies Used (Optional):
-- [x] AI / ML  
-- [ ] Web3 / Blockchain  
-- [ ] Cyber Security  
-- [x] Cloud  
-
----
-
-## 🏆 Sponsored Track (Optional)
-
-Select if your project participates in any track:
-
-- [x] **Expo Track** – Built using Expo  
-- [ ] **Neo4j Track** – Uses AuraDB as primary database  
-- [x] **Base44 Track** – Prototype/Final Product built using Base44  
-- [x] **Sarvam Track** – Built AI Applications with Sarvam (TTS & STT)  
-
-Provide a short note on how you used the partner technology:
-
-- **Expo Track**: Under `common/mobile/`, we built an **Expo-powered mobile companion app** (React Native). It connects directly to the desktop Tauri WebSocket server (port `9001`), allowing users to send voice commands and monitor autopilot workflows directly from their phone.
-- **Base44 Track**: We built and deployed our project's interactive landing page at [blinky.base44.app](https://blinky.base44.app) using **Base44** to present Blinky's workflow and serve as our primary web front.
-- **Sarvam Track**: We integrated the **Sarvam AI API** into the desktop agent's preflight classifier and UI/UX layer:
-  - **Speech-to-Text (STT)**: Using `saaras:v3` for real-time multilingual voice command dictation.
-  - **Text-to-Speech (TTS)**: Using `bulbul:v3` for natural Indian-accented voice guidance and audio read-aloud.
-  - **Voice Synchronization & Word Highlighting**: Fades out unspoken text, highlighting the active word dynamically as the voice readback plays in sync with the audio duration timeline.
-
----
-
-## ✨ Key Features
-
-### 🤖 Full Agent Mode (Computer Use)
-Blinky now ships a dedicated **Agent Mode** (activate with the 🤖 button) that can perform direct computer-use actions without requiring you to click anything:
-- **Open any app** — uses app protocol URIs, known executable paths, Windows Start Apps (`Get-StartApps`), and finally Windows Search as a fallback chain.
-- **Play Spotify tracks** — searches SearXNG (and falls back to DuckDuckGo HTML) to resolve a `spotify:track:ID` URI and opens it directly in the Spotify desktop app.
-- **Press keyboard shortcuts** — parses natural-language shortcut descriptions (`Ctrl+S`, `Alt+H`, `Win+D`) and executes them via `pywinauto`.
-- **Open help menus** — detects the active app process (e.g., VS Code) and sends the correct shortcut automatically.
-- **Type text into fields** — autopilot can extract quoted text from instructions and type it into focused controls.
-- **Scroll screens** — autopilot detects scroll instructions and calls `scroll_at_point` through Rust `SendInput`.
-- The bounded autopilot loop (max 5 attempts) now handles `type`, `search`, `submit`, and `scroll` actions in addition to safe clicks.
-
-### 🎨 Modern Chatbar UI (ChatGPT/Copilot Layout)
-- Features actions grouped at the bottom, with Mic, Read-Aloud, and Send aligned on the bottom right.
-- Manually trigger TTS readbacks or cancel active synthesis with a single click.
-
-### 🗣️ Sarvam AI Voice Integration & Dynamic Word Highlighting
-- Indian-context speech-to-text dictation and text-to-speech readbacks.
-- **Real-time Word Highlighting**: Fades out unspoken text, highlighting the active word dynamically as the voice readback plays in sync with the audio duration timeline.
-
-### 🧠 Intent Classification (Preflight Router)
-Before any screenshot is taken, Blinky runs a fast **preflight classifier** that routes requests into one of five intents:
-- `DESKTOP_AUTOMATION` — needs screen capture + OCR + AI overlay
-- `OPEN_APP` — directly launches the named app
-- `MEDIA_PLAYBACK` — plays a named song on Spotify
-- `SYSTEM_SHORTCUT` — presses a keyboard shortcut
-- `INFORMATIONAL_CHAT` — answers without any screen capture
-- Safety overrides prevent `OPEN_APP` from being triggered by in-app feature names or multi-word queries.
-
-### 🗂️ Dynamic App Context Generation
-For any app Blinky hasn't seen before, `app_context/registry.py` now **auto-generates a navigation guide** on first encounter:
-1. Queries SearXNG for `"<AppName> Windows keyboard shortcuts menus navigation"`
-2. Asks the LLM to produce a structured markdown guide from those search results
-3. Saves the guide to `python/app_context/<process_name>.md` for future runs
-4. Falls back to a minimal boilerplate if both SearXNG and LLM fail.
-
-### 🏷️ Screen Element `@ref` System & UI Map Cache
-- Every visible UI element is tagged with a stable `@ref` (e.g., `@e14`) for precise target identification.
-- Caches the merged OCR+UIA map with a 2-second TTL using spatial IOU + name-similarity scoring to reuse refs across observations for fast autopilot runs.
-
-### 🛡️ Dynamic Capture Exclusion (Flicker-Free Mode)
-- Excludes Blinky's overlay window from screenshots programmatically using `SetWindowDisplayAffinity` (`WDA_EXCLUDEFROMCAPTURE`).
-- Blinky remains fully visible to you, but the screenshot sent to the AI model is completely clean.
-
----
-
-## 📽️ Demo & Deliverables
-
-- **Demo Video Link (Mandatory):** : [Youtube Video](https://youtu.be/CHFF9J_Jqgw)
-- **Deployment Link (Recommended):** : [blinky.base44.app](https://blinky.base44.app) (Landing Page & Releases) 
-- **Pitch Deck / PPT (Optional):** : [Blinky Deck](https://docs.google.com/presentation/d/10isbvsbzb3Xm2RzeHyaA_FQqcjUTUzRipflrhuyABRY/edit?slide=id.g3f49da6dcbc_0_157#slide=id.g3f49da6dcbc_0_157)
--  **Blog** : [Building Blinky: Fighting CAPTCHAs, Invisible Windows, and the Agony of Visualizing AI](https://medium.com/@khannasparsh0001/building-blinky-fighting-captchas-invisible-windows-and-the-agony-of-visualizing-ai-b1247b9fc324?sharedUserId=khannasparsh0001) 
-
----
-
-## ✅ Tasks & Bonus Checklist
-
-- [x] All team members completed the mandatory social task  
-- [x] Bonus Task 1 – Badge sharing  
-- [x] Bonus Task 2 – Blog/article  
-
----
-
-## 🧪 How to Run the Project
-
-### Prerequisites
-Install the following software:
-- Bun 1.3+
-- Rust Stable
-- Python 3.11+
-- Ollama
-- Docker & Docker Compose (optional, for local search)
-- Tesseract OCR (on Linux, for text extraction)
-- GStreamer Good Plugins (on Linux, for audio support)
-
----
-
-### 1️⃣ Pull the AI Model (Optional - if using local inference)
-```bash
+```powershell
 ollama pull gemma4:e4b
 ```
 
----
+Set the AI provider and any optional provider keys in `.env`. Keep credentials private and do not commit `.env`.
 
-### 2️⃣ Install Dependencies (One-click)
-#### Windows - single script (recommended)
+Start Blinky:
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File setup.ps1
-# or: bun run setup        # same
+bun run dev
 ```
-Handles Bun/Rust/Python checks, `bun install`, `.venv` + `playwright`, `.env` creation, and prints next steps. Idempotent, clear errors.
 
-#### Windows - manual
+To run without starting the local Docker search service:
+
 ```powershell
-bun install
-bun run setup:python
-bun run check:ollama
+bun run dev:no-docker
 ```
 
-#### Linux - single script (recommended)
+### Linux desktop
+
 ```bash
-chmod +x setup.sh && ./setup.sh
-# or: bun run setup:linux
+git clone https://github.com/KingSahil/Blinky.git
+cd Blinky
+bun run setup:linux
 ```
 
-#### Linux - manual
-```bash
-bun install
-bun run linux:setup:python
-```
-> [!NOTE]
-> On Arch Linux, you should also install the GStreamer good plugins for audio support:
-> ```bash
-> sudo pacman -S gst-plugins-good
-> ```
+Install the system packages required by your distribution and desktop session as described in [`linux/quick_start.md`](linux/quick_start.md). For local AI, install Ollama, start its service, and pull `gemma4:e4b`. Configure `.env`, then run:
 
----
-
-### 3️⃣ Setup OCR (Tesseract) on Linux
-If you do not have root access or want to bypass installing system language data:
-1. Create a local folder and download the English model:
-   ```bash
-   mkdir -p common/tessdata
-   curl -L -o common/tessdata/eng.traineddata https://github.com/tesseract-ocr/tessdata_fast/raw/main/eng.traineddata
-   ```
-2. Add the variable to your `.env` file:
-   ```env
-   TESSDATA_PREFIX=/absolute/path/to/Blinky/common/tessdata/
-   ```
-
----
-
-### 4️⃣ Start Blinky
 ```bash
 bun run dev
 ```
 
-### Optional: Start Local Web Search
-For web intelligence backed by SearXNG, run from the root directory:
+Linux capabilities depend on the compositor and installed utilities. The current native implementation is Hyprland-first; see the [Linux port roadmap](docs/LINUX-PORT-ROADMAP.md) for GNOME and KDE status.
+
+### Android companion
+
+The mobile app is in `common/mobile`. Start the Expo development server with:
+
+```bash
+cd common/mobile
+bun install
+bun run start
+```
+
+For a native Android build, use the provided `install_apk.bat` workflow or the [Android distribution guide](docs/REVENUECAT-AND-ANDROID-DISTRIBUTION-GUIDE.md). Some native modules and RevenueCat purchase flows require a development build or standalone APK rather than the standard Expo Go client. Connect the phone and desktop through the app's pairing flow; the desktop WebSocket listener uses port `9001` by default.
+
+### Optional local web search
+
+The desktop development script starts SearXNG through Docker Compose when Docker is available. To start it directly:
+
 ```bash
 docker compose -f common/docker-compose.yml up -d
 ```
-SearXNG will be exposed at `http://localhost:8888`.
 
-### ⌨️ Open Blinky
-- **Main Hotkey**: `CTRL + SHIFT + SPACE`
-- **Fallback Hotkey**: `CTRL + SHIFT + ENTER`
+## Project structure
 
----
+| Path | Contents |
+|---|---|
+| `common/frontend/` | React command bar, visual overlay, voice, guidance, and autopilot UI |
+| `common/src-tauri/` | Tauri desktop host, Rust platform services, authenticated WebSocket, and file transfer |
+| `common/python/` | Assistant orchestration, screen capture, OCR, AI clients, computer use, web research, and tools |
+| `common/whatsapp_backend/` | WhatsApp Web session, chat, and summary service |
+| `common/aicut/` | C++ video processing components used by AiCut |
+| `common/mobile/` | Expo/React Native Android companion, remote control, files, and system screens |
+| `windows/` | Windows-specific Python, Rust, setup, and system integrations |
+| `linux/` | Linux desktop backends, setup scripts, and quick-start guide |
+| `python/` | Shared wake-word listener and bundled `hey_blinky.onnx` model |
+| `esp32_firmware/` | ESP32 universal daemon firmware for lighting and device control |
+| `docs/` | Platform, security, voice, distribution, and architecture guides |
+| `local-docs/` | Runtime flow, configuration, testing, and release notes |
 
-## 🧠 Example Workflows
+## Configuration and privacy
 
-### 1. Screen Tutor: User Opens VS Code
-**User asks**:
-```text
-How do I install Python extension?
-```
-**Blinky detects**:
-```text
-Active app: Visual Studio Code
-Visible UI (as @refs):
-  @e1 Extensions tab (sidebar)
-  @e7 Search Extensions in Marketplace (Edit)
-```
-**AI response**:
-```json
-{
-  "summary": "In Visual Studio Code, search for the Python extension.",
-  "steps": [
-    {
-      "step": 1,
-      "instruction": "Type Python in the extensions search field.",
-      "target_ref": "@e7",
-      "target_text": "Search Extensions in Marketplace"
-    }
-  ]
-}
-```
-**Overlay highlights**:
-✅ Search Extensions in Marketplace (full-width input box)
+The desktop setup creates the root `.env` from `.env_example` when needed. Configure only the providers and integrations you plan to use. Mobile RevenueCat and promo-code values belong in `common/mobile/.env`. Common settings include:
 
----
+| Setting | Purpose |
+|---|---|
+| `BLINKY_AI_PROVIDER` | Selects the assistant model provider |
+| `GROQ_API_KEY` | Enables Groq cloud inference |
+| `SARVAM_API_KEY` | Enables Sarvam speech services |
+| `ASSEMBLY_AI_API_KEY` | Enables AssemblyAI voice services |
+| `ESP32_HOST` | Address of the ESP32 daemon |
+| `EXPO_PUBLIC_REVENUECAT_GOOGLE_KEY` | RevenueCat Android public SDK key |
+| `EXPO_PUBLIC_PROMO_CODES` | Configured Android promo-code access options |
 
-### 2. Agent Mode: Play Spotify
-**User says (with 🤖 active)**:
-```text
-Play lo-fi beats on Spotify
-```
-**Blinky workflow**:
-1. Resolves the preflight intent → `MEDIA_PLAYBACK`
-2. Calls `play_spotify_track_tool("lo-fi beats")`
-3. Searches SearXNG for `site:open.spotify.com/track lo-fi beats`
-4. Extracts `spotify:track:XXXXXXXX` URI
-5. Calls `os.startfile("spotify:track:XXXXXXXX")` to open it in Spotify desktop
-6. Returns: _"Playing 'lo-fi beats' in Spotify."_
+Keep `.env` and all secret keys out of source control. The mobile desktop connection uses authentication and TLS support. Screen, microphone, and message data may be sent to the cloud services you configure; review each provider's terms and settings before enabling it. Local Ollama inference keeps model requests on the local machine.
 
----
+## Documentation
 
-### 3. Agent Mode: Open an App
-**User says (with 🤖 active)**:
-```text
-Open WhatsApp
-```
-**Blinky workflow**:
-1. Preflight → `OPEN_APP`, app_name = "whatsapp"
-2. Tries `whatsapp:` protocol URI via `os.startfile`
-3. Falls back to known executable path, then `Get-StartApps`, then Windows Search
-4. Returns: _"Opened WhatsApp."_
+| Guide | Covers |
+|---|---|
+| [`linux/quick_start.md`](linux/quick_start.md) | Linux dependencies, inference setup, OCR, and launch steps |
+| [`docs/LINUX-PORT-ROADMAP.md`](docs/LINUX-PORT-ROADMAP.md) | Linux backends and desktop-environment support status |
+| [`docs/ASSEMBLYAI_VOICE_AGENT.md`](docs/ASSEMBLYAI_VOICE_AGENT.md) | AssemblyAI voice-agent integration |
+| [`docs/HERMES-INTEGRATION-PLAN.md`](docs/HERMES-INTEGRATION-PLAN.md) | Computer-use architecture and integration notes |
+| [`docs/SECURITY-REMEDIATION.md`](docs/SECURITY-REMEDIATION.md) | Security design and remediation details |
+| [`docs/REVENUECAT-AND-ANDROID-DISTRIBUTION-GUIDE.md`](docs/REVENUECAT-AND-ANDROID-DISTRIBUTION-GUIDE.md) | Android builds, billing, entitlements, and promo codes |
+| [`common/mobile/APP-FLOW.md`](common/mobile/APP-FLOW.md) | Mobile app screens and user flows |
+| [`local-docs/ARCHITECTURE.md`](local-docs/ARCHITECTURE.md) | Current runtime architecture |
+| [`local-docs/CONFIGURATION.md`](local-docs/CONFIGURATION.md) | Environment and configuration reference |
+| [`local-docs/TESTING.md`](local-docs/TESTING.md) | Existing verification and test workflows |
+| [`common/ai_docs/00_repo_summary.md`](common/ai_docs/00_repo_summary.md) | Developer-oriented repository map and reading order |
+| [`common/ai_docs/10_aicut_video_editor.md`](common/ai_docs/10_aicut_video_editor.md) | AiCut video editor architecture and operations |
 
----
+## Contributors
 
-## 🎮 Supported MVP Apps
-- VS Code
-- Chrome / Edge
-- WhatsApp Desktop
-- ChatGPT Desktop
-- Windows Settings
-- Spotify
-- Paint
-- File Explorer
-- _Dynamic app context generation_ auto-creates guides for other encountered apps.
+| Contributor | GitHub | Contribution area |
+|---|---|---|
+| Sparsh Khanna | [@KhannaSparsh0001](https://github.com/KhannaSparsh0001) | Voice integration and product interface |
+| Sahil | [@KingSahil](https://github.com/KingSahil) | Backend and Tauri desktop application |
+| FeV-06 | [@FeV-06](https://github.com/FeV-06) | Mobile application and Linux development |
+| meharwanfr | [@meharwanfr](https://github.com/meharwanfr) | Linux desktop development |
+| Divyam | [@divi912](https://github.com/divi912) | Mobile file transfer and destination-aware media workflows |
+| Vedant | [@vedanthaha](https://github.com/vedanthaha) | Mobile interface and usability improvements |
 
----
+Divyam and Vedant are included based on their contributions in the repository commit history.
 
-## 📂 Project Structure
+## Acknowledgements
 
-```text
-common/
-├── src-tauri/
-│   ├── Rust desktop shell
-│   ├── Overlay window
-│   ├── Global hotkeys
-│   ├── WebSocket server (port 9001)
-│   └── Native SendInput clicking + scrolling
-│
-├── frontend/src/
-│   ├── CommandBar.tsx       Primary command UI (voice, agent, autopilot)
-│   ├── Overlay.tsx          Transparent highlight layer
-│   ├── lib/autopilot.ts     Bounded observe-act loop (click/type/scroll)
-│   ├── lib/guidance.ts      Step state helpers
-│   ├── lib/tauri.ts         Typed Tauri command wrappers
-│   ├── lib/tts.ts           Sarvam TTS/STT helpers
-│   └── lib/webGuidance.ts   Browser intelligence bridge
-│
-├── python/
-│   ├── main.py              Screen tutor orchestrator + intent router
-│   ├── agent_router.py      Remote browser-agent sidecar
-│   ├── browser_agent.py     Safe JSON browser planner
-│   ├── browser_controller.py Playwright Edge controller
-│   ├── ai/
-│   │   ├── prompt.py        Preflight + screen + chat prompt builders
-│   │   ├── client.py        Provider router (Ollama / Groq)
-│   │   ├── ollama_client.py Local Ollama client
-│   │   └── groq_client.py   Groq vision + text client
-│   ├── app_context/
-│   │   ├── registry.py      Dynamic app context generator (SearXNG + LLM)
-│   │   ├── vscode.md        VS Code navigation guide
-│   │   ├── browser.md       Chrome/Edge navigation guide
-│   │   ├── whatsapp.root.md WhatsApp shortcuts guide
-│   │   ├── chatgpt.md       ChatGPT desktop guide
-│   │   ├── systemsettings.md Windows Settings guide
-│   │   └── ...              Auto-generated guides for other apps
-│   ├── capture/screen.py    Screenshot capture + Screenshot dataclass
-│   ├── computer_use/
-│   │   ├── agent.py         Intent regex router
-│   │   └── tools.py         open_app, shortcut, play_spotify tools
-│   ├── ocr/extract.py       OCR provider registry (WinRT / tesseract)
-│   ├── tools/
-│   │   ├── registry.json    Registered browser/data tool schemas
-│   │   ├── find_crypto_price.py
-│   │   ├── lookup_wikipedia_entity.py
-│   │   ├── lookup_youtube_stats.py
-│   │   └── search_product_info.py
-│   ├── utils/
-│   │   ├── matching.py      Fuzzy target matcher
-│   │   ├── ui_map_cache.py  Stable @ref UI element cache
-│   │   ├── screen_elements.py @ref assignment
-│   │   ├── sufficiency_checker.py LLM tool output auditor
-│   │   ├── generalizer.py   Background tool generalization
-│   │   ├── uia.py           Windows UIA extraction
-│   │   └── window.py        Active window + overlay exclusion
-│   └── wil/
-│       ├── pipeline.py      Web Intelligence Layer orchestrator
-│       ├── searxng_client.py SearXNG JSON client
-│       ├── acquirer.py       Source page fetcher
-│       ├── http_fetcher.py   HTTP fetch helper
-│       ├── browser_engine.py Playwright fallback fetcher
-│       ├── processor.py      Source text cleaner
-│       └── reasoner.py       LLM answer synthesizer
-│
-├── mobile/
-│   ├── App.tsx              Expo remote controller UI
-│   └── usePCWebSocket.ts    WebSocket hook (ws://host:9001)
-│
-├── shared/
-│   └── clicky-result.schema.json   Result JSON schema
-│
-└── searxng/                 SearXNG configuration files
+- AssemblyAI for realtime speech recognition and voice-agent services
+- Sarvam AI for speech services
+- Nous Research for the `cua-driver` computer-use backend
+- Microsoft for OmniParser
+- Tauri, React, Expo, and React Native for the application frameworks
+- The Blinky contributors and users who have tested the desktop and mobile workflows
 
-windows/                     Windows configuration & setup scripts
-└── scripts/
-    ├── setup-python.ps1
-    └── check-ollama.ps1
+## License
 
-linux/                       Linux configuration & setup scripts
-└── scripts/
-    ├── setup-python.sh
-    ├── check-ollama.sh
-    └── groq-check.sh
-```
+Blinky is released under the MIT License.
 
----
+<div align="center">
 
-## 🧬 Future Scope
-- 📈 **More Integrations**: Control tools for major developer software suites (Docker, Kubernetes dashboards, cloud consoles).
-- 🛡️ **Enhanced Sandbox Protection**: Sandboxed execution mode for typing/clicking safely.
-- 🌐 **Deep Localization**: Supporting regional languages using Sarvam API for multi-lingual tutors.
-- 🕶️ **Multi-Monitor Layouts**: Autopilot click mapping extended to multiple monitor coordinate frames.
+**Ask. Learn. Automate. Control from anywhere.**
 
----
-
-## 🔒 Privacy & Production Notes
-- **Local Processing**: No cloud screenshots (unless Groq is active), fully local Ollama inference, and local SearXNG search.
-- **Tauri Integration**: Intentionally avoids FastAPI or local web servers. Tauri launches the Python sidecar directly and communicates using JSON over stdout/stdin for maximum performance and reliability in hackathons.
-
----
-
-## 📎 Resources / Credits
-- **APIs**: Sarvam AI API for speech features, Groq Vision API.
-- **Libraries**: Tauri, React, ReactMarkdown, dxcam, WinRT OCR APIs, pywinauto, Playwright.
-- **Acknowledgements**: Inspired by modern assistive agents and built for hackathon learners worldwide.
-
----
-
-## 🏁 Final Words
-Blinky has been a thrilling journey of integrating Rust (Tauri), React, and Python sidecars into a single, cohesive desktop assistant. Solving overlay flickering and mapping OCR coordinates to physical DPI frames was a major engineering obstacle, but seeing the visual guide draw directly on top of target apps made every hour of development worth it!
+</div>

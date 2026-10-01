@@ -46,21 +46,20 @@ def run_transfer_edit(
     context_files = [str(s) for s in sources]
 
     if not effective_instruction:
-        vids = [s for s in sources if s.suffix.lower() in {".mp4", ".mov", ".mkv", ".avi", ".webm"}]
-        auds = [s for s in sources if s.suffix.lower() in {".mp3", ".wav", ".aac", ".m4a", ".flac", ".ogg"}]
-        if len(vids) >= 2:
-            effective_instruction = "merge these videos"
-        elif len(vids) == 1 and len(auds) >= 1:
-            effective_instruction = "add this song to the video"
-        elif len(vids) == 1:
-            effective_instruction = "burn captions"
-        else:
-            effective_instruction = "merge"
+        return {"success": False, "error": "Enter an AiCut instruction to edit uploaded files."}
+
+    supported_media = {
+        ".mp4", ".mov", ".mkv", ".avi", ".webm", ".flv", ".wmv", ".m4v",
+        ".mp3", ".wav", ".aac", ".m4a", ".flac", ".ogg", ".wma",
+    }
+    if not any(source.suffix.lower() in supported_media for source in sources):
+        return {"success": False, "error": "AiCut needs an uploaded video or audio file for this edit."}
 
     request = resolve_aicut_request(
         effective_instruction,
         context_files=context_files,
         explorer_context=isolated_explorer,
+        infer_operations_from_selection=False,
     )
     if not request:
         return {
@@ -130,7 +129,7 @@ def run_transfer_edit(
         return {"success": False, "error": "AiCut finished without returning an output path."}
     final_output = Path(output_path).resolve()
     if final_output.parent != output_dir or not final_output.is_file():
-        return {"success": False, "error": "AiCut output did not remain inside Blinky’s Edited folder."}
+        return {"success": False, "error": "AiCut output did not remain inside the chosen destination folder."}
 
     return {"success": True, "output_path": str(final_output), "action": result.get("action", action)}
 

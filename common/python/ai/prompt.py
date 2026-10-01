@@ -37,7 +37,7 @@ Intents to choose from:
     - "platform": "spotify" or "youtube" (only for "play" action)
     - "seek_seconds": integer representing the seek offset in seconds (positive for forward seek, negative for backward seek, e.g. 60 for "skip 1 minute in song", -10 for "go back 10s")
 4. `SYSTEM_SHORTCUT`: The user requests to trigger or press a keyboard shortcut (e.g. "press alt+tab", "do ctrl+s"). Extract the shortcut combination to "shortcut".
-5. `WEB_SEARCH`: The user is asking for real-time, current/fresh facts, news, weather, comparisons, or recommendations requiring external web lookup (e.g. "what is the price of Bitcoin?", "search gaming chair reviews", "latest news on AI", "who won the match?", "weather in Tokyo").
+5. `WEB_SEARCH`: The user is asking for real-time, current/fresh facts, news, weather, comparisons, or recommendations requiring external web lookup (e.g. "what is the price of Bitcoin?", "search gaming chair reviews", "latest news on AI", "who won the match?", "weather in Tokyo", "best gaming chair under 10000", "cheapest laptop", "compare iPhone 15 vs 16").
 6. `INFORMATIONAL_CHAT`: The user is greeting you, asking about your identity, explaining concepts, starting a normal conversation, or asking general questions that don't need screen context or web search (e.g. "hello", "who are you", "what is a variable in Python?").
 7. `WHATSAPP`: The user wants to interact with WhatsApp — summarize a chat, list chats, or check WhatsApp connection status (e.g. "summarize hackathon crew", "summarize my whatsapp group", "list my whatsapp chats", "check whatsapp status", "whatsapp status"). Extract: the WhatsApp action to "wa_action" (one of: "summarize", "chats", "status"), and the group or chat name to "wa_chat_name" (if mentioned).
 8. `VIDEO_EDIT`: The user wants to edit a video, trim a clip, add/mix background music, merge multiple video clips, burn styled subtitles/captions with presets (e.g. "instagram", "hormozi", "word-by-word", "neon-blur", "pill-yellow", "glassmorphism", "documentary", etc.), transcribe audio/video to SRT captions via faster-whisper, inspect media info, or perform multi-step editing pipelines (e.g. "trim dance.mp4 from 10 to 25s", "add song edm.mp3 to video.mp4", "merge clip1.mp4 and clip2.mp4", "merge them all and add captions", "burn subtitles to dance.mp4 with instagram preset", "i want word by word instagram like", "transcribe lecture.mp4 with small model"). Extract the relevant parameters:
@@ -52,12 +52,11 @@ Intents to choose from:
     - "music_volume": background music volume (float between 0.0 and 1.0)
     - "input_paths": list of video paths when merging clips
     - "subtitles": boolean whether subtitles/captions should be burned (default false unless captions requested)
-9. `ESP32_LIGHT`: The user wants to control, toggle, turn on, turn off, or change colors/brightness of physical room or desk lights connected to an ESP32 micro-controller (e.g. "turn on red light", "turn off the light", "set light to blue", "make the light warm white", "dim light", "toggle lights"). Extract:
-    - "action": "set_color", "turn_off", "toggle", "on", "off", "set", or "brightness"
+9. `ESP32_LIGHT`: The user wants to control physical room or desk lights connected to an ESP32 micro-controller (e.g. "turn on red light", "turn off the light", "set light to blue", "make the light warm white", "dim light"). Extract:
+    - "action": "set_color" or "turn_off"
     - "color": color name like "red", "green", "blue", "yellow", "cyan", "purple", "white", "warm_white" (or null if turning off)
     - "brightness": float between 0.0 and 1.0 (or null)
-10. `SCREENSHOT`: The user asks to capture a screenshot, take a screenshot, capture their screen, or get a screenshot of their desktop screen (e.g. "capture screenshot", "take screenshot", "screenshot of my screen").
-11. `DESKTOP_AUTOMATION`: Any step-by-step guidance on the user's active desktop screen/application UI (e.g. "how do I install python extension?", "click the install button", "where is the settings tab?").
+10. `DESKTOP_AUTOMATION`: Any step-by-step guidance on the user's active desktop screen/application UI (e.g. "how do I install python extension?", "click the install button", "where is the settings tab?").
 
 Compound-request rule (IMPORTANT):
 - If the request combines OPENING an app WITH a follow-up action inside it
@@ -67,7 +66,8 @@ Compound-request rule (IMPORTANT):
 
 Rules for needs_screen:
 - needs_screen is true ONLY when the student wants guidance tied to visible UI (like clicking, opening, selecting, locating, highlighting, installing, or navigating something in an app, menu, button, tab, or window), OR when the student asks what is on their screen ("what's on my screen", "whats on my screen", "describe my screen", "explain my screen", "what am I looking at").
-- needs_screen is false for COMPUTER_USE, OPEN_APP, MEDIA_PLAYBACK, SYSTEM_SHORTCUT, WEB_SEARCH, INFORMATIONAL_CHAT, WHATSAPP, VIDEO_EDIT, SCREENSHOT, and ESP32_LIGHT.
+- needs_screen is false for COMPUTER_USE, OPEN_APP, MEDIA_PLAYBACK, SYSTEM_SHORTCUT, WEB_SEARCH, INFORMATIONAL_CHAT, WHATSAPP, VIDEO_EDIT, and ESP32_LIGHT.
+
 
 Rules for is_continuation:
 - is_continuation is true ONLY if the request is a short follow-up or query directly continuing or asking about the status/next step of the previous active goal/task (e.g. "what next?", "done", "now what?", "it is not showing up", "continue").

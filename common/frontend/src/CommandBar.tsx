@@ -1,7 +1,7 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo } from 'lucide-react';
+import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -15,14 +15,21 @@ import {
   shouldCompleteStepOnHighlightClick,
   shouldShowSummaryBubble,
 } from './lib/guidance';
-import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility, getSecureTransportInfo } from './lib/tauri';
+import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, setCommandWindowSize, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility, getSecureTransportInfo, getMobilePairingPayload, regenerateRemoteToken, openNotebookWindow } from './lib/tauri';
 
 import { linkCitationMarkers, preprocessMarkdown } from './lib/citations';
-import { buildAudioDataUrl, buildSarvamTtsPayload, buildSpeechContent, getSarvamErrorMessage } from './lib/tts';
+import { getSarvamErrorMessage } from './lib/tts';
 import { SarvamSpeechToTextStream, SarvamTextToSpeechStream } from './lib/sarvamStream';
+import {
+  AssemblyAIVoiceAgent,
+  AssemblyAIRealtimeSTT,
+  transcribeAudioWithAssemblyAI,
+  floatTo16BitPCM,
+  playPCM16Audio
+} from './lib/assemblyaiVoice';
 import { AdaptiveTransportManager } from './lib/adaptiveTransport';
 import type { TutorConversationMessage, TutorProgress, TutorResult } from './lib/types';
-import type { SecureTransportInfo } from './lib/tauri';
+import type { SecureTransportInfo, MobilePairingPayload } from './lib/tauri';
 
 
 interface AttachedMedia {
@@ -54,7 +61,6 @@ interface TargetClickedPayload {
 interface TutorRunOptions {
   resetProgress?: boolean;
   preserveStepsDuringRun?: boolean;
-  attachedImage?: string;
 }
 
 function getLinkText(children: AnchorHTMLAttributes<HTMLAnchorElement>['children']): string {
@@ -213,7 +219,6 @@ export function CommandBar() {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
-  const lastTutorResultRef = useRef<TutorResult | null>(null);
   const [spokenStatus, setSpokenStatus] = useState<string>('');
   const [isTtsActive, setIsTtsActive] = useState<boolean>(false);
   const [steps, setSteps] = useState<any[]>([]);
@@ -221,7 +226,17 @@ export function CommandBar() {
   const [showSettings, setShowSettings] = useState(false);
   const [provider, setProvider] = useState('groq');
   const [shortcut, setShortcut] = useState('Enter');
+  const defaultAaiKey = (import.meta as any).env?.VITE_ASSEMBLY_AI_API_KEY || '';
   const [sarvamApiKey, setSarvamApiKey] = useState('');
+  const [assemblyaiApiKey, setAssemblyaiApiKey] = useState(defaultAaiKey);
+  const assemblyaiApiKeyRef = useRef(defaultAaiKey);
+  const [voiceProvider, setVoiceProvider] = useState<'assemblyai' | 'sarvam'>('assemblyai');
+  const voiceProviderRef = useRef<'assemblyai' | 'sarvam'>('assemblyai');
+  // Always realtime agent (thinks while you speak) — no mode toggle.
+  const [assemblyaiVoiceMode] = useState<'agent' | 'realtime_stt'>('agent');
+  const assemblyaiAgentRef = useRef<AssemblyAIVoiceAgent | null>(null);
+  const assemblyaiSttRef = useRef<AssemblyAIRealtimeSTT | null>(null);
+  const assemblyaiAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const [groqApiKey, setGroqApiKey] = useState('');
   const [deepseekApiKey, setDeepseekApiKey] = useState('');
   const [customUrl, setCustomUrl] = useState('');
@@ -235,14 +250,39 @@ export function CommandBar() {
   }, [sarvamApiKey]);
 
   useEffect(() => {
+    assemblyaiApiKeyRef.current = assemblyaiApiKey;
+  }, [assemblyaiApiKey]);
+
+  useEffect(() => {
+    voiceProviderRef.current = voiceProvider;
+  }, [voiceProvider]);
+
+  useEffect(() => {
     async function loadInitialSettings() {
       try {
         const s = await getSettings();
         if (s.provider) setProvider(s.provider);
         if (s.shortcut) setShortcut(s.shortcut);
+        if (s.voice_provider === 'sarvam' || s.voice_provider === 'assemblyai') {
+          setVoiceProvider(s.voice_provider);
+          voiceProviderRef.current = s.voice_provider;
+        } else {
+          const cached = localStorage.getItem('blinky_voice_provider') as 'assemblyai' | 'sarvam' | null;
+          if (cached === 'sarvam' || cached === 'assemblyai') {
+            setVoiceProvider(cached);
+            voiceProviderRef.current = cached;
+          }
+        }
         if (s.sarvam_api_key) {
           setSarvamApiKey(s.sarvam_api_key);
           sarvamApiKeyRef.current = s.sarvam_api_key;
+        }
+        if (s.assemblyai_api_key) {
+          setAssemblyaiApiKey(s.assemblyai_api_key);
+          assemblyaiApiKeyRef.current = s.assemblyai_api_key;
+        } else if (defaultAaiKey) {
+          setAssemblyaiApiKey(defaultAaiKey);
+          assemblyaiApiKeyRef.current = defaultAaiKey;
         }
         if (s.groq_api_key) setGroqApiKey(s.groq_api_key);
         if (s.deepseek_api_key) setDeepseekApiKey(s.deepseek_api_key);
@@ -275,6 +315,14 @@ export function CommandBar() {
   const [isWaActionLoading, setIsWaActionLoading] = useState(false);
   const [showWaModal, setShowWaModal] = useState(false);
   const waCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Mobile pairing (QR) states
+  const [showMobileModal, setShowMobileModal] = useState(false);
+  const [pairingPayload, setPairingPayload] = useState<MobilePairingPayload | null>(null);
+  const [pairingIp, setPairingIp] = useState('');
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [pairingError, setPairingError] = useState('');
+  const mobileCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const SESSION_ID = 'blinky-default-session';
   const PORTS_TO_SCAN = [3000, 3001, 3002, 3003, 3004, 3005];
@@ -371,6 +419,54 @@ export function CommandBar() {
     };
   }, []);
 
+  // Mobile pairing: load payload (LAN IPs + token) for the Connect-Mobile QR.
+  const loadPairingPayload = async () => {
+    setPairingLoading(true);
+    setPairingError('');
+    try {
+      const payload = await getMobilePairingPayload();
+      setPairingPayload(payload);
+      setPairingIp((current) => (
+        current && payload.ips.includes(current) ? current : (payload.ips[0] ?? '')
+      ));
+    } catch (err) {
+      setPairingError(err instanceof Error ? err.message : 'Could not load pairing info. Is the desktop backend running?');
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
+  const openMobileModal = () => {
+    setShowMobileModal(true);
+    void loadPairingPayload();
+  };
+
+  const handleRegenerateToken = async () => {
+    setPairingLoading(true);
+    setPairingError('');
+    try {
+      await regenerateRemoteToken();
+      await loadPairingPayload();
+    } catch (err) {
+      setPairingError(err instanceof Error ? err.message : 'Could not regenerate token.');
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
+  // Compact JSON the mobile app scans: full credentials for one-scan connect.
+  const pairingQrText = pairingPayload && pairingIp
+    ? JSON.stringify({
+      v: 1,
+      ip: pairingIp,
+      ws: pairingPayload.ws_port,
+      disc: pairingPayload.discovery_port,
+      token: pairingPayload.token,
+      pin: pairingPayload.certificate_pin,
+      mode: pairingPayload.mode,
+    })
+    : '';
+
   // Keep WhatsApp status fresh so startup state and logout state update without user interaction.
   useEffect(() => {
     let active = true;
@@ -429,6 +525,27 @@ export function CommandBar() {
       );
     }
   }, [waStatus, waQr]);
+
+  // Draw mobile-pairing QR code to canvas
+  useEffect(() => {
+    if (showMobileModal && pairingQrText && mobileCanvasRef.current) {
+      QRCode.toCanvas(
+        mobileCanvasRef.current,
+        pairingQrText,
+        {
+          width: 180,
+          margin: 2,
+          color: {
+            dark: '#140f13',
+            light: '#ffffff'
+          }
+        },
+        (error) => {
+          if (error) console.error('Failed to render pairing QR Code:', error);
+        }
+      );
+    }
+  }, [showMobileModal, pairingQrText]);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -524,10 +641,16 @@ export function CommandBar() {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
     }
+    if (assemblyaiAudioSourceRef.current) {
+      try {
+        assemblyaiAudioSourceRef.current.stop();
+      } catch { }
+      assemblyaiAudioSourceRef.current = null;
+    }
     activeSourcesRef.current.forEach((source) => {
       try {
         source.stop();
-      } catch {}
+      } catch { }
     });
     activeSourcesRef.current = [];
     if (ttsStreamRef.current) {
@@ -557,7 +680,7 @@ export function CommandBar() {
     if (sarvamApiKey) {
       const wtUrl = import.meta.env.VITE_SARVAM_GATEWAY_WT_URL || 'wt://gateway.blinky.internal/sarvam-stream';
       const wsUrl = `wss://api.sarvam.ai/speech-to-text-stream?api-subscription-key=${encodeURIComponent(sarvamApiKey)}`;
-      
+
       transportManagerRef.current = new AdaptiveTransportManager(
         wtUrl,
         wsUrl,
@@ -580,7 +703,7 @@ export function CommandBar() {
       activeSourcesRef.current.forEach((source) => {
         try {
           source.stop();
-        } catch {}
+        } catch { }
       });
       if (ttsStreamRef.current) {
         ttsStreamRef.current.disconnect();
@@ -592,7 +715,7 @@ export function CommandBar() {
   }, []);
 
   // Use a ref to avoid stale closure for the fetch queue function
-  const processTtsFetchQueueRef = useRef<() => void>(() => {});
+  const processTtsFetchQueueRef = useRef<() => void>(() => { });
 
   // Listen for real-time status and streaming chunks from python worker
   useEffect(() => {
@@ -627,20 +750,6 @@ export function CommandBar() {
         }
         return prev + msg;
       });
-
-      if (workflowStartedWithReadbackRef.current) {
-        speechBufferRef.current += msg;
-        hasStreamedTtsRef.current = true;
-        const match = speechBufferRef.current.match(/([^.!?\n]+[.!?\n]+)(\s*|$)/);
-        if (match) {
-          const sentence = match[1].trim();
-          speechBufferRef.current = speechBufferRef.current.substring(match[0].length);
-          if (sentence) {
-            pushToTtsQueue(sentence);
-            void processTtsFetchQueueRef.current();
-          }
-        }
-      }
     });
 
     return () => {
@@ -651,8 +760,8 @@ export function CommandBar() {
   }, []);
 
   // Callbacks refs to avoid stale closures in WebSockets
-  const onTranscriptRef = useRef<(transcript: string, isFinal: boolean) => void>(() => {});
-  const onAudioChunkRef = useRef<(base64Audio: string) => void>(() => {});
+  const onTranscriptRef = useRef<(transcript: string, isFinal: boolean) => void>(() => { });
+  const onAudioChunkRef = useRef<(base64Audio: string) => void>(() => { });
 
   // Update refs on every render
   onTranscriptRef.current = (transcript, isFinal) => {
@@ -675,7 +784,7 @@ export function CommandBar() {
     for (let i = 0; i < binary.length; i++) {
       bytes[i] = binary.charCodeAt(i);
     }
-    
+
     try {
       let audioBuffer: AudioBuffer;
       try {
@@ -723,213 +832,18 @@ export function CommandBar() {
   };
 
   const processTtsFetchQueue = async () => {
-    if (isFetchingTtsRef.current || ttsTextQueueRef.current.length === 0 || !sarvamApiKey) return;
-    isFetchingTtsRef.current = true;
-
-    while (ttsTextQueueRef.current.length > 0) {
-      const item = ttsTextQueueRef.current.shift();
-      if (!item || !item.text) continue;
-
-      try {
-        const payload = buildSarvamTtsPayload(item.text);
-        payload.output_audio_codec = 'mp3';
-
-        const res = await fetch('https://api.sarvam.ai/text-to-speech', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'api-subscription-key': sarvamApiKey,
-          },
-          body: JSON.stringify(payload),
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          const base64Audio = data.audios[0];
-          ttsAudioQueueRef.current.push(JSON.stringify({
-            text: item.text,
-            audio: base64Audio,
-            isHidden: item.isHidden,
-            startWordIdx: item.startWordIdx,
-            wordsCount: item.wordsCount
-          }));
-          void processTtsPlayQueue();
-        } else {
-          console.error('TTS Fetch failed with status:', res.status);
-          setStatus(`TTS API Error: Status ${res.status}`);
-        }
-      } catch (err) {
-        console.error('Failed to fetch TTS for sentence:', err);
-        setStatus(`TTS Fetch Error: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    isFetchingTtsRef.current = false;
   };
 
   // Update ref so useEffect closure always uses the latest state
   processTtsFetchQueueRef.current = processTtsFetchQueue;
 
   const processTtsPlayQueue = async () => {
-    if (isPlayingTtsRef.current || ttsAudioQueueRef.current.length === 0) return;
-    isPlayingTtsRef.current = true;
-    setIsSpeaking(true);
-
-    while (ttsAudioQueueRef.current.length > 0) {
-      const payloadStr = ttsAudioQueueRef.current.shift();
-      if (!payloadStr) continue;
-      
-      const { text, audio: base64Audio, isHidden, startWordIdx } = JSON.parse(payloadStr);
-
-      try {
-        if (!audioCtxRef.current) {
-          audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-        }
-        const ctx = audioCtxRef.current;
-        if (ctx.state === 'suspended') {
-          await ctx.resume();
-        }
-
-        const binary = atob(base64Audio);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i);
-        }
-
-        let audioBuffer: AudioBuffer;
-        try {
-          audioBuffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
-        } catch (decodeErr) {
-          const isMp3 = bytes.length >= 3 && (
-            (bytes[0] === 0x49 && bytes[1] === 0x44 && bytes[2] === 0x33) ||
-            (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0)
-          );
-          if (isMp3) {
-            console.error('Failed to decode MP3 audio chunk:', decodeErr);
-            setStatus(`MP3 Decode Error: ${decodeErr instanceof Error ? decodeErr.message : String(decodeErr)}`);
-            continue;
-          }
-          console.warn('decodeAudioData failed, falling back to PCM:', decodeErr);
-          const validByteLength = bytes.buffer.byteLength - (bytes.buffer.byteLength % 2);
-          const int16Array = new Int16Array(bytes.buffer, 0, validByteLength / 2);
-          const float32Array = new Float32Array(int16Array.length);
-          for (let i = 0; i < int16Array.length; i++) {
-            float32Array[i] = int16Array[i] / 32768.0;
-          }
-          audioBuffer = ctx.createBuffer(1, float32Array.length, 16000);
-          audioBuffer.getChannelData(0).set(float32Array);
-        }
-
-        await new Promise<void>((resolve) => {
-          const source = ctx.createBufferSource();
-          source.buffer = audioBuffer;
-          if (!ttsAnalyserRef.current) {
-            ttsAnalyserRef.current = ctx.createAnalyser();
-            ttsAnalyserRef.current.connect(ctx.destination);
-          }
-          source.connect(ttsAnalyserRef.current);
-          activeSourcesRef.current.push(source);
-          
-          const startTime = Math.max(ctx.currentTime, nextPlayTimeRef.current);
-          source.start(startTime);
-          nextPlayTimeRef.current = startTime + audioBuffer.duration;
-          
-          const delayMs = Math.max(0, (startTime - ctx.currentTime) * 1000);
-          
-          const sentenceWords = (text || '').split(/\s+/).filter(Boolean);
-          const sentenceStartIdx = startWordIdx ?? 0;
-
-          if (!isHidden && sentenceWords.length > 0) {
-            const wordDurationMs = (audioBuffer.duration * 1000) / sentenceWords.length;
-            sentenceWords.forEach((word: string, wordIdx: number) => {
-              const delay = delayMs + wordIdx * wordDurationMs;
-              const timerId = window.setTimeout(() => {
-                setActiveWordIndex(sentenceStartIdx + wordIdx);
-                wordTimersRef.current = wordTimersRef.current.filter((id) => id !== timerId);
-              }, delay);
-              wordTimersRef.current.push(timerId);
-            });
-          }
-
-          if (text && !isHidden) {
-            setTimeout(() => {
-              setSpokenStatus((prev) => {
-                if (prev === 'Thinking...') return text;
-                return prev + (prev.endsWith(' ') || prev.endsWith('\n') ? '' : ' ') + text;
-              });
-            }, delayMs);
-          }
-
-          source.onended = () => {
-            activeSourcesRef.current = activeSourcesRef.current.filter((s) => s !== source);
-            if (activeSourcesRef.current.length === 0 && ttsTextQueueRef.current.length === 0 && !isFetchingTtsRef.current) {
-              setIsTtsActive(false);
-              if (!isRunning && !isRecording) {
-                void resumeWakeWord();
-              }
-            }
-            resolve();
-          };
-        });
-      } catch (e) {
-        console.error('Error decoding/playing TTS chunk:', e);
-        setStatus(`TTS Play Error: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    }
-    
-    isPlayingTtsRef.current = false;
-    
-    if (ttsTextQueueRef.current.length === 0 && !isFetchingTtsRef.current) {
-      setIsSpeaking(false);
-      if (!isRunning && !isRecording) {
-        void resumeWakeWord();
-      }
-    }
   };
 
   const speakText = async (summaryText: string, stepsList: any[], options: { includeSteps?: boolean } = {}) => {
-    let key = sarvamApiKey || sarvamApiKeyRef.current;
-    if (!key) {
-      try {
-        const s = await getSettings();
-        if (s.sarvam_api_key) {
-          setSarvamApiKey(s.sarvam_api_key);
-          sarvamApiKeyRef.current = s.sarvam_api_key;
-          key = s.sarvam_api_key;
-        }
-      } catch {}
-    }
-
-    if (!key) {
-      setStatus('Please set your Sarvam AI API Key in settings first.');
-      return;
-    }
-    
-    const speechContent = buildSpeechContent(summaryText, stepsList, options);
-    if (!speechContent) return;
-
-    stopSpeaking();
-
-    const sentences = (speechContent.match(/[^.!?\n]+[.!?\n]*/g) || [speechContent])
-      .map(s => s.trim())
-      .filter(Boolean);
-
-    for (const sentence of sentences) {
-      pushToTtsQueue(sentence);
-    }
-    setIsTtsActive(true);
-    setSpokenStatus('Thinking...');
-    void processTtsFetchQueue();
   };
 
   const speakResponse = () => {
-    if (isSpeaking) {
-      stopSpeaking();
-      if (!isRunning && !isRecording) {
-        void resumeWakeWord();
-      }
-    } else if (status && status !== defaultStatus) {
-      void speakText(status, steps, { includeSteps: !showGuideCompletionSummary });
-    }
   };
 
   useEffect(() => {
@@ -947,7 +861,7 @@ export function CommandBar() {
         const normalizedVolume = Math.min(1, rms * 8); // Multiplier tunes glow sensitivity to TTS
 
         void emit('blinky://vad-update', { volume: normalizedVolume });
-        
+
         rafId = requestAnimationFrame(loop);
       } else if (!isSpeaking && !isRecording) {
         void emit('blinky://vad-update', { volume: 0 });
@@ -963,46 +877,133 @@ export function CommandBar() {
   }, [isSpeaking, isRecording]);
 
   const handleAudioTranscription = async (blob: Blob) => {
-    const key = sarvamApiKey || sarvamApiKeyRef.current;
-    if (!key) {
-      setStatus('Please set your Sarvam AI API Key in settings first.');
-      return;
-    }
-    
-    setStatus('Transcribing...');
-    try {
-      const formData = new FormData();
-      formData.append('file', blob, 'query.webm');
-      formData.append('model', 'saaras:v3');
-      formData.append('language_code', 'en-IN');
-
-      const res = await fetch('https://api.sarvam.ai/speech-to-text', {
-        method: 'POST',
-        headers: {
-          'api-subscription-key': key,
-        },
-        body: formData,
-      });
-
-      if (!res.ok) {
-        let payload: any = {};
-        try { payload = await res.json(); } catch {}
-        throw new Error(getSarvamErrorMessage(payload, res.status));
+    const currentVP = voiceProviderRef.current;
+    if (currentVP === 'assemblyai') {
+      let aaiKey = assemblyaiApiKey || assemblyaiApiKeyRef.current;
+      if (!aaiKey) {
+        aaiKey = (import.meta as any).env?.VITE_ASSEMBLY_AI_API_KEY || '';
+      }
+      if (!aaiKey) {
+        try {
+          const s = await getSettings();
+          if (s.assemblyai_api_key) {
+            aaiKey = s.assemblyai_api_key;
+            setAssemblyaiApiKey(s.assemblyai_api_key);
+            assemblyaiApiKeyRef.current = s.assemblyai_api_key;
+          }
+        } catch { }
       }
 
-      const data = await res.json();
-      const transcript = data.transcript?.trim() || '';
-
-      if (transcript) {
-        setStatus(`Searching for: "${transcript}"`);
-        void executeTutor(transcript, true);
-      } else {
-        setStatus('Could not hear anything clearly.');
+      if (!aaiKey) {
+        setStatus('Please set your AssemblyAI API Key in settings first.');
         void resumeWakeWord();
+        return;
       }
-    } catch (err: any) {
-      console.error('STT error:', err);
-      setStatus(`Transcription failed: ${err.message}`);
+
+      // Guard: don't send silence / empty clips to AssemblyAI.
+      // Universal-3-Pro with language detection fails on these with
+      // "language_detection cannot be performed on files with no spoken audio."
+      if (!blob || blob.size < 15000) {
+        setStatus('Could not hear anything clearly. Please speak louder and try again.');
+        void resumeWakeWord();
+        return;
+      }
+
+      setStatus('Transcribing with AssemblyAI Universal-3 Pro...');
+      try {
+        const transcript = await transcribeAudioWithAssemblyAI(blob, aaiKey);
+        if (transcript) {
+          setStatus(`Searching for: "${transcript}"`);
+          void executeTutor(transcript, true);
+          return;
+        } else {
+          setStatus('Could not hear anything clearly.');
+          void resumeWakeWord();
+          return;
+        }
+      } catch (err: any) {
+        console.error('AssemblyAI transcription error:', err);
+        const rawMsg = err?.message || String(err);
+        // Map the known "no spoken audio" / language_detection failure to a friendly prompt.
+        if (/no spoken audio|language_detection|nothing.*speech|empty/i.test(rawMsg)) {
+          setStatus('No speech detected. Please speak clearly into the mic and try again.');
+        } else {
+          setStatus(`AssemblyAI STT error: ${rawMsg}`);
+        }
+        void resumeWakeWord();
+        return;
+      }
+    }
+
+    let transcribedText = '';
+    const key = sarvamApiKey || sarvamApiKeyRef.current;
+    if (key) {
+      try {
+        const formData = new FormData();
+        formData.append('file', blob, 'query.webm');
+        formData.append('model', 'saaras:v3');
+        formData.append('language_code', 'en-IN');
+
+        const res = await fetch('https://api.sarvam.ai/speech-to-text', {
+          method: 'POST',
+          headers: {
+            'api-subscription-key': key,
+          },
+          body: formData,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          transcribedText = data.transcript?.trim() || '';
+        } else {
+          let payload: any = {};
+          try { payload = await res.json(); } catch { }
+          console.warn('Sarvam STT failed, falling back to Groq Whisper:', getSarvamErrorMessage(payload, res.status));
+        }
+      } catch (err: any) {
+        console.warn('Sarvam STT connection error, falling back to Groq Whisper:', err);
+      }
+    }
+
+    // Fallback: Groq Whisper Large V3
+    const gKey = groqApiKey || (import.meta as any).env?.VITE_GROQ_API_KEY;
+    if (!transcribedText && gKey) {
+      setStatus('Transcribing with Groq Whisper...');
+      try {
+        const groqFormData = new FormData();
+        groqFormData.append('file', blob, 'query.webm');
+        groqFormData.append('model', 'whisper-large-v3');
+        groqFormData.append('response_format', 'json');
+
+        const groqRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${gKey}`,
+          },
+          body: groqFormData,
+        });
+
+        if (groqRes.ok) {
+          const gData = await groqRes.json();
+          transcribedText = gData.text?.trim() || '';
+        } else {
+          const errBody = await groqRes.text();
+          console.error(`Groq Whisper STT error (${groqRes.status}):`, errBody);
+        }
+      } catch (gErr: any) {
+        console.error('Groq Whisper STT connection error:', gErr);
+      }
+    }
+
+    if (transcribedText) {
+      setStatus(`Searching for: "${transcribedText}"`);
+      void executeTutor(transcribedText, true);
+    } else {
+      if (!key && !gKey) {
+        setStatus('Please set your Sarvam AI or Groq API Key in settings first.');
+      } else {
+        setStatus('Could not hear anything clearly. Please check your mic and try again.');
+      }
       void resumeWakeWord();
     }
   };
@@ -1011,20 +1012,47 @@ export function CommandBar() {
     if (isStartingRecordingRef.current) return;
     isStartingRecordingRef.current = true;
 
+    const currentVP = voiceProviderRef.current;
+    let aaiKey = assemblyaiApiKey || assemblyaiApiKeyRef.current;
     let key = sarvamApiKey || sarvamApiKeyRef.current;
-    if (!key) {
-      try {
-        const s = await getSettings();
-        if (s.sarvam_api_key) {
-          setSarvamApiKey(s.sarvam_api_key);
-          sarvamApiKeyRef.current = s.sarvam_api_key;
-          key = s.sarvam_api_key;
-        }
-      } catch {}
+    let gKey = groqApiKey || (import.meta as any).env?.VITE_GROQ_API_KEY || '';
+
+    // If active provider is assemblyai but no key is present, auto-fallback to Sarvam or Groq
+    let effectiveVP = currentVP;
+    if (effectiveVP === 'assemblyai' && !aaiKey) {
+      if (key) {
+        effectiveVP = 'sarvam';
+      } else if (gKey) {
+        effectiveVP = 'sarvam'; // Will use Groq Whisper fallback in audio transcription
+      } else {
+        try {
+          const s = await getSettings();
+          if (s.assemblyai_api_key) {
+            setAssemblyaiApiKey(s.assemblyai_api_key);
+            assemblyaiApiKeyRef.current = s.assemblyai_api_key;
+            aaiKey = s.assemblyai_api_key;
+          } else if (s.sarvam_api_key) {
+            setSarvamApiKey(s.sarvam_api_key);
+            sarvamApiKeyRef.current = s.sarvam_api_key;
+            key = s.sarvam_api_key;
+            effectiveVP = 'sarvam';
+          } else if (s.groq_api_key) {
+            setGroqApiKey(s.groq_api_key);
+            gKey = s.groq_api_key;
+            effectiveVP = 'sarvam';
+          }
+        } catch { }
+      }
     }
 
-    if (!key) {
-      setStatus('Please set your Sarvam AI API Key in settings first.');
+    if (effectiveVP === 'assemblyai' && !aaiKey) {
+      if (!key && !gKey) {
+        setStatus('Please set your AssemblyAI, Sarvam, or Groq API Key in settings first.');
+        isStartingRecordingRef.current = false;
+        return;
+      }
+    } else if (effectiveVP === 'sarvam' && !key && !gKey) {
+      setStatus('Please set your Sarvam AI or Groq API Key in settings first.');
       isStartingRecordingRef.current = false;
       return;
     }
@@ -1049,15 +1077,15 @@ export function CommandBar() {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       (mediaRecorderRef as any).current = mediaRecorder;
-      
+
       const audioChunks: BlobPart[] = [];
-      
+
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunks.push(event.data);
         }
       };
-      
+
       // Setup VAD using AudioContext
       if (!audioCtxRef.current) {
         audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -1068,7 +1096,68 @@ export function CommandBar() {
       const audioCtx = audioCtxRef.current;
       const source = audioCtx.createMediaStreamSource(stream);
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
-      
+
+      // Always use the realtime voice agent (thinks while you speak).
+      if (currentVP === 'assemblyai' && aaiKey) {
+        const agent = new AssemblyAIVoiceAgent({
+          apiKey: aaiKey,
+          onAgentAudio: (base64Audio) => {
+            if (assemblyaiAudioSourceRef.current) {
+              try { assemblyaiAudioSourceRef.current.stop(); } catch { }
+            }
+            setIsSpeaking(true);
+            if (audioCtxRef.current) {
+              const src = playPCM16Audio(audioCtxRef.current, base64Audio, 24000, ttsAnalyserRef.current || undefined);
+              assemblyaiAudioSourceRef.current = src;
+              src.onended = () => {
+                setIsSpeaking(false);
+              };
+            }
+          },
+          onAgentTranscript: (text) => {
+            setStatus(text);
+            setSpokenStatus(text);
+          },
+          onUserTranscript: (text, isFinal) => {
+            setQuestion(text);
+            if (isFinal) {
+              setStatus(`Heard: "${text}"`);
+            }
+          },
+          onToolCall: async (callId, name, args) => {
+            console.log(`AssemblyAI Voice Agent invoked tool: ${name}`, args);
+            if (name === 'control_desktop') {
+              const action = args.action || '';
+              setStatus(`Blinky executing: "${action}"`);
+              try {
+                await executeTutor(action, false);
+                return { status: 'success', message: `Completed desktop action: ${action}` };
+              } catch (e: any) {
+                return { status: 'error', message: e?.message || String(e) };
+              }
+            } else if (name === 'cancel_desktop_action') {
+              stopCurrentRun();
+              return { status: 'success', message: 'Cancelled desktop action.' };
+            }
+            return { status: 'unknown_tool' };
+          },
+          onTurnChange: (turn) => {
+            if (turn === 'user') {
+              if (assemblyaiAudioSourceRef.current) {
+                try { assemblyaiAudioSourceRef.current.stop(); } catch { }
+                assemblyaiAudioSourceRef.current = null;
+              }
+              setIsSpeaking(false);
+            }
+          },
+          onError: (err) => {
+            console.error('AssemblyAI Voice Agent error:', err);
+          }
+        });
+        agent.connect();
+        assemblyaiAgentRef.current = agent;
+      }
+
       let hasSpoken = false;
       let silenceStartTime = 0;
       let silenceTimeoutTriggered = false;
@@ -1078,6 +1167,14 @@ export function CommandBar() {
 
       processor.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
+
+        // Stream PCM16 chunk to active AssemblyAI connection
+        const pcmChunk = floatTo16BitPCM(inputData);
+        if (assemblyaiAgentRef.current?.isConnected) {
+          assemblyaiAgentRef.current.sendAudioChunk(pcmChunk);
+        } else if (assemblyaiSttRef.current?.isConnected) {
+          assemblyaiSttRef.current.sendAudioChunk(pcmChunk);
+        }
 
         let sum = 0;
         for (let i = 0; i < inputData.length; i++) {
@@ -1101,7 +1198,7 @@ export function CommandBar() {
             if (!silenceTimeoutTriggered) {
               silenceTimeoutTriggered = true;
               console.log("VAD: Local silence timeout reached. Stopping recording and submitting query.");
-              
+
               if ((mediaRecorderRef as any).current?.state === 'recording') {
                 stopRecording();
               }
@@ -1117,22 +1214,39 @@ export function CommandBar() {
         if (stream) {
           stream.getTracks().forEach((track) => track.stop());
         }
-        try { processor.disconnect(); source.disconnect(); } catch {}
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        void handleAudioTranscription(audioBlob);
+        try { processor.disconnect(); source.disconnect(); } catch { }
+        // If real-time stream did not execute, run audio transcription.
+        // Skip the REST fallback when VAD never heard speech — this is what
+        // previously produced "language_detection cannot be performed on
+        // files with no spoken audio."
+        if (!assemblyaiAgentRef.current?.isConnected && !assemblyaiSttRef.current?.isConnected) {
+          if (!hasSpoken || audioChunks.length === 0) {
+            setStatus('No speech detected. Please speak clearly into the mic and try again.');
+            void resumeWakeWord();
+            return;
+          }
+          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+          void handleAudioTranscription(audioBlob);
+        }
       };
-      
+
       mediaRecorder.start();
       setIsRecording(true);
-      setStatus('Listening... Click mic to stop.');
-      
-      // Auto-stop after 10 seconds as a fallback
+      setStatus(
+        currentVP === 'assemblyai'
+          ? assemblyaiVoiceMode === 'agent'
+            ? '⚡ AssemblyAI Voice Agent Listening (Universal-3 Pro)...'
+            : '🎙️ AssemblyAI Realtime STT Listening...'
+          : '🎙️ Sarvam AI Listening... Click mic to stop.'
+      );
+
+      // Auto-stop after 12 seconds as a fallback
       setTimeout(() => {
         if (mediaRecorder.state === 'recording') {
           stopRecording();
         }
-      }, 10000);
-      
+      }, 12000);
+
     } catch (err) {
       console.error('Error starting audio recording:', err);
       setStatus('Microphone access failed or was denied.');
@@ -1146,10 +1260,18 @@ export function CommandBar() {
   };
 
   const stopRecording = () => {
+    if (assemblyaiAgentRef.current) {
+      assemblyaiAgentRef.current.disconnect();
+      assemblyaiAgentRef.current = null;
+    }
+    if (assemblyaiSttRef.current) {
+      assemblyaiSttRef.current.disconnect();
+      assemblyaiSttRef.current = null;
+    }
     if (mediaRecorderRef.current) {
       try {
         mediaRecorderRef.current.stop();
-      } catch {}
+      } catch { }
       mediaRecorderRef.current = null;
       setIsRecording(false);
 
@@ -1185,8 +1307,8 @@ export function CommandBar() {
     queryText: string,
     shouldSpeakAfter: boolean,
     options: TutorRunOptions = {},
-  ): Promise<TutorResult | null> {
-    if (isRunningRef.current) return null;
+  ) {
+    if (isRunningRef.current) return;
     isRunningRef.current = true;
     let effectiveQuery = queryText.trim().replace(/^(hey\s+)?blinky[\s,.:;!?]*/i, '').trim();
     if (attachedFiles.length > 0) {
@@ -1197,7 +1319,7 @@ export function CommandBar() {
       }
       setAttachedFiles([]);
     }
-    if (!effectiveQuery) return null;
+    if (!effectiveQuery) return;
 
     const runId = runIdRef.current + 1;
     runIdRef.current = runId;
@@ -1230,23 +1352,12 @@ export function CommandBar() {
     }
     stopSpeaking();
     void pauseWakeWord();
-    
+
     const currentWindow = getCurrentWindow();
     let isPointing = false;
     try {
       let result: TutorResult;
-      if (options.attachedImage) {
-        // Fast-path: Attached photo/image query (mobile camera or gallery) -> Gemini Vision
-        result = await runTutor(
-          effectiveQuery,
-          previousQuestion,
-          currentProgress(),
-          conversationHistory,
-          false,
-          false,
-          options.attachedImage,
-        );
-      } else if (agentModeEnabled) {
+      if (agentModeEnabled) {
         // Run the agent first — it may handle everything via MCP tools
         const agentResult = await runTutor(effectiveQuery, previousQuestion, currentProgress(), conversationHistory, false, true);
 
@@ -1255,12 +1366,6 @@ export function CommandBar() {
         if (agentResult.computer_use && (!agentResult.steps || agentResult.steps.length === 0)) {
           result = agentResult;
         } else {
-          // Immediately speak explanation/action as autopilot starts so AI speaks without waiting for clicks to finish
-          if (shouldSpeakAfter && agentResult.summary) {
-            void speakText(agentResult.summary, getDisplaySteps(agentResult.steps || []), { includeSteps: false });
-            hasStreamedTtsRef.current = true;
-          }
-
           // Show overlay window so AI cursor is visible on screen
           await showOverlay();
 
@@ -1371,12 +1476,6 @@ export function CommandBar() {
           await logDebugMessage(`[executeTutor] (Standard) Step 1: instruction="${step.instruction}", target_ref="${step.target_ref}", target_text="${step.target_text}", hasMatch=${!!step.match}`);
         }
 
-        // Immediately start voice readback before autopilot action
-        if (shouldSpeakAfter && result.summary) {
-          void speakText(result.summary, getDisplaySteps(result.steps || []), { includeSteps: !showGuideCompletionSummary });
-          hasStreamedTtsRef.current = true;
-        }
-
         // Auto-trigger autopilot click for locator fast path results with click instructions
         const clickStep = result.steps?.find((s) => s.instruction && s.match);
         if (clickStep) {
@@ -1414,7 +1513,7 @@ export function CommandBar() {
         }
       }
       if (cancelledRunIdsRef.current.has(runId)) {
-        return null;
+        return;
       }
       const isContinuation = !!result.is_continuation;
 
@@ -1471,19 +1570,13 @@ export function CommandBar() {
       if (inputRef.current) {
         inputRef.current.style.height = 'auto';
       }
-      if (shouldSpeakAfter && !hasStreamedTtsRef.current && result.summary) {
-        void speakText(result.summary, currentGuideSteps, { includeSteps: !showGuideCompletionSummary });
-      }
-      lastTutorResultRef.current = result;
-      return result;
     } catch (error) {
       if (cancelledRunIdsRef.current.has(runId)) {
-        return null;
+        return;
       }
       await currentWindow.setFocus();
       setStatus(error instanceof Error ? error.message : String(error));
       setSteps([]);
-      return null;
     } finally {
       cancelledRunIdsRef.current.delete(runId);
       if (runIdRef.current === runId) {
@@ -1649,9 +1742,14 @@ export function CommandBar() {
     };
   }, []);
 
-  // Synchronize wake word detector state with the application state centrally
+  // Synchronize wake word detector state with the application state centrally.
+  // Guarded by ref so we only send PAUSE/RESUME on real transitions —
+  // without this every re-render spams "[WakeWord] Resumed via stdin".
+  const lastWakePausedRef = useRef<boolean | null>(null);
   useEffect(() => {
     const shouldPause = isRunning || isRecording || isSpeaking || isTtsActive;
+    if (lastWakePausedRef.current === shouldPause) return;
+    lastWakePausedRef.current = shouldPause;
     if (shouldPause) {
       void pauseWakeWord();
     } else {
@@ -1660,11 +1758,65 @@ export function CommandBar() {
   }, [isRunning, isRecording, isSpeaking, isTtsActive]);
 
 
+  const updateVoiceProvider = async (newVoiceProvider: 'assemblyai' | 'sarvam') => {
+    setVoiceProvider(newVoiceProvider);
+    voiceProviderRef.current = newVoiceProvider;
+    localStorage.setItem('blinky_voice_provider', newVoiceProvider);
+    try {
+      await saveSettings(
+        provider,
+        shortcut,
+        sarvamApiKey,
+        groqApiKey,
+        deepseekApiKey,
+        customUrl,
+        customModel,
+        customApiKey,
+        assemblyaiApiKey,
+        newVoiceProvider
+      );
+    } catch (err) {
+      console.error('Failed to save voice provider:', err);
+    }
+  };
+
+  const updateAssemblyaiApiKey = async (newKey: string) => {
+    setAssemblyaiApiKey(newKey);
+    assemblyaiApiKeyRef.current = newKey;
+    try {
+      await saveSettings(
+        provider,
+        shortcut,
+        sarvamApiKey,
+        groqApiKey,
+        deepseekApiKey,
+        customUrl,
+        customModel,
+        customApiKey,
+        newKey,
+        voiceProvider
+      );
+    } catch (err) {
+      console.error('Failed to save AssemblyAI API key:', err);
+    }
+  };
+
   const updateProvider = async (newProvider: string) => {
     const cleanProvider = newProvider.toLowerCase().trim();
     setProvider(cleanProvider);
     try {
-      await saveSettings(cleanProvider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, customModel, customApiKey);
+      await saveSettings(
+        cleanProvider,
+        shortcut,
+        sarvamApiKey,
+        groqApiKey,
+        deepseekApiKey,
+        customUrl,
+        customModel,
+        customApiKey,
+        assemblyaiApiKey,
+        voiceProvider
+      );
     } catch (err) {
       console.error('Failed to save provider:', err);
     }
@@ -1673,7 +1825,18 @@ export function CommandBar() {
   const updateShortcut = async (newShortcut: string) => {
     setShortcut(newShortcut);
     try {
-      await saveSettings(provider, newShortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, customModel, customApiKey);
+      await saveSettings(
+        provider,
+        newShortcut,
+        sarvamApiKey,
+        groqApiKey,
+        deepseekApiKey,
+        customUrl,
+        customModel,
+        customApiKey,
+        assemblyaiApiKey,
+        voiceProvider
+      );
     } catch (err) {
       console.error('Failed to save shortcut:', err);
     }
@@ -1681,8 +1844,20 @@ export function CommandBar() {
 
   const updateSarvamApiKey = async (newKey: string) => {
     setSarvamApiKey(newKey);
+    sarvamApiKeyRef.current = newKey;
     try {
-      await saveSettings(provider, shortcut, newKey, groqApiKey, deepseekApiKey, customUrl, customModel, customApiKey);
+      await saveSettings(
+        provider,
+        shortcut,
+        newKey,
+        groqApiKey,
+        deepseekApiKey,
+        customUrl,
+        customModel,
+        customApiKey,
+        assemblyaiApiKey,
+        voiceProvider
+      );
     } catch (err) {
       console.error('Failed to save Sarvam API key:', err);
     }
@@ -1691,7 +1866,18 @@ export function CommandBar() {
   const updateGroqApiKey = async (newKey: string) => {
     setGroqApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, sarvamApiKey, newKey, deepseekApiKey, customUrl, customModel, customApiKey);
+      await saveSettings(
+        provider,
+        shortcut,
+        sarvamApiKey,
+        newKey,
+        deepseekApiKey,
+        customUrl,
+        customModel,
+        customApiKey,
+        assemblyaiApiKey,
+        voiceProvider
+      );
     } catch (err) {
       console.error('Failed to save Groq API key:', err);
     }
@@ -1700,7 +1886,18 @@ export function CommandBar() {
   const updateDeepseekApiKey = async (newKey: string) => {
     setDeepseekApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, newKey, customUrl, customModel, customApiKey);
+      await saveSettings(
+        provider,
+        shortcut,
+        sarvamApiKey,
+        groqApiKey,
+        newKey,
+        customUrl,
+        customModel,
+        customApiKey,
+        assemblyaiApiKey,
+        voiceProvider
+      );
     } catch (err) {
       console.error('Failed to save DeepSeek API key:', err);
     }
@@ -1709,7 +1906,18 @@ export function CommandBar() {
   const updateCustomUrl = async (newUrl: string) => {
     setCustomUrl(newUrl);
     try {
-      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, newUrl, customModel, customApiKey);
+      await saveSettings(
+        provider,
+        shortcut,
+        sarvamApiKey,
+        groqApiKey,
+        deepseekApiKey,
+        newUrl,
+        customModel,
+        customApiKey,
+        assemblyaiApiKey,
+        voiceProvider
+      );
     } catch (err) {
       console.error('Failed to save custom URL:', err);
     }
@@ -1718,7 +1926,18 @@ export function CommandBar() {
   const updateCustomModel = async (newModel: string) => {
     setCustomModel(newModel);
     try {
-      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, newModel, customApiKey);
+      await saveSettings(
+        provider,
+        shortcut,
+        sarvamApiKey,
+        groqApiKey,
+        deepseekApiKey,
+        customUrl,
+        newModel,
+        customApiKey,
+        assemblyaiApiKey,
+        voiceProvider
+      );
     } catch (err) {
       console.error('Failed to save custom model:', err);
     }
@@ -1727,7 +1946,18 @@ export function CommandBar() {
   const updateCustomApiKey = async (newKey: string) => {
     setCustomApiKey(newKey);
     try {
-      await saveSettings(provider, shortcut, sarvamApiKey, groqApiKey, deepseekApiKey, customUrl, customModel, newKey);
+      await saveSettings(
+        provider,
+        shortcut,
+        sarvamApiKey,
+        groqApiKey,
+        deepseekApiKey,
+        customUrl,
+        customModel,
+        newKey,
+        assemblyaiApiKey,
+        voiceProvider
+      );
     } catch (err) {
       console.error('Failed to save custom API key:', err);
     }
@@ -1837,8 +2067,8 @@ export function CommandBar() {
 
   // Listen for remote mobile queries: executes with native PC Blinky tutor & autopilot pipeline
   useEffect(() => {
-    const unlisten = listen<{ requestId: string; query: string; attachedImage?: string }>('blinky://mobile-query', async (event) => {
-      const { requestId, query, attachedImage } = event.payload;
+    const unlisten = listen<{ requestId: string; query: string }>('blinky://mobile-query', async (event) => {
+      const { requestId, query } = event.payload;
       if (!query || !query.trim()) return;
       const cleanQuery = query.trim();
       setQuestion(cleanQuery);
@@ -1846,23 +2076,18 @@ export function CommandBar() {
         await emit('blinky://mobile-status', {
           requestId: requestId || 'unknown',
           status: 'processing',
-          data: {
-            message: attachedImage ? 'Inspecting photo with Gemini Vision...' : `Executing '${cleanQuery}' with AI companion...`,
-            percent: 40,
-          },
+          data: { message: `Executing '${cleanQuery}' with AI companion...`, percent: 40 },
         });
 
-        const tutorResult = await executeTutor(cleanQuery, false, { resetProgress: true, attachedImage });
+        await executeTutor(cleanQuery, false, { resetProgress: true });
 
-        const summary = tutorResult?.summary || statusRef.current || `Completed: ${cleanQuery}`;
-        const screenshotB64 = tutorResult?.screenshot_b64 || (tutorResult as any)?.screenshot_b64 || lastTutorResultRef.current?.screenshot_b64;
+        const summary = statusRef.current || `Completed: ${cleanQuery}`;
         await emit('blinky://mobile-status', {
           requestId: requestId || 'unknown',
           status: 'success',
           data: {
             response: summary,
             steps: currentGuideStepsRef.current,
-            screenshot_b64: screenshotB64,
           },
         });
       } catch (err: any) {
@@ -1957,12 +2182,19 @@ export function CommandBar() {
       let height = formRect.height;
 
       if (showSettings && dropdownRef.current) {
-        const dropdownRect = dropdownRef.current.getBoundingClientRect();
-        height = Math.max(height, 52 + dropdownRect.height);
+        const dd = dropdownRef.current;
+        // Use scrollHeight (full content) instead of the capped visible rect,
+        // otherwise the window never grows enough and the menu gets cut off.
+        const dropdownHeight = Math.max(dd.scrollHeight, dd.getBoundingClientRect().height);
+        height = Math.max(height, 52 + dropdownHeight);
       }
 
       if (showWaModal) {
         height = Math.max(height, 420);
+      }
+
+      if (showMobileModal) {
+        height = Math.max(height, 460);
       }
 
       const targetHeight = Math.ceil(height + 40);
@@ -1970,16 +2202,22 @@ export function CommandBar() {
     };
 
     resizeWindow();
+    // Re-measure after layout/fonts settle so the full menu height is used.
+    const raf = requestAnimationFrame(resizeWindow);
 
     const observer = new ResizeObserver(() => {
       resizeWindow();
     });
 
     observer.observe(formElement);
+    if (showSettings && dropdownRef.current) {
+      observer.observe(dropdownRef.current);
+    }
     return () => {
+      cancelAnimationFrame(raf);
       observer.disconnect();
     };
-  }, [showSettings, showWaModal, waStatus]);
+  }, [showSettings, showWaModal, showMobileModal, waStatus, provider, voiceProvider]);
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setQuestion(event.target.value);
@@ -2156,6 +2394,15 @@ export function CommandBar() {
 
           <div className="command-actions">
             <button
+              type="button"
+              className={`icon-action ${showMobileModal ? 'active' : ''}`}
+              aria-label="Connect Mobile"
+              title="Connect Mobile (show QR)"
+              onClick={openMobileModal}
+            >
+              <QrCode size={18} />
+            </button>
+            <button
               ref={toggleButtonRef}
               type="button"
               className={`icon-action command-settings-toggle ${showSettings ? 'active' : ''}`}
@@ -2287,15 +2534,56 @@ export function CommandBar() {
             )}
 
             <div className="dropdown-section">
-              <h4>Sarvam AI API Key</h4>
-              <input
-                type="password"
-                className="settings-input"
-                value={sarvamApiKey}
-                onChange={(e) => updateSarvamApiKey(e.target.value)}
-                placeholder="Paste API Key..."
-              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                <h4>Voice Provider</h4>
+                <span style={{ fontSize: '10px', background: 'rgba(255, 110, 95, 0.2)', color: '#ff8b6a', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                  {voiceProvider === 'assemblyai' ? 'Universal-3 Pro' : 'Indic Voice'}
+                </span>
+              </div>
+              <div className="voice-provider-tabs">
+                <button
+                  type="button"
+                  className={`voice-provider-tab ${voiceProvider === 'assemblyai' ? 'active aai' : ''}`}
+                  onClick={() => void updateVoiceProvider('assemblyai')}
+                >
+                  <span>AssemblyAI</span>
+                </button>
+                <button
+                  type="button"
+                  className={`voice-provider-tab ${voiceProvider === 'sarvam' ? 'active' : ''}`}
+                  onClick={() => void updateVoiceProvider('sarvam')}
+                >
+                  <span>Sarvam AI</span>
+                </button>
+              </div>
             </div>
+
+            {voiceProvider === 'assemblyai' ? (
+              <div className="dropdown-section">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                  <h4>AssemblyAI API Key</h4>
+                  <span style={{ fontSize: '9.5px', color: 'rgba(255, 255, 255, 0.5)' }}>Universal-3 Pro</span>
+                </div>
+                <input
+                  type="password"
+                  className="settings-input"
+                  value={assemblyaiApiKey}
+                  onChange={(e) => void updateAssemblyaiApiKey(e.target.value)}
+                  placeholder="Paste AssemblyAI API Key..."
+                />
+              </div>
+            ) : (
+              <div className="dropdown-section">
+                <h4>Sarvam AI API Key</h4>
+                <input
+                  type="password"
+                  className="settings-input"
+                  value={sarvamApiKey}
+                  onChange={(e) => void updateSarvamApiKey(e.target.value)}
+                  placeholder="Paste Sarvam API Key..."
+                />
+              </div>
+            )}
 
             {transportInfo?.mode === 'release' && transportInfo.certificate_pin && (
               <div className="dropdown-section">
@@ -2366,8 +2654,8 @@ export function CommandBar() {
             <div className="recipe-prompt-preview">
               {recipePrompt.preview.length > 0
                 ? recipePrompt.preview.slice(0, 6).map((step, i) => (
-                    <span key={i} className="recipe-prompt-step">{step}</span>
-                  ))
+                  <span key={i} className="recipe-prompt-step">{step}</span>
+                ))
                 : <span className="recipe-prompt-step">No reusable steps</span>}
             </div>
             <div className="recipe-prompt-actions">
@@ -2454,7 +2742,19 @@ export function CommandBar() {
               rows={1}
               value={question}
               onChange={handleInputChange}
-              placeholder={isRecording ? "Listening... click mic to stop (Win+Space)" : isTranscribing ? "Transcribing voice..." : "Ask anything... (Win+Space to speak)"}
+              placeholder={
+                isRecording
+                  ? assemblyaiApiKey || assemblyaiApiKeyRef.current
+                    ? assemblyaiVoiceMode === 'agent'
+                      ? "⚡ AssemblyAI Voice Agent listening... (Win+Space)"
+                      : "🎙️ AssemblyAI Realtime STT listening... (Win+Space)"
+                    : "Listening... click mic to stop (Win+Space)"
+                  : isTranscribing
+                    ? "Transcribing voice with Universal-3 Pro..."
+                    : assemblyaiApiKey || assemblyaiApiKeyRef.current
+                      ? `Ask anything or speak (Win+Space) • AssemblyAI ${assemblyaiVoiceMode === 'agent' ? 'Voice Agent' : 'Realtime STT'}`
+                      : "Ask anything... (Win+Space to speak)"
+              }
               disabled={isTranscribing}
               autoFocus
               onKeyDown={(event) => {
@@ -2517,6 +2817,18 @@ export function CommandBar() {
                 >
                   <Bot size={16} />
                 </button>
+                <button
+                  type="button"
+                  className="command-agent-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void openNotebookWindow();
+                  }}
+                  disabled={isRunning || isTranscribing}
+                  title="Open OKF Notebook Hub"
+                >
+                  <BookOpen size={16} />
+                </button>
               </div>
               <div className="command-input-actions-right">
                 <button
@@ -2537,20 +2849,6 @@ export function CommandBar() {
                     <Mic size={16} />
                   )}
                 </button>
-                {status && status !== defaultStatus && sarvamApiKey && (
-                  <button
-                    type="button"
-                    className={`command-readaloud-btn ${isSpeaking ? 'speaking' : ''}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      speakResponse();
-                    }}
-                    disabled={isTranscribing}
-                    title={isSpeaking ? "Stop reading aloud" : "Read aloud response"}
-                  >
-                    <Volume2 size={16} />
-                  </button>
-                )}
                 <button
                   className={`command-send ${isRunning ? 'stopping' : ''}`}
                   type={isRunning ? 'button' : 'submit'}
@@ -2590,19 +2888,6 @@ export function CommandBar() {
                         {preprocessMarkdown(status)}
                       </ReactMarkdown>
                     </span>
-                    {steps.length > 0 && sarvamApiKey && (
-                      <button
-                        type="button"
-                        className={`command-speak-btn ${isSpeaking ? 'speaking' : ''}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          speakResponse();
-                        }}
-                        title={isSpeaking ? "Stop speaking" : "Speak response"}
-                      >
-                        <Volume2 size={16} />
-                      </button>
-                    )}
                   </div>
                 </div>
               )}
@@ -2727,6 +3012,89 @@ export function CommandBar() {
                     disabled={isWaActionLoading}
                   >
                     Retry Connection
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showMobileModal && (
+        <div className="wa-modal-backdrop" onClick={() => setShowMobileModal(false)}>
+          <div className="wa-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="wa-modal-header">
+              <h3>Connect Mobile</h3>
+              <button
+                type="button"
+                className="wa-modal-close"
+                onClick={() => setShowMobileModal(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="wa-modal-content">
+              {pairingLoading && !pairingPayload && (
+                <div className="wa-disconnected">
+                  <div className="wa-loader">
+                    <Loader2 className="spin" size={16} />
+                    <span>Preparing pairing code...</span>
+                  </div>
+                </div>
+              )}
+
+              {pairingError && (
+                <div className="wa-error-container">
+                  <p className="wa-error-msg">{pairingError}</p>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-retry"
+                    onClick={() => loadPairingPayload()}
+                    disabled={pairingLoading}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {pairingPayload && !pairingError && (
+                <div className="wa-qr-container">
+                  <p className="wa-scan-instruction">Scan with the Blinky mobile app (QR tab):</p>
+                  {pairingPayload.ips.length > 1 && (
+                    <div className="pairing-ip-row">
+                      <span className="wa-help-text">PC IP:</span>
+                      <select
+                        className="pairing-ip-select"
+                        value={pairingIp}
+                        onChange={(e) => setPairingIp(e.target.value)}
+                      >
+                        {pairingPayload.ips.map((ip) => (
+                          <option key={ip} value={ip}>{ip}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className="wa-qr-canvas-wrapper">
+                    <canvas ref={mobileCanvasRef} className="wa-qr-canvas" />
+                    {pairingLoading && (
+                      <div className="wa-qr-overlay">
+                        <Loader2 className="spin" size={24} />
+                      </div>
+                    )}
+                  </div>
+                  {pairingPayload.ips.length === 0 ? (
+                    <p className="wa-error-msg">No LAN address detected. Enter the PC IP manually in the app (see ./setup-mobile.sh output).</p>
+                  ) : (
+                    <p className="wa-help-text">Or enter manually: IP {pairingIp} :{pairingPayload.ws_port}, then Establish Link.</p>
+                  )}
+                  <p className="wa-help-text pairing-warning">Anyone who scans this can control this PC on your LAN.</p>
+                  <button
+                    type="button"
+                    className="wa-btn wa-btn-cancel"
+                    onClick={handleRegenerateToken}
+                    disabled={pairingLoading}
+                  >
+                    {pairingLoading ? <Loader2 className="spin" size={14} /> : 'Regenerate code'}
                   </button>
                 </div>
               )}

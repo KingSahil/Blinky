@@ -363,7 +363,7 @@ pub fn open_file_on_pc(raw_path: &str) -> Result<(), String> {
     }
 }
 
-pub fn read_file_base64(raw_path: &str, max_bytes: usize) -> Result<(String, String, u64), String> {
+pub fn read_file_base64(raw_path: &str, max_bytes: u64) -> Result<(String, String, u64), String> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
 
     let path = Path::new(raw_path.trim());
@@ -375,11 +375,11 @@ pub fn read_file_base64(raw_path: &str, max_bytes: usize) -> Result<(String, Str
     }
     let metadata = fs::metadata(path).map_err(|e| format!("Cannot read file metadata: {}", e))?;
     let size = metadata.len();
-    if size > max_bytes as u64 {
+    if size > max_bytes {
         return Err(format!(
-            "File size ({} MB) exceeds mobile transfer limit of {} MB",
-            size / (1024 * 1024),
-            max_bytes / (1024 * 1024)
+            "File size ({}) exceeds mobile transfer limit of {}",
+            crate::file_transfer::human_bytes(size),
+            crate::file_transfer::human_bytes(max_bytes)
         ));
     }
     let bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
@@ -391,4 +391,3 @@ pub fn read_file_base64(raw_path: &str, max_bytes: usize) -> Result<(String, Str
         .to_string();
     Ok((name, b64, size))
 }
-

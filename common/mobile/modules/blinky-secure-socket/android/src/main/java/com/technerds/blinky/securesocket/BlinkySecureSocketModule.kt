@@ -212,7 +212,8 @@ class BlinkySecureSocketModule : Module() {
           connection.requestMethod = "POST"
           connection.doOutput = true
           connection.connectTimeout = 30_000
-          connection.readTimeout = 300_000
+          // The final response may include a cross-drive copy on the PC.
+          connection.readTimeout = if (offset + chunk.size >= totalSize) 3_600_000 else 300_000
           connection.setRequestProperty("Authorization", "Bearer $token")
           connection.setRequestProperty("Upload-Offset", offset.toString())
           connection.setRequestProperty("Content-Type", "application/octet-stream")

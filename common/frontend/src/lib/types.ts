@@ -46,7 +46,6 @@ export interface TutorResult {
     screen_height?: number;
     path: string;
   };
-  screenshot_b64?: string;
   elapsed_ms: number;
   provider?: string;
   warnings: string[];

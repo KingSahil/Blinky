@@ -406,25 +406,6 @@ def test_get_fast_video_encoder_args():
     assert "-preset" in args
 
 
-def test_natural_language_trim_and_referenced_files():
-    from tools.aicut_tool import resolve_aicut_request, _extract_trim_times
-
-    # 1. Test duration extraction
-    assert _extract_trim_times("trim to 1 minute") == (0.0, 60.0)
-    assert _extract_trim_times("trim to 30 seconds") == (0.0, 30.0)
-    assert _extract_trim_times("trim video from 10 to 40") == (10.0, 40.0)
-    assert _extract_trim_times("cut first 15s") == (0.0, 15.0)
-    assert _extract_trim_times("trim dance.mp4 to 30 seconds") == (0.0, 30.0)
-
-    # 2. Test query resolution with referenced files
-    res = resolve_aicut_request("[Referenced Files: hw2soon.mp4] trim to 1 minute")
-    assert res is not None
-    assert res["action"] == "trim"
-    assert res["start_seconds"] == 0.0
-    assert res["end_seconds"] == 60.0
-    assert res["video_path"] == "hw2soon.mp4"
-
-
 def test_file_transfer_aicut_multi_file_merge(tmp_path, monkeypatch):
     import os
     from file_transfer_aicut import run_transfer_edit
@@ -434,8 +415,8 @@ def test_file_transfer_aicut_multi_file_merge(tmp_path, monkeypatch):
     monkeypatch.setenv("BLINKY_TRANSFER_OUTPUT_DIR", str(tmp_path))
     monkeypatch.setenv("BLINKY_TRANSFER_ID", "test-transfer-123")
 
-    # Run transfer edit with 2 videos (using dance.mp4 twice) and merge instruction
-    res = run_transfer_edit("", dance_path, input_paths=[dance_path, dance_path])
+    # Run transfer edit with 2 videos (using dance.mp4 twice) and an explicit merge instruction
+    res = run_transfer_edit("merge these videos", dance_path, input_paths=[dance_path, dance_path])
     assert res.get("success") is True
     assert res.get("action") == "merge"
     assert "output_path" in res
@@ -549,6 +530,5 @@ def test_format_aicut_summary_with_aligned_captions():
     assert "Styled Subtitles Burned" in summary
     assert "42" in summary
     assert "Automatically synced to audio speech" in summary
-
 
 

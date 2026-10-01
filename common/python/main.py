@@ -16,14 +16,6 @@ if _COMMON_PY not in sys.path:
 
 # Add platform-specific python directory with higher priority
 if sys.platform == "win32":
-    try:
-        import ctypes
-        _user32 = ctypes.windll.user32
-        _hdesk = _user32.OpenDesktopW("Default", 0, False, 0x01FF)
-        if _hdesk:
-            _user32.SetThreadDesktop(_hdesk)
-    except Exception:
-        pass
     _PLATFORM_PY = str(_SCRIPT_DIR.parent.parent / "windows" / "python")
 else:
     _PLATFORM_PY = str(_SCRIPT_DIR.parent.parent / "linux" / "python")
@@ -264,8 +256,11 @@ def is_web_research_question(question: str) -> bool:
     research_indicators = [
         "contact number", "phone number", "phone numbers", "contact details", "address", "addresses",
         "best restaurant", "best restaurants", "best cafe", "best cafes", "top rated", "recommendations for",
-        "what is the price", "how much is", "weather in", "weather today", "weather forecast",
-        "who won", "latest news", "stock price", "reviews of", "reviews for"
+        "best ", "top ", "cheapest ", "compare ", "comparison ", "vs ", " versus ",
+        "what is the price", "how much is", "how much does", "price of ", "cost of ",
+        "weather in", "weather today", "weather forecast",
+        "who won", "latest news", "stock price", "reviews of", "reviews for",
+        "buy ", "purchase ", "shopping ", "deal ", "discount ", "offer ",
     ]
     return any(ind in norm for ind in research_indicators)
 
@@ -278,15 +273,13 @@ def run(
     web_search_enabled: bool = False,
     agent_mode: bool = False,
     ignored_rects: list[dict] | None = None,
-    attached_image: str | None = None,
 ) -> dict:
     """
     RULE: Screenshots/OCR are ONLY taken when BOTH web_search_enabled=False
     AND agent_mode=False. The priority order is:
-      1. attached_image    → Gemini Vision multimodal analysis (no screen OCR)
-      2. web_search_enabled → SearXNG pipeline (no OCR, no screenshots)
-      3. agent_mode        → MCP desktop automation (no OCR, no screenshots)
-      4. default           → vision pipeline with screenshots + OCR
+      1. web_search_enabled → SearXNG pipeline (no OCR, no screenshots)
+      2. agent_mode        → MCP desktop automation (no OCR, no screenshots)
+      3. default           → vision pipeline with screenshots + OCR
     """
     started = time.perf_counter()
     warnings: list[str] = []
@@ -295,33 +288,26 @@ def run(
     question = question.strip()
     question = re.sub(r"^(?:hey\s+)?blinky[\s,.:;!?]*", "", question, flags=re.IGNORECASE).strip()
 
-    # PATH 0: Attached Image (Mobile Camera/Gallery or Desktop Upload) -> Gemini Vision
-    if attached_image:
-        LOGGER.info("Attached image provided (%d chars) — analyzing with Gemini Vision", len(attached_image))
-        _emit_status("analyzing", "Inspecting photo with Gemini Vision...")
-        try:
-            from ai.gemini_client import ask_gemini_vision
-            clean_question = re.sub(r"^\[Referenced Files:[^\]]+\]\s*", "", question, flags=re.IGNORECASE).strip()
-            prompt = clean_question or "What is in this image? Describe what you see in detail."
-            vision_result = ask_gemini_vision(prompt=prompt, image_input=attached_image)
-            answer_text = vision_result.get("text", "")
-            return {
-                "summary": answer_text,
-                "steps": [],
-                "warnings": warnings,
-                "screenshot_b64": attached_image,
-                "computer_use": True,
-            }
-        except Exception as e:
-            LOGGER.exception("Gemini Vision failed on attached image")
-            warnings.append(f"Gemini Vision error: {e}")
-            return {
-                "summary": f"Could not analyze image with Gemini Vision: {e}",
-                "steps": [],
-                "warnings": warnings,
-                "screenshot_b64": attached_image,
-                "computer_use": True,
-            }
+    # Deterministic intercept for RPC calls passed via question prefix
+    if question.startswith("[NOTEBOOK_RPC:"):
+        match = re.match(r"^\[NOTEBOOK_RPC:([^\]]+)\]\s*(.*)$", question, flags=re.DOTALL)
+        if match:
+            rpc_action = match.group(1).strip()
+            params_str = match.group(2).strip()
+            try:
+                rpc_params = json.loads(params_str) if params_str else {}
+            except Exception:
+                rpc_params = {}
+            res = handle_notebook_rpc(rpc_action, rpc_params)
+            return {"summary": json.dumps(res), "steps": [], "warnings": warnings}
+
+    # Deterministic intercept for Notebook Intelligence queries
+    notebook_match = re.match(r"^\[NOTEBOOK:([^\]]+)\]\s*(.*)$", question, flags=re.DOTALL)
+    if notebook_match:
+        nb_id = notebook_match.group(1).strip()
+        actual_query = notebook_match.group(2).strip()
+        LOGGER.info(f"Deterministic routing to Notebook Intelligence for notebook_id={nb_id}")
+        return run_notebook_intelligence(nb_id, actual_query, started, warnings, use_vector_search=True)
 
     if ignored_rects:
         from utils.window import set_ignored_overlay_rects
@@ -375,6 +361,14 @@ def run(
     if intent == "WEB_SEARCH" or is_web_research_question(question):
         LOGGER.info("Automatically enabling web search mode for classified intent: WEB_SEARCH / research query")
         web_search_enabled = True
+    elif intent == "NOTEBOOK":
+        LOGGER.info("Routing to Notebook Intelligence engine for intent: NOTEBOOK")
+        notebook_id = extracted_params.get("notebook_id") or "default"
+        return run_notebook_intelligence(notebook_id, question, started, warnings)
+    elif intent == "PDF_ENGINE":
+        LOGGER.info("Routing to Custom PDF Engine for intent: PDF_ENGINE")
+        action = str(extracted_params.get("pdf_action") or "convert").lower()
+        return run_pdf_tool(action, extracted_params, started, warnings)
     elif intent == "VIDEO_EDIT":
         LOGGER.info("Routing to AiCut video editor for intent: VIDEO_EDIT")
         return run_aicut_tool(extracted_params, question, started, warnings)
@@ -1010,6 +1004,21 @@ def classify_request(
             }
     except Exception as exc:
         LOGGER.debug("Fast-path WhatsApp resolution failed: %s", exc)
+    # Fast-path Screenshot / Screen capture
+    cleaned_lower = question.lower().strip().rstrip("?.!,;:")
+    if any(k in cleaned_lower for k in {
+        "capture screenshot", "take screenshot", "get screenshot", 
+        "capture current pc screen", "capture screen", "pc screenshot",
+        "take a screenshot", "screenshot of current pc screen", "take a screenshot of my screen",
+        "take a screenshot of current pc screen", "screenshot current pc screen",
+    }) or cleaned_lower in {"screenshot", "take screenshot", "capture screen", "screen capture"}:
+        return {
+            "intent": "SCREENSHOT",
+            "extracted_params": {},
+            "needs_screen": False,
+            "is_continuation": False,
+        }
+
     try:
         from tools.esp32_light_tool import resolve_light_request
         light_match = resolve_light_request(question)
@@ -1022,36 +1031,19 @@ def classify_request(
             }
     except Exception as exc:
         LOGGER.debug("Fast-path ESP32 light resolution failed: %s", exc)
-
-
-    # Fast-path Screenshot / Screen capture
-    cleaned_lower = question.lower().strip().rstrip("?.!,;:")
-    if any(k in cleaned_lower for k in {
-        "capture screenshot", "take screenshot", "get screenshot", 
-        "capture current pc screen", "capture screen", "pc screenshot",
-        "take a screenshot", "screenshot of current pc screen", "take a screenshot of my screen",
-        "capture pc screen", "screenshot"
-    }):
-        return {
-            "intent": "SCREENSHOT",
-            "needs_screen": False,
-            "is_continuation": False,
-            "extracted_params": {},
-        }
-
-    # Fast-path ESP32 Smart Light
     try:
-        from tools.esp32_light_tool import resolve_esp32_light_request
-        esp32_match = resolve_esp32_light_request(question)
-        if esp32_match:
+        from tools.pdf_tool import resolve_pdf_request
+        pdf_match = resolve_pdf_request(question)
+        if pdf_match:
             return {
-                "intent": "ESP32_LIGHT",
+                "intent": "PDF_ENGINE",
                 "needs_screen": False,
                 "is_continuation": False,
-                "extracted_params": esp32_match,
+                "extracted_params": pdf_match,
             }
     except Exception as exc:
-        LOGGER.debug("Fast-path ESP32 light resolution failed: %s", exc)
+        LOGGER.debug("Fast-path PDF resolution failed: %s", exc)
+
 
     try:
         payload = ask_text_model(build_preflight_prompt(question, previous_question, conversation_history))
@@ -1209,6 +1201,33 @@ def run_whatsapp_tool(
     }
 
 
+def run_esp32_light_tool(
+    params: dict,
+    started: float,
+    warnings: list[str],
+) -> dict:
+    """Execute ESP32 Light command and return a Blinky-formatted result."""
+    from tools.esp32_light_tool import handle_request
+    _emit_status("esp32_light", "Controlling ESP32 physical light...")
+    res = handle_request(params)
+    if res.get("success"):
+        summary = res.get("message", "Light updated successfully.")
+    else:
+        summary = f"Failed to control light: {res.get('error', 'ESP32 unreachable')}"
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": summary,
+        "steps": [],
+        "active_app": {"title": "", "process": "", "supported": False},
+        "ocr": {"count": 0, "items": []},
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+        "is_continuation": False,
+    }
+
+
 def run_screenshot_tool(started: float, warnings: list[str]) -> dict:
     """Capture desktop screenshot immediately and return base64 without screen scanning/OCR."""
     import base64
@@ -1239,21 +1258,25 @@ def run_screenshot_tool(started: float, warnings: list[str]) -> dict:
     }
 
 
-def run_esp32_light_tool(
+def run_pdf_tool(
+    action: str,
     params: dict,
     started: float,
     warnings: list[str],
 ) -> dict:
-    """Execute ESP32 Light command and return a Blinky-formatted result."""
-    from tools.esp32_light_tool import handle_request
-    _emit_status("esp32_light", "Controlling ESP32 physical light...")
-    res = handle_request(params)
-    if res.get("success"):
-        summary = res.get("message", "Light updated successfully.")
-    else:
-        summary = f"Failed to control light: {res.get('error', 'ESP32 unreachable')}"
-    if "warning" in res:
-        warnings.append(res["warning"])
+    """Execute Custom PDF Engine action and return a Blinky-formatted result."""
+    from tools.pdf_tool import handle_pdf_action
+    _emit_status("pdf_engine", f"Executing PDF action: {action}...")
+    try:
+        res = handle_pdf_action(action, params)
+        if res.get("success"):
+            output = res.get("output_path") or res.get("output_csv") or "PDF operation completed."
+            summary = f"PDF Action '{action}' completed successfully: {output}"
+        else:
+            summary = f"PDF Action '{action}' failed: {res.get('error', 'Unknown error')}"
+    except Exception as exc:
+        summary = f"PDF Action error: {exc}"
+
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     return {
         "summary": summary,
@@ -1310,6 +1333,167 @@ def run_web_intelligence(
             "sources": result.get("sources", []),
         },
     }
+
+
+def run_notebook_intelligence(
+    notebook_id: str,
+    question: str,
+    started: float,
+    warnings: list[str],
+    use_vector_search: bool = False,
+) -> dict:
+    from notebooks.notebook_manager import NotebookManager
+    from notebooks.okf_context_builder import build_okf_prompt_context
+    from notebooks.vector_store import VectorStore
+    from ai.client import ask_text_model
+
+    _emit_status("notebook", "Querying Notebook grounded context...")
+    manager = NotebookManager()
+    notebook = manager.get_notebook(notebook_id)
+    if not notebook:
+        if notebook_id == "default":
+            notebook = manager.create_notebook("Default Knowledge Hub", "Personal research notes and uploaded documents")
+            notebook["id"] = "default"
+            manager.data["default"] = notebook
+            manager._save_store()
+        else:
+            return {
+                "summary": f"Notebook '{notebook_id}' not found.",
+                "steps": [],
+                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                "warnings": warnings + [f"Notebook {notebook_id} not found"],
+            }
+
+    active_sources = [s for s in notebook.get("sources", []) if s.get("active", True)]
+    if not active_sources:
+        return {
+            "summary": "I don't have any active document sources in this Knowledge Hub yet. Please use '+ Add Source' on the left to upload your PDF, Markdown, or text files so I can ground my answers directly on them!",
+            "steps": [],
+            "source_count": 0,
+            "use_vector_search": use_vector_search,
+            "elapsed_ms": int((time.perf_counter() - started) * 1000),
+            "provider": get_provider_label(),
+            "warnings": warnings,
+        }
+
+    vector_matches = None
+    if use_vector_search:
+        try:
+            v_store = VectorStore()
+            vector_matches = v_store.search_top_k(notebook_id, question, top_k=5)
+        except Exception as e:
+            LOGGER.warning(f"Vector search failed, falling back: {e}")
+            vector_matches = None
+
+    context_payload = build_okf_prompt_context(notebook, question, vector_matches=vector_matches)
+    system_prompt = context_payload["system_prompt"]
+    user_prompt = context_payload["user_prompt"]
+
+    try:
+        response = ask_text_model(f"{system_prompt}\n\n{user_prompt}")
+        if isinstance(response, dict):
+            if response.get("answer"):
+                answer = response["answer"]
+            elif response.get("response"):
+                answer = response["response"]
+            elif response.get("summary"):
+                answer = response["summary"]
+            else:
+                # Convert raw dictionary fields into formatted Markdown
+                lines = []
+                for k, v in response.items():
+                    title = k.replace("_", " ").title()
+                    if k.lower() == "source":
+                        lines.append(f"**Source:** `[Source: {v}]`")
+                    elif isinstance(v, list):
+                        lines.append(f"### {title}")
+                        for item in v:
+                            lines.append(f"- {item}")
+                    elif isinstance(v, dict):
+                        lines.append(f"### {title}")
+                        for sub_k, sub_v in v.items():
+                            lines.append(f"- **{sub_k.replace('_', ' ').title()}:** {sub_v}")
+                    else:
+                        lines.append(f"**{title}:** {v}")
+                answer = "\n\n".join(lines)
+        else:
+            answer = str(response)
+    except Exception as exc:
+        answer = f"Error processing notebook query: {exc}"
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": str(answer).strip(),
+        "steps": [],
+        "source_count": context_payload["source_count"],
+        "use_vector_search": use_vector_search,
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+    }
+
+
+def handle_notebook_rpc(action: str, params: dict) -> dict:
+    """Handle RPC actions for Notebook management and mobile API Key sync."""
+    from notebooks.notebook_manager import NotebookManager
+    manager = NotebookManager()
+
+    if action == "notebook_create":
+        title = params.get("title", "Untitled Notebook")
+        description = params.get("description", "")
+        return {"success": True, "notebook": manager.create_notebook(title, description)}
+
+    elif action == "notebook_list":
+        return {"success": True, "notebooks": manager.list_notebooks()}
+
+    elif action == "notebook_get":
+        nb_id = params.get("notebook_id", "")
+        nb = manager.get_notebook(nb_id)
+        return {"success": nb is not None, "notebook": nb}
+
+    elif action == "notebook_add_source":
+        nb_id = params.get("notebook_id", "")
+        source_name = params.get("source_name", "document.txt")
+        content = params.get("content", "")
+        file_type = params.get("file_type", "txt")
+        res = manager.add_source_to_notebook(nb_id, source_name, content, file_type=file_type)
+        return {"success": res is not None, "source": res}
+
+    elif action == "notebook_toggle_source":
+        nb_id = params.get("notebook_id", "")
+        source_id = params.get("source_id", "")
+        active = bool(params.get("active", True))
+        ok = manager.toggle_source_active(nb_id, source_id, active)
+        return {"success": ok}
+
+    elif action == "notebook_delete":
+        nb_id = params.get("notebook_id", "")
+        ok = manager.delete_notebook(nb_id)
+        return {"success": ok}
+
+    elif action == "sync_api_keys":
+        import os
+        import time
+        import base64
+        import json
+        raw_keys = {
+            "groq_key": os.environ.get("GROQ_API_KEY", ""),
+            "openai_key": os.environ.get("OPENAI_API_KEY", ""),
+            "gemini_key": os.environ.get("GEMINI_API_KEY", ""),
+            "deepseek_key": os.environ.get("DEEPSEEK_API_KEY", ""),
+        }
+        json_bytes = json.dumps(raw_keys).encode("utf-8")
+        encoded_token = base64.b64encode(json_bytes).decode("utf-8")
+        return {
+            "success": True,
+            "keys": raw_keys,
+            "encoded_payload": encoded_token,
+            "synced_at": time.time(),
+        }
+
+    return {"success": False, "error": f"Unknown notebook action: {action}"}
+
+
 
 
 def resolve_locator_fast_path(question: str, screenshot, target_pid: int | None, warnings: list[str], started: float) -> dict | None:
@@ -1879,20 +2063,10 @@ def main() -> None:
         web_search_enabled = bool(payload.get("web_search_enabled", False))
         agent_mode = bool(payload.get("agent_mode", False))
         ignored_rects = payload.get("ignored_rects")
-        attached_image = payload.get("attached_image") or payload.get("attachedImage")
-        if not question and not attached_image:
-            raise ValueError("Question or attached image is required.")
+        if not question:
+            raise ValueError("Question is required.")
 
-        result = run(
-            question,
-            previous_question,
-            progress,
-            conversation_history,
-            web_search_enabled,
-            agent_mode,
-            ignored_rects,
-            attached_image=attached_image,
-        )
+        result = run(question, previous_question, progress, conversation_history, web_search_enabled, agent_mode, ignored_rects)
         print(json.dumps(result, ensure_ascii=True))
     except Exception as exc:
         LOGGER.exception("Worker failed")

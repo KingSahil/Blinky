@@ -75,7 +75,7 @@ export const SentinelModal: React.FC<SentinelModalProps> = ({
 
   const hasBattery = systemInfo?.battery?.has_battery;
   const batteryPercent = systemInfo?.battery?.percent ?? null;
-  const isCharging = systemInfo?.battery?.is_charging || systemInfo?.battery?.power_plugged || false;
+  const isCharging = systemInfo?.battery?.is_charging ?? false;
   const batteryStatusText = systemInfo?.battery?.status || 'AC Mains Nominal';
 
   return (
@@ -258,8 +258,22 @@ export const SentinelModal: React.FC<SentinelModalProps> = ({
                   style={[styles.actionTile, styles.tileWake]}
                   onPress={() => {
                     triggerHaptic('heavy');
-                    if (isConnected) {
-                      onTriggerPowerCommand('unlock', 'Unlock Workstation');
+                    if (isLocked && isConnected) {
+                      Alert.alert(
+                        'Workstation Locked',
+                        'Your host PC is locked. Would you like to unlock it or dispatch a Wake-on-LAN packet?',
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Unlock Workstation',
+                            onPress: () => onTriggerPowerCommand('unlock', 'Unlock Workstation'),
+                          },
+                          {
+                            text: 'Send WoL Burst',
+                            onPress: () => onSendWakeOnLan(),
+                          },
+                        ]
+                      );
                     } else {
                       onSendWakeOnLan();
                     }
