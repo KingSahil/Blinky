@@ -33,7 +33,8 @@ export type FileTransferMessage = {
   message?: string;
 };
 
-const RELEASE_TRANSPORT = process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE === 'release';
+const isProduction = typeof __DEV__ !== 'undefined' ? !__DEV__ : process.env.NODE_ENV === 'production';
+const RELEASE_TRANSPORT = isProduction || process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE === 'release';
 
 function loadNativeSecureSocketModule(): NativeSecureSocketModule | null {
   try {

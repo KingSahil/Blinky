@@ -26,14 +26,25 @@ export function parsePairingQr(data: string): QrPairingPayload | null {
     const obj = JSON.parse(text);
     if (typeof obj !== 'object' || obj === null) return null;
     if (typeof obj.ip !== 'string' || !obj.ip.trim()) return null;
+
+    const pin = typeof obj.pin === 'string' && obj.pin.trim()
+      ? obj.pin.trim()
+      : typeof obj.certificate_pin === 'string' && obj.certificate_pin.trim()
+      ? obj.certificate_pin.trim()
+      : null;
+
+    const token = typeof obj.token === 'string' && obj.token.trim()
+      ? obj.token.trim()
+      : undefined;
+
     return {
       v: typeof obj.v === 'number' ? obj.v : 1,
       ip: obj.ip.trim(),
-      ws: typeof obj.ws === 'number' ? obj.ws : 9001,
-      disc: typeof obj.disc === 'number' ? obj.disc : 9004,
-      token: typeof obj.token === 'string' ? obj.token : undefined,
-      pin: typeof obj.pin === 'string' ? obj.pin : null,
-      mode: typeof obj.mode === 'string' ? obj.mode : undefined,
+      ws: typeof obj.ws === 'number' ? obj.ws : (typeof obj.ws_port === 'number' ? obj.ws_port : 9001),
+      disc: typeof obj.disc === 'number' ? obj.disc : (typeof obj.discovery_port === 'number' ? obj.discovery_port : 9004),
+      token,
+      pin,
+      mode: typeof obj.mode === 'string' ? obj.mode : (pin ? 'release' : undefined),
     };
   } catch {
     return null;

@@ -25,6 +25,19 @@ export function BrandHeader({ status, isConnected, onPressConnection }: BrandHea
 
       {/* Right Controls */}
       <View style={styles.controlsContainer}>
+        {/* QR Scan Button */}
+        <TouchableOpacity
+          style={styles.qrHeaderBtn}
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            onPressConnection();
+          }}
+          accessibilityLabel="Scan PC Pairing QR"
+          activeOpacity={0.7}
+        >
+          <Ionicons name="qr-code-outline" size={18} color="#FF5A36" />
+        </TouchableOpacity>
+
         {/* Connection Pill */}
         <TouchableOpacity
           style={styles.connectionPill}
@@ -85,6 +98,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+  },
+  qrHeaderBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(255, 90, 54, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 90, 54, 0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   connectionPill: {
     flexDirection: 'row',

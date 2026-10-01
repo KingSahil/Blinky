@@ -382,14 +382,9 @@ async fn start_discovery_server(
     let app_clone = app.clone();
     let get_token = move || {
         let token = crate::websocket::get_remote_token();
-        let cert_pin = if mode.is_release() {
-            if let Ok(identity) = crate::tls_identity::TlsIdentity::load_or_generate(&app_clone) {
-                Some(identity.public_key_pin().to_string())
-            } else {
-                None
-            }
-        } else {
-            None
+        let cert_pin = match crate::tls_identity::TlsIdentity::load_or_generate(&app_clone) {
+            Ok(identity) => Some(identity.public_key_pin().to_string()),
+            Err(_) => None,
         };
         (token, cert_pin)
     };
@@ -445,24 +440,26 @@ pub async fn start_websocket_server(app: AppHandle) {
         }
     };
     let mode = crate::transport::TransportMode::current();
-    let tls_acceptor = if mode.is_release() {
+    let tls_acceptor = {
         let identity = match crate::tls_identity::TlsIdentity::load_or_generate(&app) {
-            Ok(identity) => identity,
+            Ok(identity) => Some(identity),
             Err(error) => {
-                eprintln!("Failed to initialize release WSS identity: {error}");
-                return;
+                eprintln!("Failed to initialize WSS identity: {error}");
+                None
             }
         };
-        println!("Release WSS identity pin: {}", identity.public_key_pin());
-        match identity.server_config() {
-            Ok(config) => Some(TlsAcceptor::from(std::sync::Arc::new(config))),
-            Err(error) => {
-                eprintln!("Failed to initialize release WSS server: {error}");
-                return;
+        if let Some(identity) = identity {
+            println!("WSS identity pin: {}", identity.public_key_pin());
+            match identity.server_config() {
+                Ok(config) => Some(TlsAcceptor::from(std::sync::Arc::new(config))),
+                Err(error) => {
+                    eprintln!("Failed to initialize WSS server: {error}");
+                    None
+                }
             }
+        } else {
+            None
         }
-    } else {
-        None
     };
     println!("WebSocket server listening on {} ({:?})", addr, mode);
 
@@ -566,14 +563,12 @@ pub fn mobile_pairing_payload(
     app: &AppHandle,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     let mode = crate::transport::TransportMode::current();
-    let pin = if mode.is_release() {
-        Some(
-            crate::tls_identity::TlsIdentity::load_or_generate(app)?
-                .public_key_pin()
-                .to_string(),
-        )
-    } else {
-        None
+    let pin = match crate::tls_identity::TlsIdentity::load_or_generate(app) {
+        Ok(identity) => Some(identity.public_key_pin().to_string()),
+        Err(e) => {
+            eprintln!("Warning: Could not generate TLS identity for pairing: {e}");
+            None
+        }
     };
 
     let mut token = get_remote_token();
@@ -989,20 +984,18 @@ where
                 } else {
                     eprintln!("{} failed authentication", peer_addr);
                 }
-                if mode.is_release() {
-                    let _ = ws_sender
-                        .lock()
-                        .await
-                        .send(Message::Text(
-                            serde_json::json!({
-                                "type": "auth_result",
-                                "ok": authenticated,
-                            })
-                            .to_string()
-                            .into(),
-                        ))
-                        .await;
-                }
+                let _ = ws_sender
+                    .lock()
+                    .await
+                    .send(Message::Text(
+                        serde_json::json!({
+                            "type": "auth_result",
+                            "ok": authenticated,
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await;
                 continue;
             }
 
@@ -1405,19 +1398,17 @@ where
     Ok(())
 }
 
-fn auth_token_from_frame(frame: &str, mode: crate::transport::TransportMode) -> Option<String> {
+fn auth_token_from_frame(frame: &str, _mode: crate::transport::TransportMode) -> Option<String> {
     if let Some(token) = frame.strip_prefix("auth:") {
-        return (mode == crate::transport::TransportMode::Development)
-            .then(|| token.trim().to_string());
+        return Some(token.trim().to_string());
     }
 
-    if mode.is_release() {
-        let payload = serde_json::from_str::<serde_json::Value>(frame).ok()?;
+    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(frame) {
         if payload.get("type").and_then(|kind| kind.as_str()) == Some("auth") {
             return payload
                 .get("token")
                 .and_then(|token| token.as_str())
-                .map(str::to_string);
+                .map(|s| s.trim().to_string());
         }
     }
 
@@ -1446,20 +1437,18 @@ where
         .map(|token| token_equals(token, server_token))
         .unwrap_or(false);
 
-    if mode.is_release() {
-        sender
-            .lock()
-            .await
-            .send(Message::Text(
-                serde_json::json!({
-                    "type": "auth_result",
-                    "ok": authenticated,
-                })
-                .to_string()
-                .into(),
-            ))
-            .await?;
-    }
+    let _ = sender
+        .lock()
+        .await
+        .send(Message::Text(
+            serde_json::json!({
+                "type": "auth_result",
+                "ok": authenticated,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await;
 
     Ok(authenticated)
 }
@@ -1965,7 +1954,7 @@ mod tests {
         );
         assert_eq!(
             super::auth_token_from_frame("auth:secret", crate::transport::TransportMode::Release),
-            None
+            Some("secret".to_string())
         );
     }
 

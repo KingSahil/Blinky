@@ -348,6 +348,9 @@ def run(
         wa_action = str(extracted_params.get("wa_action") or "status").lower().strip()
         wa_chat_name = extracted_params.get("wa_chat_name") or None
         return run_whatsapp_tool(wa_action, wa_chat_name, started, warnings)
+    elif intent == "SCREENSHOT":
+        LOGGER.info("Routing to SCREENSHOT fast-path")
+        return run_screenshot_tool(started, warnings)
     elif intent == "ESP32_LIGHT":
         LOGGER.info("Routing to ESP32 Light tool for intent: ESP32_LIGHT")
         return run_esp32_light_tool(extracted_params, started, warnings)
@@ -972,6 +975,21 @@ def classify_request(
             }
     except Exception as exc:
         LOGGER.debug("Fast-path WhatsApp resolution failed: %s", exc)
+    # Fast-path Screenshot / Screen capture
+    cleaned_lower = question.lower().strip().rstrip("?.!,;:")
+    if any(k in cleaned_lower for k in {
+        "capture screenshot", "take screenshot", "get screenshot", 
+        "capture current pc screen", "capture screen", "pc screenshot",
+        "take a screenshot", "screenshot of current pc screen", "take a screenshot of my screen",
+        "take a screenshot of current pc screen", "screenshot current pc screen",
+    }) or cleaned_lower in {"screenshot", "take screenshot", "capture screen", "screen capture"}:
+        return {
+            "intent": "SCREENSHOT",
+            "extracted_params": {},
+            "needs_screen": False,
+            "is_continuation": False,
+        }
+
     try:
         from tools.esp32_light_tool import resolve_light_request
         light_match = resolve_light_request(question)
@@ -1160,6 +1178,36 @@ def run_esp32_light_tool(
     return {
         "summary": summary,
         "steps": [],
+        "active_app": {"title": "", "process": "", "supported": False},
+        "ocr": {"count": 0, "items": []},
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+        "is_continuation": False,
+    }
+
+
+def run_screenshot_tool(started: float, warnings: list[str]) -> dict:
+    """Capture desktop screenshot immediately and return base64 without screen scanning/OCR."""
+    import base64
+    from capture import capture_screen
+
+    _emit_status("screenshot", "Capturing PC screen...")
+    shot = capture_screen()
+    b64_data = ""
+    try:
+        with open(shot.path, "rb") as f:
+            b64_data = base64.b64encode(f.read()).decode("utf-8")
+    except Exception as exc:
+        LOGGER.warning("Failed to encode screenshot: %s", exc)
+        warnings.append(f"Screenshot encode error: {exc}")
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": "Captured screenshot of current PC screen.",
+        "steps": [],
+        "screenshot": str(shot.path),
+        "screenshot_b64": b64_data,
         "active_app": {"title": "", "process": "", "supported": False},
         "ocr": {"count": 0, "items": []},
         "elapsed_ms": elapsed_ms,

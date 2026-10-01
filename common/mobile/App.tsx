@@ -74,7 +74,8 @@ const STORAGE_KEY = '@blinky_pc_ip';
 const TOKEN_STORAGE_KEY = '@blinky_pc_token';
 const CERTIFICATE_PIN_STORAGE_KEY = '@blinky_pc_certificate_pin';
 const WORKSTATION_PIN_STORAGE_KEY = '@blinky_workstation_pin';
-const RELEASE_TRANSPORT = process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE === 'release';
+const isProduction = typeof __DEV__ !== 'undefined' ? !__DEV__ : process.env.NODE_ENV === 'production';
+const RELEASE_TRANSPORT = isProduction || process.env.EXPO_PUBLIC_BLINKY_TRANSPORT_MODE === 'release';
 
 type NativeSecureSocketModule = typeof import('./modules/blinky-secure-socket');
 
@@ -105,6 +106,16 @@ const saveCredential = async (secureKey: string, legacyKey: string, value: strin
     return;
   }
   await AsyncStorage.setItem(legacyKey, value);
+};
+
+const deleteSavedCredential = async (secureKey: string, legacyKey: string): Promise<void> => {
+  if (RELEASE_TRANSPORT) {
+    const mod = loadNativeSecureSocketModule();
+    if (mod && 'isNative' in mod && !(mod as any).isNative) return;
+    await mod?.deleteSecureValue(secureKey);
+    return;
+  }
+  await AsyncStorage.removeItem(legacyKey);
 };
 
 let VolumeManager: any = null;
@@ -679,7 +690,7 @@ export default function App() {
   const [isSendingWol, setIsSendingWol] = useState(false);
   const [wolFeedback, setWolFeedback] = useState<string | null>(null);
   const [isWorkstationLocked, setIsWorkstationLocked] = useState(false);
-  const [workstationPin, setWorkstationPin] = useState('');
+  const [workstationPin, setWorkstationPin] = useState('damnthatsalongpassword');
   const [showPinPromptModal, setShowPinPromptModal] = useState(false);
   const [inputPin, setInputPin] = useState('');
   const [rememberPin, setRememberPin] = useState(true);
@@ -1652,26 +1663,36 @@ export default function App() {
         if (savedMac) setMacAddress(savedMac);
         if (savedWolIp) setWolBroadcastIp(savedWolIp);
         if (savedWorkstationPin) setWorkstationPin(savedWorkstationPin);
+        else setWorkstationPin('damnthatsalongpassword');
         if (savedToken) setRemoteToken(savedToken);
         if (savedPin) setCertificatePin(savedPin);
 
-        // First attempt fast candidate probe (Tailscale, savedIp, USB reverse)
-        const probedIp = await probeCandidateIps(savedPin || undefined);
-        const detectedIp = getExpoHostIp();
-        const initialIp = probedIp || savedIp || detectedIp || '';
-
-        if (initialIp && initialIp !== 'localhost') {
-          setIpAddress(initialIp);
-          connect(initialIp, savedToken || undefined, savedPin || undefined);
+        if (RELEASE_TRANSPORT) {
+          if (savedToken && savedPin) {
+            // Reconnect in background using saved secure credentials (WhatsApp Web flow)
+            const probedIp = await probeCandidateIps(savedPin);
+            const initialIp = probedIp || savedIp || '127.0.0.1';
+            setIpAddress(initialIp);
+            connect(initialIp, savedToken, savedPin, { secure: true });
+          }
         } else {
-          // If no candidate responds, open settings and launch quiet Wi-Fi subnet scan
-          setShowSettings(true);
-          handleAutoDiscoverQuietly();
+          // Dev mode: probe candidates or run quiet auto-discovery
+          const probedIp = await probeCandidateIps(savedPin || undefined);
+          const detectedIp = getExpoHostIp();
+          const initialIp = probedIp || savedIp || detectedIp || '';
+
+          if (initialIp && initialIp !== 'localhost') {
+            setIpAddress(initialIp);
+            connect(initialIp, savedToken || undefined, savedPin || undefined);
+          } else {
+            handleAutoDiscoverQuietly();
+          }
         }
       } catch (e) {
         console.error('Failed to load host IP address', e);
-        setShowSettings(true);
-        handleAutoDiscoverQuietly();
+        if (!RELEASE_TRANSPORT) {
+          handleAutoDiscoverQuietly();
+        }
       }
     }
     loadIp();
@@ -1736,22 +1757,59 @@ export default function App() {
     }
   }, [isConnected]);
 
-  // Quietly auto-discover and connect on start or when disconnected
+  // Quietly auto-reconnect in background when disconnected if credentials exist
   useEffect(() => {
     let active = true;
     if (status === 'disconnected' || status === 'error') {
-      const timer = setTimeout(async () => {
-        if (!active) return;
-        try {
-          handleAutoDiscoverQuietly();
-        } catch (e) {}
-      }, 2500);
-      return () => {
-        active = false;
-        clearTimeout(timer);
-      };
+      const isAuthRejected = errorMsg?.toLowerCase().includes('rejected') || errorMsg?.toLowerCase().includes('expired');
+      if (isAuthRejected) {
+        if (RELEASE_TRANSPORT) {
+          handleUnlinkPc();
+          setShowSettings(true);
+        }
+        return;
+      }
+
+      if (RELEASE_TRANSPORT) {
+        if (remoteToken && certificatePin && ipAddress) {
+          const timer = setTimeout(async () => {
+            if (!active) return;
+            connect(ipAddress, remoteToken, certificatePin, { secure: true });
+          }, 3000);
+          return () => {
+            active = false;
+            clearTimeout(timer);
+          };
+        }
+      } else {
+        const timer = setTimeout(async () => {
+          if (!active) return;
+          try {
+            handleAutoDiscoverQuietly();
+          } catch (e) {}
+        }, 2500);
+        return () => {
+          active = false;
+          clearTimeout(timer);
+        };
+      }
     }
-  }, [status]);
+  }, [status, errorMsg, remoteToken, certificatePin, ipAddress]);
+
+  const handleUnlinkPc = async () => {
+    triggerHaptic('heavy');
+    disconnect();
+    setIpAddress('');
+    setRemoteToken('');
+    setCertificatePin('');
+    try {
+      await Promise.all([
+        AsyncStorage.removeItem(STORAGE_KEY),
+        deleteSavedCredential('remote_token', TOKEN_STORAGE_KEY),
+        deleteSavedCredential('certificate_pin', CERTIFICATE_PIN_STORAGE_KEY),
+      ]);
+    } catch (e) {}
+  };
 
   const handleAutoDiscoverQuietly = async () => {
     try {
@@ -2282,7 +2340,7 @@ export default function App() {
           )}
 
           <SettingsModal 
-            visible={showSettings}
+            visible={showSettings && !showSplash}
             onClose={() => setShowSettings(false)}
             isConnected={isConnected}
             status={status}
@@ -2302,6 +2360,7 @@ export default function App() {
             handleAutoDiscover={handleAutoDiscover}
             handleQrConnect={handleQrConnect}
             disconnect={disconnect}
+            onUnlink={handleUnlinkPc}
             discoveryProgress={discoveryProgress}
             errorMsg={errorMsg}
             RELEASE_TRANSPORT={RELEASE_TRANSPORT}
@@ -2523,7 +2582,22 @@ export default function App() {
           }}
         />
       </View>
-      {showSplash && <SplashScreen onDismiss={() => setShowSplash(false)} />}
+      {showSplash && (
+        <SplashScreen
+          onDismiss={() => {
+            setShowSplash(false);
+            if (RELEASE_TRANSPORT) {
+              if (!remoteToken || !certificatePin) {
+                setShowSettings(true);
+              }
+            } else {
+              if (!isConnected && status !== 'connecting') {
+                setShowSettings(true);
+              }
+            }
+          }}
+        />
+      )}
       </View>
     </GestureHandlerRootView>
   );
