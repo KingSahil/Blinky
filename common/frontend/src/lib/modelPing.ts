@@ -182,6 +182,56 @@ export async function pingModel(
       };
     }
 
+    if (prov === 'gemini') {
+      const activeModel = model || 'gemini-2.5-flash';
+      if (!apiKey?.trim()) {
+        return {
+          ok: false,
+          provider: prov,
+          model: activeModel,
+          latency_ms: 0,
+          status_code: 401,
+          error: 'Missing Gemini API Key',
+          details: 'Please paste your Google Gemini API key.',
+        };
+      }
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(activeModel)}:generateContent?key=${encodeURIComponent(apiKey.trim())}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'ping' }] }],
+          generationConfig: { maxOutputTokens: 1, temperature: 0.0 },
+        }),
+      });
+
+      const latency = Date.now() - t0;
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        return {
+          ok: true,
+          provider: prov,
+          model: activeModel,
+          latency_ms: latency,
+          status_code: 200,
+          details: `Online (${latency}ms)`,
+        };
+      }
+
+      const errMsg = data?.error?.message || `HTTP ${res.status}`;
+      return {
+        ok: false,
+        provider: prov,
+        model: activeModel,
+        latency_ms: latency,
+        status_code: res.status,
+        error: errMsg,
+        details: res.status === 404 ? `Model not found or unavailable (${activeModel})` : errMsg,
+      };
+    }
+
     return {
       ok: false,
       provider: prov,
@@ -189,7 +239,7 @@ export async function pingModel(
       latency_ms: 0,
       status_code: 400,
       error: `Unsupported provider: ${provider}`,
-      details: 'Supported: groq, deepseek, custom',
+      details: 'Supported: groq, gemini, deepseek, custom',
     };
   } catch (err: any) {
     return {

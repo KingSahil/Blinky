@@ -1,7 +1,7 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen, Cpu, Zap, Brain, Cloud, Wrench, Key, Smartphone, MessageSquare, Command, Palette, Info, Clock, Trash2, Plus } from 'lucide-react';
+import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen, Cpu, Zap, Brain, Cloud, Wrench, Key, Smartphone, MessageSquare, Command, Palette, Info, Clock, Trash2, Plus, Search, ChevronDown, Edit3 } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -108,6 +108,16 @@ function ExternalMarkdownLink({ href, children }: AnchorHTMLAttributes<HTMLAncho
     </a>
   );
 }
+
+const GEMINI_MODELS_CATALOG = [
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', badge: 'Default / Fast', desc: '1M context, ultra-fast RAG & reasoning' },
+  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', badge: 'Deep Reasoning', desc: 'Complex reasoning, advanced STEM & 2M context synthesis' },
+  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', badge: 'Next-Gen', desc: 'Realtime multimodal processing and high throughput' },
+  { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite', badge: 'Ultra-Fast', desc: 'Lowest latency & highest efficiency for short queries' },
+  { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', badge: 'Stable', desc: 'Reliable workhorse model with 1M token context' },
+  { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', badge: 'High-Capacity', desc: '2M context window for massive multi-document analysis' },
+  { id: 'gemini-flash-latest', name: 'Gemini Flash Latest', badge: 'Dynamic', desc: 'Points continuously to Google’s latest Flash checkpoint' },
+];
 
 /** Renders the desktop command bar and coordinates its interactive workflows. */
 export function CommandBar() {
@@ -274,6 +284,29 @@ export function CommandBar() {
   const [transportInfo, setTransportInfo] = useState<SecureTransportInfo | null>(null);
   const [pingTesting, setPingTesting] = useState(false);
   const [pingResult, setPingResult] = useState<PingResult | null>(null);
+
+  // Agent 2: Knowledge & RAG (Gemini) Model Configuration & Search
+  const [geminiModel, setGeminiModel] = useState<string>(() => {
+    return localStorage.getItem('blinky_gemini_model') || 'gemini-2.5-flash';
+  });
+  const [geminiApiKey, setGeminiApiKey] = useState<string>(() => {
+    return localStorage.getItem('blinky_gemini_api_key') || '';
+  });
+  const [geminiSearchQuery, setGeminiSearchQuery] = useState<string>('');
+  const [isGeminiSearchOpen, setIsGeminiSearchOpen] = useState<boolean>(false);
+  const [showGeminiConfig, setShowGeminiConfig] = useState<boolean>(true);
+
+  const updateGeminiModel = (newModel: string) => {
+    const clean = newModel.trim();
+    if (!clean) return;
+    setGeminiModel(clean);
+    localStorage.setItem('blinky_gemini_model', clean);
+  };
+
+  const updateGeminiApiKey = (newKey: string) => {
+    setGeminiApiKey(newKey);
+    localStorage.setItem('blinky_gemini_api_key', newKey);
+  };
 
   const handleTestPing = async (prov: string, key: string, model?: string, url?: string) => {
     setPingTesting(true);
@@ -2710,13 +2743,27 @@ export function CommandBar() {
                   </div>
                 </div>
 
-                <div style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                <div
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.04)',
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    border: showGeminiConfig ? '1px solid rgba(192, 132, 252, 0.5)' : '1px solid rgba(255, 255, 255, 0.08)',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onClick={() => setShowGeminiConfig(!showGeminiConfig)}
+                  title="Click to search, edit model, or configure API key"
+                >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                     <span style={{ fontSize: '11px', fontWeight: 600, color: '#e2e8f0' }}>📚 Agent 2: Knowledge & RAG</span>
-                    <span style={{ fontSize: '9px', background: 'rgba(139, 92, 246, 0.2)', color: '#c084fc', padding: '1px 5px', borderRadius: '3px' }}>FastEmbed Hybrid</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '9px', background: 'rgba(139, 92, 246, 0.2)', color: '#c084fc', padding: '1px 5px', borderRadius: '3px' }}>FastEmbed Hybrid</span>
+                      <span style={{ fontSize: '10px', color: '#c084fc', fontWeight: 600 }}>{showGeminiConfig ? '▲ Close' : '▼ Edit'}</span>
+                    </div>
                   </div>
                   <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                    Model: <strong style={{ color: '#fff' }}>Gemini 2.5 Flash / FastEmbed bge-small</strong>
+                    Model: <strong style={{ color: '#fff' }}>{geminiModel}</strong> <span style={{ opacity: 0.6 }}>/ FastEmbed bge-small</span>
                   </div>
                 </div>
 
@@ -2731,6 +2778,255 @@ export function CommandBar() {
                 </div>
               </div>
             </div>
+
+            {/* Agent 2: Gemini RAG Model Configuration & Search */}
+            {showGeminiConfig && (
+              <div
+                className="dropdown-section"
+                style={{
+                  background: 'rgba(139, 92, 246, 0.06)',
+                  borderRadius: '10px',
+                  padding: '12px',
+                  border: '1px solid rgba(192, 132, 252, 0.25)',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#c084fc', margin: 0 }}>
+                    <Sparkles size={14} /> Agent 2: Gemini Model Selection
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => handleTestPing('gemini', geminiApiKey, geminiModel)}
+                    disabled={pingTesting}
+                    style={{
+                      background: 'rgba(192, 132, 252, 0.15)',
+                      border: '1px solid rgba(192, 132, 252, 0.35)',
+                      color: '#c084fc',
+                      borderRadius: '6px',
+                      padding: '2px 8px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: pingTesting ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    {pingTesting ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+                    {pingTesting ? 'Testing...' : 'Test Ping ⚡'}
+                  </button>
+                </div>
+
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '8px', lineHeight: 1.4 }}>
+                  Type to filter models or enter a custom name:
+                </div>
+
+                {/* Model Search Input with live filter */}
+                <div style={{ position: 'relative', marginBottom: '8px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      background: 'rgba(0, 0, 0, 0.35)',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(192, 132, 252, 0.3)',
+                      padding: '0 8px',
+                    }}
+                  >
+                    <Search size={14} style={{ color: '#c084fc', marginRight: '6px', opacity: 0.8 }} />
+                    <input
+                      type="text"
+                      className="settings-input"
+                      style={{ border: 'none', background: 'transparent', padding: '7px 0', fontSize: '12px' }}
+                      value={geminiSearchQuery}
+                      onChange={(e) => {
+                        setGeminiSearchQuery(e.target.value);
+                        setIsGeminiSearchOpen(true);
+                      }}
+                      onFocus={() => setIsGeminiSearchOpen(true)}
+                      placeholder="Type model name to search (e.g. 2.5-pro, flash)..."
+                    />
+                    {geminiSearchQuery ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setGeminiSearchQuery('');
+                        }}
+                        style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px' }}
+                      >
+                        <X size={12} />
+                      </button>
+                    ) : (
+                      <ChevronDown size={14} style={{ color: '#94a3b8', opacity: 0.6 }} />
+                    )}
+                  </div>
+
+                  {/* Filtered Search Results Dropdown List */}
+                  {isGeminiSearchOpen && (
+                    <div
+                      style={{
+                        marginTop: '4px',
+                        maxHeight: '190px',
+                        overflowY: 'auto',
+                        background: '#151722',
+                        border: '1px solid rgba(192, 132, 252, 0.35)',
+                        borderRadius: '8px',
+                        padding: '4px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '2px',
+                        boxShadow: '0 10px 30px rgba(0,0,0,0.6)',
+                        zIndex: 20,
+                      }}
+                    >
+                      {/* Custom typed option if not exact match */}
+                      {geminiSearchQuery.trim() &&
+                        !GEMINI_MODELS_CATALOG.some(
+                          (m) => m.id.toLowerCase() === geminiSearchQuery.trim().toLowerCase()
+                        ) && (
+                          <button
+                            type="button"
+                            className="dropdown-option"
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              padding: '6px 8px',
+                              borderRadius: '6px',
+                              background: 'rgba(192, 132, 252, 0.12)',
+                              border: '1px dashed rgba(192, 132, 252, 0.4)',
+                            }}
+                            onClick={() => {
+                              updateGeminiModel(geminiSearchQuery.trim());
+                              setIsGeminiSearchOpen(false);
+                            }}
+                          >
+                            <Sparkles size={13} style={{ color: '#c084fc' }} />
+                            <div style={{ flex: 1, textAlign: 'left' }}>
+                              <div style={{ fontSize: '11px', fontWeight: 600, color: '#c084fc' }}>
+                                Use custom model: "{geminiSearchQuery.trim()}"
+                              </div>
+                              <div style={{ fontSize: '10px', color: '#94a3b8' }}>Select this custom Gemini model ID</div>
+                            </div>
+                            <Check size={13} className="active-dot" />
+                          </button>
+                        )}
+
+                      {GEMINI_MODELS_CATALOG.filter((m) => {
+                        const q = geminiSearchQuery.toLowerCase().trim();
+                        if (!q) return true;
+                        return (
+                          m.id.toLowerCase().includes(q) ||
+                          m.name.toLowerCase().includes(q) ||
+                          m.desc.toLowerCase().includes(q) ||
+                          m.badge.toLowerCase().includes(q)
+                        );
+                      }).map((m) => {
+                        const isSelected = geminiModel.toLowerCase().trim() === m.id.toLowerCase().trim();
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            className={`dropdown-option ${isSelected ? 'active' : ''}`}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              padding: '6px 8px',
+                              borderRadius: '6px',
+                              textAlign: 'left',
+                            }}
+                            onClick={() => {
+                              updateGeminiModel(m.id);
+                              setGeminiSearchQuery('');
+                              setIsGeminiSearchOpen(false);
+                            }}
+                          >
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ fontSize: '11.5px', fontWeight: 600, color: isSelected ? '#fff' : '#e2e8f0' }}>
+                                  {m.name}
+                                </span>
+                                <span
+                                  style={{
+                                    fontSize: '9px',
+                                    padding: '1px 4px',
+                                    borderRadius: '3px',
+                                    background: isSelected ? 'rgba(192, 132, 252, 0.3)' : 'rgba(255, 255, 255, 0.06)',
+                                    color: isSelected ? '#c084fc' : '#94a3b8',
+                                  }}
+                                >
+                                  {m.badge}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {m.desc}
+                              </div>
+                            </div>
+                            {isSelected && <Check size={14} className="active-dot" style={{ color: '#c084fc' }} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Selected Model indicator pill */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    background: 'rgba(0, 0, 0, 0.25)',
+                    padding: '5px 8px',
+                    borderRadius: '6px',
+                    marginBottom: '8px',
+                    fontSize: '11px',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                  }}
+                >
+                  <span style={{ color: '#94a3b8' }}>Selected Model:</span>
+                  <span style={{ fontWeight: 600, color: '#c084fc' }}>{geminiModel}</span>
+                </div>
+
+                {/* Gemini API Key input */}
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                    <h5 style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#e2e8f0', margin: 0 }}>
+                      <Key size={12} /> Gemini API Key
+                    </h5>
+                    <span style={{ fontSize: '9.5px', color: 'rgba(255, 255, 255, 0.45)' }}>Google AI Studio</span>
+                  </div>
+                  <input
+                    type="password"
+                    className="settings-input"
+                    value={geminiApiKey}
+                    onChange={(e) => updateGeminiApiKey(e.target.value)}
+                    placeholder="Paste Gemini API Key (AIzaSy...)"
+                    style={{ fontSize: '11.5px', marginTop: '4px' }}
+                  />
+                </div>
+
+                {/* Ping Result Display */}
+                {pingResult && pingResult.provider === 'gemini' && (
+                  <div
+                    style={{
+                      marginTop: '6px',
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      fontSize: '11px',
+                      background: pingResult.ok ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                      color: pingResult.ok ? '#22c55e' : '#ef4444',
+                      border: `1px solid ${pingResult.ok ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                    }}
+                  >
+                    {pingResult.ok
+                      ? `✓ Online (${pingResult.latency_ms}ms) • ${pingResult.model}`
+                      : `✗ ${pingResult.error}`}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="dropdown-section">
               <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px' }}><Cpu size={14} /> Change Model</h4>
