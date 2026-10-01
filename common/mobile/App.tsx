@@ -1196,11 +1196,75 @@ export default function App() {
       .trim();
   };
 
+  const isImageExplainIntent = (text: string): boolean => {
+    const t = text.toLowerCase();
+    if (!text.trim()) return true; // image with no question = explain it
+    return /\b(explain|describe|what is|what's|whats|what color|what colour|look at|analyze|analyse|tell me about|identify|recognize|recognise)\b/.test(t);
+  };
+
+  const readUriAsBase64 = async (uri: string): Promise<string | null> => {
+    try {
+      // New expo-file-system File API
+      const f = new File(uri);
+      if (typeof (f as any).base64 === 'function') {
+        return await (f as any).base64();
+      }
+      if (typeof (f as any).text === 'function') {
+        // Fallback: not base64-capable, bail to transfer path
+        return null;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
   const handleQuery = (attachedFiles: AttachedFile[] = []) => {
     let query = queryText.trim();
     if (!query && attachedFiles.length === 0) {
       triggerHaptic('selection');
       Alert.alert('Empty query', 'Please enter a search/browsing query or attach a file first.');
+      return;
+    }
+
+    // Image explain: a single attached image + explain/describe/what question
+    // goes to Gemini/Groq vision via sendQuery — NOT the file-transfer path.
+    const imageFiles = attachedFiles.filter(f =>
+      f.type === 'image' || (f.mimeType || '').startsWith('image/')
+    );
+    if (imageFiles.length === 1 && attachedFiles.length === 1 && isImageExplainIntent(query)) {
+      const img = imageFiles[0];
+      const explainQuery = query || 'Explain what is in this image in detail.';
+      const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const userMsgId = generateUuid();
+      const blinkyMsgId = generateUuid();
+      activeBlinkyMsgIdRef.current = blinkyMsgId;
+      setMessages(prev => [
+        ...prev,
+        { id: userMsgId, sender: 'user' as const, text: explainQuery, timestamp: currentTime, attachedFiles },
+        {
+          id: blinkyMsgId, sender: 'blinky' as const, text: "I'm on it. Analyzing your image...",
+          timestamp: currentTime,
+          progress: { percent: 20, statusText: 'Analyzing image with Gemini vision...', duration: 0 },
+        },
+      ]);
+      setQueryText('');
+      setAgentStatus('processing');
+      setTimerSeconds(0);
+      triggerHaptic('medium');
+      void (async () => {
+        let b64: string | null = img.base64 || null;
+        if (!b64 && img.uri) b64 = await readUriAsBase64(img.uri);
+        if (b64) {
+          const clean = b64.includes('base64,') ? b64.split('base64,')[1] : b64;
+          sendQuery(explainQuery, generateUuid(), clean);
+        } else {
+          // Could not inline the image: fall back to transfer + ask PC to explain path
+          sendQuery(`Explain what is in this image: ${img.name}. The file is being transferred to PC.`, generateUuid());
+          const filesToSend: SelectedFile[] = [{ uri: img.uri, name: img.name }];
+          fileTransferPanelRef.current?.startTransfer(filesToSend, '', '', explainQuery);
+        }
+      })();
       return;
     }
 
@@ -2288,15 +2352,31 @@ export default function App() {
               isConnected={isConnected}
               isLightOn={isLightOn}
               onExecuteAction={(cmd) => {
+                // Unified pipeline: quick actions go through the same PC
+                // tutor as CommandBar typing — never raw actuator strings.
                 if (cmd === 'screenshot') {
                   setActiveTab('Chat');
                   handleCaptureScreenshot();
                   return;
                 }
-                sendCommand(cmd);
                 if (cmd === 'toggle_lights') {
                   setIsLightOn(prev => !prev);
+                  sendQuery('toggle lights', generateUuid());
+                  return;
                 }
+                if (cmd === 'open_browser') {
+                  sendQuery('open browser', generateUuid());
+                  return;
+                }
+                if (cmd === 'open_terminal') {
+                  sendQuery('open terminal', generateUuid());
+                  return;
+                }
+                if (cmd === 'media_play_pause') {
+                  sendQuery('play or pause media', generateUuid());
+                  return;
+                }
+                sendCommand(cmd);
               }}
             />
           )}

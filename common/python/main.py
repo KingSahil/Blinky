@@ -273,6 +273,8 @@ def run(
     web_search_enabled: bool = False,
     agent_mode: bool = False,
     ignored_rects: list[dict] | None = None,
+    attached_image: str | None = None,
+    attached_file: dict | None = None,
 ) -> dict:
     """
     RULE: Screenshots/OCR are ONLY taken when BOTH web_search_enabled=False
@@ -287,6 +289,16 @@ def run(
     # Clean wake word prefixes from the incoming question (e.g., "Hey Blinky", "Blinky")
     question = question.strip()
     question = re.sub(r"^(?:hey\s+)?blinky[\s,.:;!?]*", "", question, flags=re.IGNORECASE).strip()
+
+    # Fast-path: attached mobile image explain (Gemini/Groq vision).
+    # Must run before any screen capture so a phone photo is described
+    # instead of being treated as a file transfer.
+    if attached_image:
+        try:
+            return run_attached_image_vision(question or "Explain what is in this image.", attached_image, started, warnings)
+        except Exception as exc:
+            LOGGER.warning("Attached-image vision failed: %s", exc)
+            warnings.append(f"Image vision error: {exc}")
 
     # Deterministic intercept for RPC calls passed via question prefix
     if question.startswith("[NOTEBOOK_RPC:"):
@@ -1228,6 +1240,35 @@ def run_esp32_light_tool(
     }
 
 
+def run_attached_image_vision(question: str, attached_image_b64: str, started: float, warnings: list[str]) -> dict:
+    """Describe a mobile-attached image via Groq/Gemini vision without screen capture."""
+    _emit_status("vision", "Analyzing attached image...")
+    prompt = question.strip() or "Explain what is in this image in detail."
+    # Strip data-URI prefix for the echo field; vision helper accepts both.
+    b64_clean = attached_image_b64.strip()
+    if "base64," in b64_clean:
+        b64_clean = b64_clean.split("base64,", 1)[1].strip()
+    try:
+        from ai.gemini_client import ask_gemini_vision
+        res = ask_gemini_vision(prompt, attached_image_b64)
+        summary = str(res.get("text", "")).strip() or "I could not describe this image."
+    except Exception as exc:
+        summary = f"Image analysis failed: {exc}"
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return {
+        "summary": summary,
+        "steps": [],
+        "screenshot_b64": b64_clean,
+        "active_app": {"title": "", "process": "", "supported": False},
+        "ocr": {"count": 0, "items": []},
+        "elapsed_ms": elapsed_ms,
+        "provider": get_provider_label(),
+        "warnings": warnings,
+        "is_continuation": False,
+        "computer_use": True,
+    }
+
+
 def run_screenshot_tool(started: float, warnings: list[str]) -> dict:
     """Capture desktop screenshot immediately and return base64 without screen scanning/OCR."""
     import base64
@@ -2067,10 +2108,12 @@ def main() -> None:
         web_search_enabled = bool(payload.get("web_search_enabled", False))
         agent_mode = bool(payload.get("agent_mode", False))
         ignored_rects = payload.get("ignored_rects")
-        if not question:
+        attached_image = payload.get("attached_image") or payload.get("attachedImage")
+        attached_file = payload.get("attached_file") or payload.get("attachedFile")
+        if not question and not attached_image:
             raise ValueError("Question is required.")
 
-        result = run(question, previous_question, progress, conversation_history, web_search_enabled, agent_mode, ignored_rects)
+        result = run(question or "Explain what is in this image.", previous_question, progress, conversation_history, web_search_enabled, agent_mode, ignored_rects, attached_image, attached_file)
         print(json.dumps(result, ensure_ascii=True))
     except Exception as exc:
         LOGGER.exception("Worker failed")

@@ -35,6 +35,8 @@ struct TutorRequest {
     conversation_history: Option<serde_json::Value>,
     web_search_enabled: Option<bool>,
     agent_mode: Option<bool>,
+    attached_image: Option<String>,
+    attached_file: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +66,8 @@ async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::
         request.conversation_history.as_ref(),
         request.web_search_enabled.unwrap_or(false),
         request.agent_mode.unwrap_or(false),
+        request.attached_image.as_deref(),
+        request.attached_file.as_ref(),
         command.clone(),
         overlay.clone(),
     );
@@ -542,6 +546,8 @@ fn run_python_worker(
     conversation_history: Option<&serde_json::Value>,
     web_search_enabled: bool,
     agent_mode: bool,
+    attached_image: Option<&str>,
+    attached_file: Option<&serde_json::Value>,
     command_window: Option<WebviewWindow>,
     overlay_window: Option<WebviewWindow>,
 ) -> Result<String, String> {
@@ -580,6 +586,8 @@ fn run_python_worker(
         "conversation_history": conversation_history.unwrap_or(&serde_json::Value::Null),
         "web_search_enabled": web_search_enabled,
         "agent_mode": agent_mode,
+        "attached_image": attached_image.unwrap_or(""),
+        "attached_file": attached_file.unwrap_or(&serde_json::Value::Null),
         "ignored_rects": if command_rect.is_null() { vec![] } else { vec![command_rect] },
     });
 

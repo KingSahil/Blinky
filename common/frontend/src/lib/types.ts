@@ -50,6 +50,8 @@ export interface TutorResult {
   provider?: string;
   warnings: string[];
   is_continuation?: boolean;
+  screenshot_b64?: string;
+  screenshot_path?: string;
   app_context?: string;
   agent_action?: {
     success: boolean;

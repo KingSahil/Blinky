@@ -1479,13 +1479,44 @@ where
                         trimmed.to_string()
                     }
                 } else if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    parsed
-                        .get("query")
-                        .and_then(|q| q.as_str())
-                        .unwrap_or("")
-                        .to_string()
+                    // Back-compat: old mobile APKs send raw quick-action strings.
+                    // Route them through the unified PC tutor instead of dropping.
+                    let raw_action = parsed
+                        .get("action")
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("");
+                    if !raw_action.is_empty() && parsed.get("query").is_none() {
+                        match raw_action {
+                            "toggle_lights" => "toggle lights".to_string(),
+                            "open_browser" => "open browser".to_string(),
+                            "open_terminal" => "open terminal".to_string(),
+                            "media_play_pause" => "play or pause media".to_string(),
+                            other => other.to_string(),
+                        }
+                    } else {
+                        parsed
+                            .get("query")
+                            .and_then(|q| q.as_str())
+                            .unwrap_or("")
+                            .to_string()
+                    }
                 } else {
-                    trimmed.to_string()
+                    match trimmed {
+                        "toggle_lights" => "toggle lights".to_string(),
+                        "open_browser" => "open browser".to_string(),
+                        "open_terminal" => "open terminal".to_string(),
+                        "media_play_pause" => "play or pause media".to_string(),
+                        _ => trimmed.to_string(),
+                    }
+                };
+
+                let (attached_image, attached_file) = if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    (
+                        parsed.get("attachedImage").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        parsed.get("attachedFile").cloned(),
+                    )
+                } else {
+                    (None, None)
                 };
 
                 println!(
@@ -1501,7 +1532,9 @@ where
                     "blinky://mobile-query",
                     serde_json::json!({
                         "requestId": request_id,
-                        "query": query_text
+                        "query": query_text,
+                        "attachedImage": attached_image,
+                        "attachedFile": attached_file
                     }),
                 );
             } else {

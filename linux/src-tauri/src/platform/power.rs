@@ -29,7 +29,7 @@ pub fn execute_sleep() {
 
 /// Requests immediate system hibernation through systemd.
 pub fn execute_hibernate() {
-    if let Err(e) = Command::new("systemctl").args(&["hibernate", "-i"]).spawn() {
+    if let Err(e) = Command::new("systemctl").arg("hibernate").spawn() {
         eprintln!("Failed to execute Linux/Unix hibernate: {:?}", e);
     }
 }
@@ -62,12 +62,19 @@ pub fn execute_lock() {
 }
 
 pub fn is_workstation_locked() -> bool {
-    // Check if swaylock, hyprlock, waylock, or screensaver is currently active
-    Command::new("pgrep")
-        .args(&["-x", "swaylock|hyprlock|waylock|gnome-screensaver"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    // Check if swaylock, hyprlock, waylock, or screensaver is currently active.
+    // pgrep -x matches exact process names, so check each locker separately.
+    for proc in ["swaylock", "hyprlock", "waylock", "gnome-screensaver"] {
+        let locked = Command::new("pgrep")
+            .args(&["-x", proc])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if locked {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn execute_unlock(_pin: Option<&str>) {

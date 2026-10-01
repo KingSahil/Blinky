@@ -13,6 +13,7 @@ import {
   PanResponder,
   TouchableWithoutFeedback,
   Keyboard,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -125,12 +126,19 @@ export function PromoCodeModal({ visible, onClose, onSuccess }: PromoCodeModalPr
       animationType="fade"
       onRequestClose={handleClose}
     >
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
         <View style={styles.overlay}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
             style={styles.keyboardAvoid}
           >
+            <ScrollView
+              contentContainerStyle={styles.scrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+            >
             <Animated.View
               style={[
                 styles.modalCard,
@@ -177,6 +185,9 @@ export function PromoCodeModal({ visible, onClose, onSuccess }: PromoCodeModalPr
                   }}
                   autoCapitalize="characters"
                   autoCorrect={false}
+                  autoFocus
+                  blurOnSubmit={false}
+                  keyboardType="default"
                   returnKeyType="done"
                   onSubmitEditing={handleRedeem}
                   editable={!loading && !(result?.success)}
@@ -251,6 +262,7 @@ export function PromoCodeModal({ visible, onClose, onSuccess }: PromoCodeModalPr
                 </TouchableOpacity>
               </View>
             </Animated.View>
+            </ScrollView>
           </KeyboardAvoidingView>
         </View>
       </TouchableWithoutFeedback>
@@ -266,6 +278,12 @@ const styles = StyleSheet.create({
   },
   keyboardAvoid: {
     width: '100%',
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'flex-end',
   },
   modalCard: {
     backgroundColor: '#0c0d12',

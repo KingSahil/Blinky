@@ -561,6 +561,7 @@ export function CommandBar() {
   const failedTargetsRef = useRef<string[]>([]);
   const failedRefsRef = useRef<string[]>([]);
   const currentGuideStepsRef = useRef<any[]>([]);
+  const lastTutorResultRef = useRef<any>(null);
   const workflowStartedWithReadbackRef = useRef(false);
   const conversationHistoryRef = useRef<TutorConversationMessage[]>([]);
   const runIdRef = useRef(0);
@@ -1531,6 +1532,7 @@ export function CommandBar() {
       const displaySteps = getDisplaySteps(result.steps || []);
       const currentGuideSteps = getCurrentGuideSteps(displaySteps, currentProgress());
       currentGuideStepsRef.current = currentGuideSteps;
+      lastTutorResultRef.current = result;
       const hasCompletedProgress =
         completedTargetsRef.current.length > 0 || completedInstructionsRef.current.length > 0;
       const highlightSteps = getHighlightSteps(currentGuideSteps);
@@ -2067,10 +2069,10 @@ export function CommandBar() {
 
   // Listen for remote mobile queries: executes with native PC Blinky tutor & autopilot pipeline
   useEffect(() => {
-    const unlisten = listen<{ requestId: string; query: string }>('blinky://mobile-query', async (event) => {
-      const { requestId, query } = event.payload;
-      if (!query || !query.trim()) return;
-      const cleanQuery = query.trim();
+    const unlisten = listen<{ requestId: string; query: string; attachedImage?: string; attachedFile?: unknown }>('blinky://mobile-query', async (event) => {
+      const { requestId, query, attachedImage, attachedFile } = event.payload;
+      if ((!query || !query.trim()) && !attachedImage) return;
+      const cleanQuery = (query || '').trim() || 'Explain what is in this image.';
       setQuestion(cleanQuery);
       try {
         await emit('blinky://mobile-status', {
@@ -2079,15 +2081,35 @@ export function CommandBar() {
           data: { message: `Executing '${cleanQuery}' with AI companion...`, percent: 40 },
         });
 
+        lastTutorResultRef.current = null;
+        if (attachedImage) {
+          const direct = await runTutor(cleanQuery, lastQueryRef.current || undefined, currentProgress(), conversationHistoryRef.current.slice(-8), false, false, attachedImage, attachedFile);
+          lastTutorResultRef.current = direct;
+          setStatus(direct.summary);
+          await emit('blinky://mobile-status', {
+            requestId: requestId || 'unknown',
+            status: 'success',
+            data: {
+              response: direct.summary,
+              steps: direct.steps || [],
+              screenshot_b64: (direct as any).screenshot_b64,
+            },
+          });
+          return;
+        }
+
         await executeTutor(cleanQuery, false, { resetProgress: true });
 
         const summary = statusRef.current || `Completed: ${cleanQuery}`;
+        const lastResult: any = lastTutorResultRef.current;
         await emit('blinky://mobile-status', {
           requestId: requestId || 'unknown',
           status: 'success',
           data: {
             response: summary,
             steps: currentGuideStepsRef.current,
+            screenshot_b64: lastResult?.screenshot_b64,
+            screenshot: lastResult?.screenshot,
           },
         });
       } catch (err: any) {

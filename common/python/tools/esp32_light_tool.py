@@ -32,6 +32,41 @@ def _get_default_ip():
 DEFAULT_ESP32_IP = _get_default_ip()
 
 
+def _state_file() -> Path:
+    # Persist toggle state next to repo tmp/ so restarts keep last state.
+    # Falls back to module dir when repo layout is unavailable.
+    try:
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        state_dir = repo_root / "tmp"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        return state_dir / "esp32_light_state.json"
+    except Exception:
+        return Path(__file__).resolve().parent / "esp32_light_state.json"
+
+
+def get_saved_state() -> dict:
+    """Return last known light state. Defaults to off."""
+    default = {"on": False, "r": 0, "g": 0, "b": 0, "color": "off", "brightness": 1.0}
+    try:
+        p = _state_file()
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8") or "{}")
+            return {**default, **data}
+    except Exception:
+        pass
+    return default
+
+
+def save_state(on: bool, r: int = 0, g: int = 0, b: int = 0, color: str = "", brightness: float = 1.0) -> dict:
+    """Persist last known light state."""
+    state = {"on": bool(on), "r": int(r), "g": int(g), "b": int(b), "color": str(color), "brightness": float(brightness)}
+    try:
+        _state_file().write_text(json.dumps(state), encoding="utf-8")
+    except Exception:
+        pass
+    return state
+
+
 COLOR_MAP = {
     "red": (255, 0, 0),
     "green": (0, 255, 0),
@@ -142,7 +177,42 @@ def handle_request(params: dict) -> dict:
         return check_status(ip=ip)
 
     if action in ("turn_off", "off"):
-        return send_to_esp32(0, 0, 0, ip=ip)
+        res = send_to_esp32(0, 0, 0, ip=ip)
+        if res.get("success"):
+            save_state(on=False, r=0, g=0, b=0, color="off")
+            res["message"] = "Light turned off."
+        return res
+
+    if action in ("turn_on", "on"):
+        saved = get_saved_state()
+        r, g, b = saved.get("r", 0), saved.get("g", 0), saved.get("b", 0)
+        color = saved.get("color", "")
+        if (r, g, b) == (0, 0, 0):
+            r, g, b, color = 255, 255, 255, color or "white"
+        res = send_to_esp32(r, g, b, ip=ip)
+        if res.get("success"):
+            save_state(on=True, r=r, g=g, b=b, color=color or "white")
+            res["message"] = f"Light turned on ({color or f'RGB({r},{g},{b})'})."
+        return res
+
+    if action == "toggle":
+        saved = get_saved_state()
+        if saved.get("on"):
+            res = send_to_esp32(0, 0, 0, ip=ip)
+            if res.get("success"):
+                save_state(on=False, r=0, g=0, b=0, color="off")
+                res["message"] = "Light turned off."
+            return res
+        # Turn on: restore last color or default to warm white
+        r, g, b = saved.get("r", 0), saved.get("g", 0), saved.get("b", 0)
+        color = saved.get("color", "")
+        if (r, g, b) == (0, 0, 0):
+            r, g, b, color = 255, 255, 255, "white"
+        res = send_to_esp32(r, g, b, ip=ip)
+        if res.get("success"):
+            save_state(on=True, r=r, g=g, b=b, color=color)
+            res["message"] = f"Light turned on ({color})."
+        return res
 
     color = params.get("color", "")
     r = params.get("r")
@@ -156,6 +226,9 @@ def handle_request(params: dict) -> dict:
 
     final_r, final_g, final_b = resolve_color(color, r, g, b, brightness)
     res = send_to_esp32(final_r, final_g, final_b, ip=ip)
+    if res.get("success"):
+        is_on = not (final_r == 0 and final_g == 0 and final_b == 0)
+        save_state(on=is_on, r=final_r, g=final_g, b=final_b, color=color or f"RGB({final_r},{final_g},{final_b})", brightness=brightness)
     res["color_requested"] = color or f"RGB({final_r},{final_g},{final_b})"
     return res
 
@@ -166,6 +239,10 @@ def resolve_light_request(question: str) -> dict | None:
     q = question.strip().lower()
     q_clean = re.sub(r"[?!.,;:']", "", q)
 
+    # Never hijack media playback ("play ... lights ..." song titles).
+    if re.search(r"\bplay\b", q_clean) and re.search(r"\b(spotify|youtube|song|music|track|artist|album|playlist)\b", q_clean):
+        return None
+
     # Check for off commands first
     if (
         re.search(r"\b(turn|switch|shut)\s+(off|down)\b.*\b(light|led)s?\b", q_clean)
@@ -173,6 +250,12 @@ def resolve_light_request(question: str) -> dict | None:
         or q_clean in ("lights off", "light off", "turn off light", "turn off lights")
     ):
         return {"action": "turn_off"}
+
+    # Toggle / turn-on bare commands (quick-action buttons send these)
+    if re.search(r"\btoggle\b.*\b(light|led)s?\b", q_clean) or re.search(r"\b(light|led)s?\b.*\btoggle\b", q_clean):
+        return {"action": "toggle"}
+    if q_clean in ("toggle lights", "toggle light", "toggle_lights", "lights", "toggle"):
+        return {"action": "toggle"}
 
     is_light_mention = bool(re.search(r"\b(light|led)s?\b", q_clean))
     found_color = None

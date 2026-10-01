@@ -3,6 +3,79 @@ use serde_json::{json, Value};
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::path::Path;
+use std::sync::Mutex;
+use std::time::Instant;
+
+/// Cached CPU times for delta-based usage calculation.
+/// Mobile polls every ~2.5s, so the delta between calls is the sample window.
+static CPU_PREV: Mutex<Option<(u64, u64, Instant)>> = Mutex::new(None);
+
+/// Returns CPU usage percent (0.0-100.0) computed from the delta since the
+/// last call. First call returns 0.0 (no baseline yet).
+#[cfg(target_os = "linux")]
+fn read_cpu_percent() -> f32 {
+    let line = fs::read_to_string("/proc/stat")
+        .ok()
+        .and_then(|c| c.lines().next().map(|s| s.to_string()))
+        .unwrap_or_default();
+    let parts: Vec<u64> = line
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|p| p.parse::<u64>().ok())
+        .collect();
+    if parts.len() < 4 {
+        return 0.0;
+    }
+    let idle = parts[3] + parts.get(4).copied().unwrap_or(0);
+    let total: u64 = parts.iter().sum();
+    let now = Instant::now();
+    let prev = CPU_PREV.lock().ok().and_then(|mut g| g.take());
+    if let Ok(mut g) = CPU_PREV.lock() {
+        *g = Some((idle, total, now));
+    }
+    if let Some((prev_idle, prev_total, _)) = prev {
+        let total_d = total.saturating_sub(prev_total) as f32;
+        let idle_d = idle.saturating_sub(prev_idle) as f32;
+        if total_d > 0.0 {
+            return ((total_d - idle_d) / total_d * 100.0).clamp(0.0, 100.0);
+        }
+    }
+    0.0
+}
+
+/// Windows CPU via GetSystemTimes idle/kernel/user delta.
+#[cfg(target_os = "windows")]
+fn read_cpu_percent() -> f32 {
+    use windows_sys::Win32::System::Threading::GetSystemTimes;
+    unsafe {
+        let mut idle = std::mem::zeroed();
+        let mut kernel = std::mem::zeroed();
+        let mut user = std::mem::zeroed();
+        if GetSystemTimes(&mut idle, &mut kernel, &mut user) == 0 {
+            return 0.0;
+        }
+        let to_u64 = |t: windows_sys::Win32::Foundation::FILETIME| -> u64 {
+            ((t.dwHighDateTime as u64) << 32) | (t.dwLowDateTime as u64)
+        };
+        let idle_u = to_u64(idle);
+        let kernel_u = to_u64(kernel);
+        let user_u = to_u64(user);
+        let total = kernel_u.saturating_add(user_u);
+        let now = Instant::now();
+        let prev = CPU_PREV.lock().ok().and_then(|mut g| g.take());
+        if let Ok(mut g) = CPU_PREV.lock() {
+            *g = Some((idle_u, total, now));
+        }
+        if let Some((prev_idle, prev_total, _)) = prev {
+            let total_d = total.saturating_sub(prev_total) as f32;
+            let idle_d = idle_u.saturating_sub(prev_idle) as f32;
+            if total_d > 0.0 {
+                return ((total_d - idle_d) / total_d * 100.0).clamp(0.0, 100.0);
+            }
+        }
+        0.0
+    }
+}
 
 /// Collects host identity, uptime, memory, battery, and network telemetry.
 pub fn get_system_telemetry() -> Value {
@@ -77,6 +150,7 @@ pub fn get_system_telemetry() -> Value {
 
         let battery = read_linux_battery();
         let network = read_linux_network();
+        let cpu_percent = read_cpu_percent();
 
         json!({
             "type": "system_info",
@@ -85,6 +159,8 @@ pub fn get_system_telemetry() -> Value {
             "platform": "linux",
             "compositor": compositor,
             "uptime_seconds": uptime_seconds,
+            "cpu": { "percent": cpu_percent },
+            "cpu_percent": cpu_percent,
             "memory": {
                 "total_mb": total_mb,
                 "used_mb": used_mb,
@@ -101,6 +177,7 @@ pub fn get_system_telemetry() -> Value {
     {
         let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "Windows-PC".to_string());
         let (os_name, total_mb, used_mb, mem_percent, uptime_seconds, battery, network) = read_windows_telemetry();
+        let cpu_percent = read_cpu_percent();
 
         json!({
             "type": "system_info",
@@ -109,6 +186,8 @@ pub fn get_system_telemetry() -> Value {
             "platform": "windows",
             "compositor": "Windows Desktop (DWM)",
             "uptime_seconds": uptime_seconds,
+            "cpu": { "percent": cpu_percent },
+            "cpu_percent": cpu_percent,
             "memory": {
                 "total_mb": total_mb,
                 "used_mb": used_mb,

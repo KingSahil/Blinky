@@ -107,6 +107,9 @@ export const NotebookScreen: React.FC = () => {
       );
       const keys = await getSyncedApiKeys();
 
+      // Groq decommissioned llama-3.3-70b-versatile (Aug 2026). Use the
+      // current supported default, matching desktop (groq_client.py).
+      const GROQ_MODEL = 'openai/gpt-oss-120b';
       let answer = '';
       if (keys.groq_key) {
         const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -116,7 +119,7 @@ export const NotebookScreen: React.FC = () => {
             Authorization: `Bearer ${keys.groq_key}`,
           },
           body: JSON.stringify({
-            model: 'llama-3.3-70b-versatile',
+            model: GROQ_MODEL,
             messages: [
               { role: 'system', content: systemPrompt },
               { role: 'user', content: userPrompt },
@@ -129,12 +132,45 @@ export const NotebookScreen: React.FC = () => {
           const errMsg = JSON.stringify(data.error).toLowerCase();
           if (errMsg.includes('rate_limit') || errMsg.includes('tpm') || resp.status === 429) {
             answer = "⚠️ **Groq Rate Limit Exceeded (TPM Exhausted)**: If you are on the free tier, please try again in a few moments, reduce active document context, or upgrade your plan.";
+          } else if (
+            errMsg.includes('decommissioned') ||
+            errMsg.includes('deprecated') ||
+            errMsg.includes('model_not_found') ||
+            errMsg.includes('model_not_supported') ||
+            resp.status === 400 ||
+            resp.status === 404
+          ) {
+            answer = `⚠️ **Groq model unavailable (${GROQ_MODEL})**: ${data.error.message || 'Model decommissioned'}. Please update the app / check Groq docs for the current supported model.`;
           } else {
             answer = `Groq API Error: ${data.error.message || 'Request failed'}`;
           }
         } else {
           const responseText = data?.choices?.[0]?.message?.content || 'No response from Groq.';
           answer = `[Vector Match Mode: ${useVectorSearch ? 'Top-K Mobile Search' : 'Full Context'} (${matchCount} chunk matches)]\n\n${responseText}`;
+        }
+      } else if (keys.gemini_key) {
+        try {
+          const resp = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${encodeURIComponent(keys.gemini_key)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                contents: [{ parts: [{ text: userPrompt }] }],
+                generationConfig: { temperature: 0.2 },
+              }),
+            }
+          );
+          const data: any = await resp.json();
+          const geminiText = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || '').join('')?.trim();
+          if (geminiText) {
+            answer = `[Vector Match Mode: ${useVectorSearch ? 'Top-K Mobile Search' : 'Full Context'} (${matchCount} chunk matches)]\n\n${geminiText}`;
+          } else {
+            answer = `Gemini API Error: ${data?.error?.message || 'Request failed'}`;
+          }
+        } catch (gemErr: any) {
+          answer = `Error executing mobile vector query: ${gemErr?.message || 'Network error'}`;
         }
       } else {
         answer = `[Offline Mobile Mode]\nMode: ${useVectorSearch ? 'Top-K Vector Cosine Similarity' : 'Full Context'}\nMatched ${matchCount} local chunks for "${q}". Connect to PC Blinky on Wi-Fi once to sync your Groq/Gemini API keys for full offline cloud intelligence!`;

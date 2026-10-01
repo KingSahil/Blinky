@@ -178,7 +178,12 @@ export type PowerCommand =
   | 'get_assemblyai_key'
   | 'get_voice_provider'
   | 'get_system_info'
-  | 'screenshot';
+  | 'get_api_keys'
+  | 'screenshot'
+  | 'toggle_lights'
+  | 'open_browser'
+  | 'open_terminal'
+  | 'media_play_pause';
 
 /** Manages the mobile app's authenticated WebSocket connection to a Blinky host. */
 export function usePCWebSocket() {
