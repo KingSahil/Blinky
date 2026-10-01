@@ -34,6 +34,8 @@ export interface SecureTransportInfo {
   mode: 'development' | 'release';
   desktop_url: string;
   certificate_pin: string | null;
+  local_ip: string | null;
+  remote_token: string | null;
 }
 
 export interface SecureSocketEvent {

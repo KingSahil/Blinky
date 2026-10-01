@@ -27,6 +27,12 @@ This directory contains the React Native Expo mobile application that connects t
 
 ## Running the Application
 
+### Local Android debug testing
+
+The debug APK intentionally uses Android's debuggable flag and the RevenueCat test key. It loads JavaScript from Metro, so install it with `install_apk.bat` (debug is the default), then start the PC development app from the repository root with `bun run dev`. The launcher starts Metro, forwards USB ports 9001, 9002, 9004, and 8081, and launches the mobile app. For a USB connection, use `localhost` in the mobile app.
+
+Use `install_apk.bat release` only when you intend to install the release APK. Do not use a debug APK with a packaged release desktop app: the debug app uses the development WebSocket transport, while the packaged desktop app uses pinned WSS.
+
 1. Ensure your computer and mobile device are connected to the **same local Wi-Fi network**.
 2. For a custom development build, run the following command inside `common/mobile` to start Metro:
    ```bash

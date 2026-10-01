@@ -1037,6 +1037,12 @@ fn start_wake_word_detector(app: &AppHandle) {
 }
 
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    if !acquire_single_instance() {
+        eprintln!("Blinky is already running; ignoring the duplicate launch.");
+        return;
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -1168,6 +1174,31 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("failed to run Blinky");
+}
+
+#[cfg(target_os = "windows")]
+fn acquire_single_instance() -> bool {
+    use std::sync::OnceLock;
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+
+    static INSTANCE_MUTEX: OnceLock<isize> = OnceLock::new();
+    let name: Vec<u16> = "Local\\Blinky.Desktop.SingleInstance"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    unsafe {
+        let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+        if handle.is_null() {
+            // Let Blinky run if Windows cannot create the guard.
+            return true;
+        }
+
+        let already_running = GetLastError() == ERROR_ALREADY_EXISTS;
+        let _ = INSTANCE_MUTEX.set(handle as isize);
+        !already_running
+    }
 }
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
