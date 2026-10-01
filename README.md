@@ -65,15 +65,29 @@ Some capabilities need API credentials, optional system packages, or connected h
 
 ## Showcase
 
-  <div align="center">
-    <table>
-      <tr>
-        <td>
-          <video src="https://github.com/user-attachments/assets/2ce70a03-9747-4155-95bb-dba7d92374ef" width="100%" controls muted></video>
-        </td>
-      </tr>
-    </table>
-  </div>
+<div align="center">
+  <table>
+    <tr>
+      <td colspan="4">
+        <video src="https://github.com/user-attachments/assets/2ce70a03-9747-4155-95bb-dba7d92374ef" width="100%" controls muted></video>
+      </td>
+    </tr>
+    <tr>
+      <td>
+        <img src="common/mobile/assets/showcase1.jpg" width="100%">
+      </td>
+      <td>
+        <img src="common/mobile/assets/showcase2.jpg" width="100%">
+      </td>
+      <td>
+        <img src="common/mobile/assets/showcase3.jpg" width="100%">
+      </td>
+      <td>
+        <img src="common/mobile/assets/showcase4.jpg" width="100%">
+      </td>
+    </tr>
+  </table>
+</div>
 
 
 ## Architecture
