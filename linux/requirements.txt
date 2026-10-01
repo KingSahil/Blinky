@@ -26,7 +26,7 @@ faster-whisper>=1.2.1
 # gnome-screenshot  spectacle  python-atspi
 
 # PDF & Neural RAG Vector Search Dependencies
-pypdf>=6.1.0
+pypdf>=6.14.2
 PyMuPDF>=1.24.0
 reportlab>=4.2.0
 fastembed>=0.8.0
