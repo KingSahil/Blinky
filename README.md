@@ -1,14 +1,13 @@
 <div align="center">
-
-<img src="docs/assets/logo_text.png" alt="Blinky" width="72%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/logo_text.png">
+  <source media="(prefers-color-scheme: light)" srcset="common/mobile/assets/logo-text-light.png">
+  <img alt="Blinky" src="common/mobile/assets/logo-text-light.png" width="72%">
+</picture>
 
 <br>
 
-<img src="docs/assets/blinky_mascot_logo.png" alt="Blinky mascot" width="140">
 
-# Blinky
-
-### The AI desktop tutor that sees your screen, guides you through it, and can act on your behalf.
 
 Screen-aware tutoring · Voice interaction · Desktop automation · Mobile control
 
@@ -16,7 +15,6 @@ Screen-aware tutoring · Voice interaction · Desktop automation · Mobile contr
 
 [![Demo](https://img.shields.io/badge/Watch_Demo-YouTube-red?style=for-the-badge)](https://youtu.be/CHFF9J_Jqgw)
 [![Website](https://img.shields.io/badge/Website-blinkyy.vercel.app-6C47FF?style=for-the-badge)](https://blinkyy.vercel.app)
-[![Pitch Deck](https://img.shields.io/badge/Pitch_Deck-Google_Slides-4285F4?style=for-the-badge)](https://docs.google.com/presentation/d/10isbvsbzb3Xm2RzeHyaA_FQqcjUTUzRipflrhuyABRY/edit)
 [![Blog](https://img.shields.io/badge/Blog-Medium-000000?style=for-the-badge)](https://medium.com/@khannasparsh0001/building-blinky-fighting-captchas-invisible-windows-and-the-agony-of-visualizing-ai-b1247b9fc324?sharedUserId=khannasparsh0001)
 
 <br>
@@ -65,25 +63,90 @@ Learning complex desktop software often means switching between tutorials, docum
 
 Some capabilities need API credentials, optional system packages, or connected hardware. Local Ollama inference is available; selecting a cloud AI or voice provider sends the relevant request data to that provider.
 
+## Showcase
+
+  <div align="center">
+    <table>
+      <tr>
+        <td>
+          <video src="https://github.com/user-attachments/assets/2ce70a03-9747-4155-95bb-dba7d92374ef" width="100%" controls muted></video>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+
 ## Architecture
 
 ```mermaid
-flowchart LR
-    U[User] --> UI[React command bar and overlay]
-    UI <--> T[Tauri and Rust desktop host]
-    T <--> P[Python assistant and tool router]
+flowchart  LR
+    U(["👤 User"])
 
-    P --> R{Request router}
-    R -->|Screen guidance| C[Platform screen capture]
-    C --> O[OCR, accessibility, and visual grounding]
-    O --> AI[Ollama or configured cloud model]
-    AI --> H[Guidance and highlight overlay]
-    R -->|Desktop actions| A[Platform computer-use tools]
-    R -->|Search and integrations| X[Web, WhatsApp, AiCut, Spotify, and other tools]
+    subgraph FRONT["🖥️ Frontend"]
+        UI["React<br/>command bar + overlay"]
+    end
 
-    M[Android companion] <-->|Authenticated WebSocket| T
-    T --> F[Files, system controls, and telemetry]
-    P --> I[ESP32 and external integrations]
+    subgraph HOST["⚙️ Desktop host"]
+        T["Tauri + Rust"]
+        F["Files, system controls,<br/>telemetry"]
+    end
+
+    subgraph BRAIN["🧠 Assistant"]
+        P["Python assistant<br/>+ tool router"]
+        R{"Request<br/>router"}
+    end
+
+    subgraph VISION["👁️ Screen guidance"]
+        C["Screen capture"]
+        O["OCR, accessibility,<br/>visual grounding"]
+        AI["Ollama or<br/>cloud model"]
+        H["Guidance +<br/>highlight overlay"]
+        C --> O --> AI --> H
+    end
+
+    subgraph TOOLS["🧰 Tools"]
+        A["Computer-use<br/>tools"]
+        X["Web, WhatsApp, AiCut,<br/>Spotify, others"]
+        I["ESP32 +<br/>integrations"]
+    end
+
+    M["📱 Android companion"]
+
+    U --> UI
+    UI <--> T
+    T <--> P
+    T --> F
+    M <-->|"Authenticated<br/>WebSocket"| T
+
+    P --> R
+    P --> I
+    R -->|"Screen guidance"| C
+    R -->|"Desktop actions"| A
+    R -->|"Search + integrations"| X
+
+    classDef user fill:#ea580c,stroke:#9a3412,color:#fff,stroke-width:2px
+    classDef front fill:#fb923c,stroke:#c2410c,color:#1c1917
+    classDef host fill:#f97316,stroke:#9a3412,color:#1c1917
+    classDef brain fill:#c2410c,stroke:#7c2d12,color:#fff
+    classDef vision fill:#fdba74,stroke:#ea580c,color:#1c1917
+    classDef tool fill:#fed7aa,stroke:#ea580c,color:#431407
+    classDef mobile fill:#fbbf24,stroke:#b45309,color:#1c1917
+
+    class U user
+    class UI front
+    class T,F host
+    class P,R brain
+    class C,O,AI,H vision
+    class A,X,I tool
+    class M mobile
+
+    linkStyle default stroke:#f97316,stroke-width:2px
+
+    style FRONT fill:none,stroke:#fb923c,stroke-width:2px,stroke-dasharray:5 5
+    style HOST fill:none,stroke:#f97316,stroke-width:2px,stroke-dasharray:5 5
+    style BRAIN fill:none,stroke:#c2410c,stroke-width:2px,stroke-dasharray:5 5
+    style VISION fill:none,stroke:#fdba74,stroke-width:2px,stroke-dasharray:5 5
+    style TOOLS fill:none,stroke:#ea580c,stroke-width:2px,stroke-dasharray:5 5
 ```
 
 | Layer | Main components |
@@ -235,10 +298,9 @@ Keep `.env` and all secret keys out of source control. The mobile desktop connec
 | Sahil | [@KingSahil](https://github.com/KingSahil) | Backend and Tauri desktop application |
 | FeV-06 | [@FeV-06](https://github.com/FeV-06) | Mobile application and Linux development |
 | meharwanfr | [@meharwanfr](https://github.com/meharwanfr) | Linux desktop development |
-| Divyam | [@divi912](https://github.com/divi912) | Mobile file transfer and destination-aware media workflows |
+| Divyam | [@divi912](https://github.com/divi912) | Mobile file transfer and destination-aware media workflows, WSS implmentation |
 | Vedant | [@vedanthaha](https://github.com/vedanthaha) | Mobile interface and usability improvements |
-
-Divyam and Vedant are included based on their contributions in the repository commit history.
+|Boldbug | [@boldbug1](https://github.com/boldbug1) | Automated QR pairing , setup files ,docs maintainence |
 
 ## Acknowledgements
 
@@ -248,10 +310,6 @@ Divyam and Vedant are included based on their contributions in the repository co
 - Microsoft for OmniParser
 - Tauri, React, Expo, and React Native for the application frameworks
 - The Blinky contributors and users who have tested the desktop and mobile workflows
-
-## License
-
-Blinky is released under the MIT License.
 
 <div align="center">
 
