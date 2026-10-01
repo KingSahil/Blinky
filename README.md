@@ -2,12 +2,6 @@
 
 <img src="common/mobile/assets/logo_text.png" alt="Blinky" width="72%">
 
-<br>
-
-<img src="common/mobile/assets/blinky-mascot-logo.png" alt="Blinky mascot" width="140">
-
-# Blinky
-
 ### The AI desktop tutor that sees your screen, guides you through it, and can act on your behalf.
 
 Screen-aware tutoring · Voice interaction · Desktop automation · Mobile control
