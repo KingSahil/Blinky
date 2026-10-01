@@ -114,6 +114,13 @@ export function SettingsModal(props: SettingsModalProps) {
   if (!props.visible) return null;
 
   const handleQrScanned = (data: string) => {
+    const trimmed = data.trim();
+    // The Metro bundler QR (exp://...) loads the app via Expo Go — it is not
+    // a PC-link code. Point this out explicitly: the two QRs get mixed up.
+    if (/^exp:\/\//i.test(trimmed)) {
+      setQrError('That is the Expo loader code (for opening this app in Expo Go), not the PC link code. First open the app with Expo Go, then scan the QR shown in the Blinky PC app header (QR icon) here.');
+      return;
+    }
     const parsed = parsePairingQr(data);
     if (!parsed) {
       setQrError('That is not a Blinky pairing code. Open the Blinky PC app, tap the QR icon in the header, and scan that code.');

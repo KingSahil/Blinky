@@ -22,6 +22,7 @@ tmp/
 !.agents/hooks.json
 src-tauri/target/
 common/src-tauri/target/
+common/src-tauri/target-nsis-release/
 screenshots/
 python/cache/
 # Runtime-generated artifacts (regenerated on demand; never commit)

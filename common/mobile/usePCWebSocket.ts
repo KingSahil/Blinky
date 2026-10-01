@@ -422,24 +422,29 @@ export function usePCWebSocket() {
     try {
       console.log(`[WS] Connecting to ${wsUrl}`);
       
-      // Fetch token from discovery endpoint if not provided
+      // Always prefer a fresh token from the discovery endpoint: the saved/QR
+      // token may be stale after the PC regenerates it, and the desktop
+      // gateway answers every auth frame with an `auth_result` verdict.
+      // Fall back to the passed token only when discovery is unreachable.
       let authToken = token?.trim();
-      if (!authToken) {
-        try {
-          const res = await fetch(`http://${formattedIp.split(':')[0]}:9004/discover`, {
-            signal: AbortSignal.timeout(3000),
-            headers: { 'Accept': 'application/json' },
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.token) {
-              authToken = data.token;
+      try {
+        const res = await fetch(`http://${formattedIp.split(':')[0]}:9004/discover`, {
+          signal: AbortSignal.timeout(3000),
+          headers: { 'Accept': 'application/json' },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.token) {
+            if (authToken && authToken !== data.token) {
+              console.log('[WS] Saved token is stale, using fresh token from discovery endpoint');
+            } else {
               console.log('[WS] Retrieved token from discovery endpoint');
             }
+            authToken = data.token;
           }
-        } catch (e) {
-          console.log('[WS] Discovery endpoint not available, connecting without token');
         }
+      } catch (e) {
+        console.log('[WS] Discovery endpoint not available, connecting with saved token');
       }
 
       const ws = new WebSocket(wsUrl);
@@ -486,7 +491,20 @@ export function usePCWebSocket() {
         if (wsRef.current === ws) {
           try {
             const parsed = JSON.parse(e.data);
-            if (parsed.type === 'system_info') {
+            if (parsed.type === 'auth_result') {
+              // The desktop gateway verdict on our `auth:` frame. A rejection
+              // must never look like a working connection: surface it so the
+              // app can rescan the PC QR instead of failing silently.
+              if (parsed.ok === true) {
+                setStatus('connected');
+                setErrorMsg(null);
+              } else {
+                try { ws.close(); } catch {}
+                wsRef.current = null;
+                setStatus('error');
+                setErrorMsg('The PC rejected the remote token. Open the Blinky PC app, tap the QR icon, and scan the fresh code.');
+              }
+            } else if (parsed.type === 'system_info') {
               setSystemInfo(parsed as SystemInfo);
             } else if (parsed.type === 'api_keys_sync') {
               if (parsed.keys) {

@@ -342,6 +342,12 @@ const TAILSCALE_DEFAULT_IP = '100.122.62.2';
 const probeCandidateIps = async (certificatePin?: string): Promise<string | null> => {
   const candidates: string[] = [];
 
+  // Deterministic LAN address published by `bun run dev` into
+  // common/mobile/.env (EXPO_PUBLIC_PC_IP). Highest priority: it survives
+  // manually-started Metro (`bunx expo start`) where the Expo host IP may
+  // point at a tunnel/virtual adapter instead of the real LAN PC.
+  const envPcIp = process.env.EXPO_PUBLIC_PC_IP?.trim();
+  if (envPcIp && !candidates.includes(envPcIp)) candidates.push(envPcIp);
   const envTailscale = process.env.EXPO_PUBLIC_TAILSCALE_IP?.trim();
   if (envTailscale && !candidates.includes(envTailscale)) candidates.push(envTailscale);
   if (!candidates.includes(TAILSCALE_DEFAULT_IP)) candidates.push(TAILSCALE_DEFAULT_IP);
@@ -1893,10 +1899,12 @@ export default function App() {
     if (token) setRemoteToken(token);
     if (pin) setCertificatePin(pin);
     try {
+      // Never persist empty strings: that would clobber a working saved
+      // token/pin with "" and poison every later auto-reconnect attempt.
       await Promise.all([
         AsyncStorage.setItem(STORAGE_KEY, cleanedIp),
-        saveCredential('remote_token', TOKEN_STORAGE_KEY, token),
-        saveCredential('certificate_pin', CERTIFICATE_PIN_STORAGE_KEY, pin),
+        ...(token ? [saveCredential('remote_token', TOKEN_STORAGE_KEY, token)] : []),
+        ...(pin ? [saveCredential('certificate_pin', CERTIFICATE_PIN_STORAGE_KEY, pin)] : []),
       ]);
     } catch (e) {}
     // A release QR must stay on the pinned secure channel even in dev builds;

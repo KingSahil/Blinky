@@ -440,7 +440,12 @@ pub async fn start_websocket_server(app: AppHandle) {
         }
     };
     let mode = crate::transport::TransportMode::current();
-    let tls_acceptor = {
+    // TLS is a release-only transport. In development the mobile app, the
+    // desktop bridge, and local tooling all speak plaintext ws:// (9001) and
+    // http:// (9002, 9004); handing those bytes to the rustls acceptor kills
+    // every dev connection with `InvalidContentType`. Discovery (:9004)
+    // already ignores TLS entirely — the gateway and file transfer must too.
+    let tls_acceptor: Option<TlsAcceptor> = if mode.is_release() {
         let identity = match crate::tls_identity::TlsIdentity::load_or_generate(&app) {
             Ok(identity) => Some(identity),
             Err(error) => {
@@ -460,6 +465,8 @@ pub async fn start_websocket_server(app: AppHandle) {
         } else {
             None
         }
+    } else {
+        None
     };
     println!("WebSocket server listening on {} ({:?})", addr, mode);
 

@@ -1456,7 +1456,11 @@ def handle_notebook_rpc(action: str, params: dict) -> dict:
         source_name = params.get("source_name", "document.txt")
         content = params.get("content", "")
         file_type = params.get("file_type", "txt")
-        res = manager.add_source_to_notebook(nb_id, source_name, content, file_type=file_type)
+        try:
+            res = manager.add_source_to_notebook(nb_id, source_name, content, file_type=file_type)
+        except Exception as exc:
+            LOGGER.error(f"notebook_add_source failed for {source_name}: {exc}")
+            return {"success": False, "error": str(exc)}
         return {"success": res is not None, "source": res}
 
     elif action == "notebook_toggle_source":

@@ -6,43 +6,59 @@ from typing import Dict, Any
 
 
 def parse_pdf_text(filepath: Path) -> str:
-    """Extract text from PDF using PyMuPDF (fitz) or pypdf."""
-    text_chunks = []
-    # Fast path: PyMuPDF
-    try:
-        import fitz
-        doc = fitz.open(str(filepath))
-        for idx, page in enumerate(doc):
-            page_text = page.get_text() or ""
-            if page_text.strip():
-                text_chunks.append(f"--- Page {idx + 1} ---\n{page_text.strip()}")
-        doc.close()
-        if text_chunks:
-            return "\n\n".join(text_chunks)
-    except Exception:
-        pass
+    """Extract text from PDF using PyMuPDF (fitz), pypdf, or legacy PyPDF2.
+
+    Raises RuntimeError when no PDF backend is installed or the file cannot
+    be read, so callers surface a real error instead of storing an
+    "[PDF ... Error: ...]" string as if it were document content.
+    """
+    backend_errors: list[str] = []
 
     try:
-        import pypdf
-        reader = pypdf.PdfReader(str(filepath))
-        for idx, page in enumerate(reader.pages):
-            page_text = page.extract_text() or ""
-            if page_text.strip():
-                text_chunks.append(f"--- Page {idx + 1} ---\n{page_text.strip()}")
-    except ImportError:
+        import fitz
+
         try:
-            from PyPDF2 import PdfReader
-            reader = PdfReader(str(filepath))
+            text_chunks: list[str] = []
+            doc = fitz.open(str(filepath))
+            try:
+                for idx, page in enumerate(doc):
+                    page_text = page.get_text() or ""
+                    if page_text.strip():
+                        text_chunks.append(f"--- Page {idx + 1} ---\n{page_text.strip()}")
+            finally:
+                doc.close()
+            if text_chunks:
+                return "\n\n".join(text_chunks)
+            return "[Empty PDF file]"
+        except Exception as exc:
+            backend_errors.append(f"PyMuPDF: {exc}")
+    except ImportError:
+        backend_errors.append("PyMuPDF is not installed")
+
+    for module_name in ("pypdf", "PyPDF2"):
+        try:
+            module = __import__(module_name, fromlist=["PdfReader"])
+        except ImportError:
+            backend_errors.append(f"{module_name} is not installed")
+            continue
+        try:
+            reader = module.PdfReader(str(filepath))
+            text_chunks = []
             for idx, page in enumerate(reader.pages):
                 page_text = page.extract_text() or ""
                 if page_text.strip():
                     text_chunks.append(f"--- Page {idx + 1} ---\n{page_text.strip()}")
-        except Exception as e:
-            text_chunks.append(f"[PDF Parsing Error: {e}]")
-    except Exception as exc:
-        text_chunks.append(f"[PDF Error: {exc}]")
+            if text_chunks:
+                return "\n\n".join(text_chunks)
+            return "[Empty PDF file]"
+        except Exception as exc:
+            backend_errors.append(f"{module_name}: {exc}")
 
-    return "\n\n".join(text_chunks) if text_chunks else "[Empty PDF file]"
+    raise RuntimeError(
+        f"Cannot parse this PDF ({Path(filepath).name}). "
+        + "; ".join(backend_errors)
+        + ". Install a PDF backend with: pip install pypdf PyMuPDF"
+    )
 
 
 def parse_source_to_okf(source_name: str, raw_content: str | bytes, file_type: str = "txt") -> Dict[str, Any]:

@@ -165,6 +165,16 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose, isStandalon
             if (listRes && listRes.success && listRes.notebooks) {
               setNotebooks(listRes.notebooks);
             }
+          } else {
+            // Surface backend parse failures (e.g. unreadable PDF) in chat
+            // instead of silently adding nothing.
+            const uploadErr: ChatMessage = {
+              id: `err_${Date.now()}`,
+              sender: 'ai',
+              text: `Could not add ${file.name}: ${res?.error || 'the file could not be parsed'}. Please re-upload the file.`,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            };
+            setMessages((prev) => [...prev, uploadErr]);
           }
           resolve();
         } catch (err) {

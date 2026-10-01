@@ -220,10 +220,79 @@ function getAdbPath(): string | null {
   return null;
 }
 
+/** Best-effort physical LAN IPv4 (skips loopback/link-local/virtual adapters). */
+function getLanIp(): string | null {
+  try {
+    if (process.platform === "win32") {
+      const res = Bun.spawnSync(["powershell", "-NoProfile", "-Command",
+        "Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.InterfaceAlias -notlike '*Loopback*' -and $_.InterfaceAlias -notlike '*vEthernet*' -and $_.InterfaceAlias -notlike '*WSL*' -and $_.InterfaceAlias -notlike '*Hyper-V*' -and $_.InterfaceAlias -notlike '*Tailscale*' -and $_.InterfaceAlias -notlike '*Docker*' } | Select-Object -ExpandProperty IPAddress -First 1"]);
+      if (res.exitCode === 0) {
+        const ip = res.stdout.toString().trim().split(/\s+/)[0] ?? "";
+        if (/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return ip;
+      }
+    } else {
+      const res = Bun.spawnSync(["sh", "-c", "hostname -I 2>/dev/null | tr ' ' '\\n' | grep -v '^127\\.' | grep -v '^169\\.254\\.' | grep -v '^172\\.17\\.' | head -n 1"]);
+      if (res.exitCode === 0) {
+        const ip = res.stdout.toString().trim();
+        if (/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return ip;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/** Prints the manual Wi-Fi debug flow (two different QR codes). */
+function printManualExpoHints(lanIp: string): void {
+  console.log(`[Mobile] ── Wi-Fi debug (no USB) ──────────────────────────────`);
+  console.log(`[Mobile] 1) Start Metro with LAN host (restart it if already running):`);
+  console.log(`[Mobile]      cd common/mobile && bunx expo start --host lan`);
+  console.log(`[Mobile] 2) Scan the Metro exp:// QR with EXPO GO to load the app.`);
+  console.log(`[Mobile] 3) The app auto-connects to ${lanIp}:9001. If it does not,`);
+  console.log(`[Mobile]    open the PC app header QR icon and scan THAT code inside the`);
+  console.log(`[Mobile]    app's Local Link Setup → QR tab (the two QRs are different).`);
+  console.log(`[Mobile]    PC must stay on the same Wi-Fi; discovery: http://${lanIp}:9004/discover`);
+  console.log(`[Mobile] ───────────────────────────────────────────────────────`);
+}
+
+/**
+ * Publishes the PC LAN IP to common/mobile/.env (EXPO_PUBLIC_PC_IP) so that a
+ * manually-started Metro (`cd common/mobile && bunx expo start --host lan`)
+ * bakes the deterministic debug target into the bundle. The file is gitignored;
+ * only the managed block is rewritten, user keys (e.g. RevenueCat) are kept.
+ */
+async function publishMobileDevEnv(): Promise<string | null> {
+  const lanIp = getLanIp();
+  if (!lanIp) {
+    console.warn("[Mobile] Could not detect LAN IP; phone auto-connect will rely on Expo host IP + subnet scan.");
+    return null;
+  }
+  const envPath = "common/mobile/.env";
+  const begin = "# BEGIN blinky-dev-managed (rewritten by `bun run dev`; safe to delete)";
+  const end = "# END blinky-dev-managed";
+  const managed = `${begin}\nEXPO_PUBLIC_PC_IP=${lanIp}\nEXPO_PUBLIC_PC_PORT=9001\n${end}\n`;
+  try {
+    let existing = "";
+    try {
+      existing = await Bun.file(envPath).text();
+    } catch {}
+    const blockRe = /# BEGIN blinky-dev-managed[\s\S]*?# END blinky-dev-managed\n?/;
+    const next = blockRe.test(existing)
+      ? existing.replace(blockRe, managed)
+      : `${existing}${existing && !existing.endsWith("\n") ? "\n" : ""}${existing ? "\n" : ""}${managed}`;
+    await Bun.write(envPath, next);
+    console.log(`[Mobile] 📡 Published PC LAN IP ${lanIp} to ${envPath} (EXPO_PUBLIC_PC_IP). Restart Metro to pick up changes.`);
+  } catch (err: any) {
+    console.warn(`[Mobile] Could not write ${envPath}: ${err?.message || err}`);
+  }
+  return lanIp;
+}
+
 async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
+  const lanIp = await publishMobileDevEnv();
   const adb = getAdbPath();
   if (!adb) {
     console.log("[Mobile] adb not found. Skipping USB mobile check.");
+    if (lanIp) printManualExpoHints(lanIp);
     return null;
   }
 
@@ -239,6 +308,7 @@ async function checkAndStartMobileIfUsbConnected(): Promise<Subprocess | null> {
 
     if (connectedDevices.length === 0) {
       console.log("[Mobile] No USB-connected Android devices detected.");
+      if (lanIp) printManualExpoHints(lanIp);
       return null;
     }
 
