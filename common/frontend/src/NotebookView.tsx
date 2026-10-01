@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { runTutor } from './lib/tauri';
+import { Zap, Minus, Square, X, Plus, Upload, FileText, Sparkles, Paperclip, Send, Box, ChevronRight, MessageCircleQuestion, Layers, CheckSquare, Lightbulb, Globe, Mic } from 'lucide-react';
 
 export interface Source {
   id: string;
@@ -71,14 +72,12 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose, isStandalon
 
   const activeNotebook = notebooks.find((n) => n.id === activeNotebookId) || notebooks[0];
 
-  // Load notebooks and persisted sources from backend on mount
   useEffect(() => {
     async function initNotebook() {
       try {
         const listRes = await callNotebookRpc('notebook_list', {});
         if (listRes && listRes.success && listRes.notebooks && listRes.notebooks.length > 0) {
           const nbs = listRes.notebooks as Notebook[];
-          // Prioritize notebook that already has sources
           const primary = nbs.find((n) => n.sources && n.sources.length > 0) || nbs[0];
           setNotebooks(nbs);
           setActiveNotebookId(primary.id);
@@ -160,7 +159,6 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose, isStandalon
           });
 
           if (res && res.success && res.source) {
-            // Re-fetch all notebooks to keep source count & word counts exact
             const listRes = await callNotebookRpc('notebook_list', {});
             if (listRes && listRes.success && listRes.notebooks) {
               setNotebooks(listRes.notebooks);
@@ -175,7 +173,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose, isStandalon
       reader.onerror = (err) => reject(err);
 
       if (ext === 'pdf') {
-        reader.readAsDataURL(file); // Encode binary PDF safely as Base64 Data URL
+        reader.readAsDataURL(file);
       } else {
         reader.readAsText(file);
       }
@@ -242,43 +240,28 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose, isStandalon
   return (
     <div className={`notebook-overlay ${isStandalone ? 'notebook-standalone' : ''}`}>
       <div className="notebook-container">
+        
         {/* HEADER */}
         <div className="notebook-header">
-          <div className="notebook-title-area">
-            <span className="notebook-badge">OKF Notebook</span>
-            <h2>{activeNotebook.title}</h2>
-            <button
-              style={{
-                marginLeft: '8px',
-                padding: '4px 10px',
-                fontSize: '11px',
-                borderRadius: '20px',
-                border: '1px solid ' + (useVectorSearch ? 'rgba(139, 92, 246, 0.4)' : 'rgba(255, 255, 255, 0.12)'),
-                background: useVectorSearch ? 'rgba(139, 92, 246, 0.2)' : 'rgba(255, 255, 255, 0.05)',
-                color: useVectorSearch ? '#c4b5fd' : '#94a3b8',
-                cursor: 'pointer',
-                fontWeight: 600,
-                transition: 'all 0.2s ease',
-              }}
-              onClick={() => setUseVectorSearch(!useVectorSearch)}
-              title="Toggle between Dense Vector RAG and Full Context OKF"
-            >
-              {useVectorSearch ? '⚡ Dense Vector RAG' : '📄 Full Context OKF'}
+          <div className="header-left">
+            <img src="/logo_text.png" alt="Blinky" className="header-logo" />
+            <span className="notebook-badge-red">OKF NOTEBOOK</span>
+            <span className="notebook-title-caps">DEFAULT KNOWLEDGE HUB</span>
+            <button className="rag-badge" onClick={() => setUseVectorSearch(!useVectorSearch)} title="Toggle between Dense Vector RAG and Full Context OKF">
+              <Zap size={12} /> {useVectorSearch ? 'Dense Vector RAG' : 'Full Context OKF'}
             </button>
           </div>
-          <button className="notebook-close-btn" onClick={onClose} title="Close Workspace">
-            ✕
-          </button>
         </div>
 
         {/* 3-COLUMN WORKSPACE GRID */}
         <div className="notebook-grid">
+          
           {/* LEFT COLUMN: SOURCES */}
           <div className="notebook-col notebook-sources-col">
-            <div className="col-header">
-              <h3>Sources ({activeNotebook.sources.length})</h3>
-              <label className={`upload-btn ${uploading ? 'uploading' : ''}`}>
-                {uploading ? 'Ingesting...' : '+ Add Source'}
+            <div className="col-header-flex">
+              <h3>SOURCES ({activeNotebook.sources.length})</h3>
+              <label className="add-source-btn">
+                <Plus size={14} /> Add Source
                 <input
                   type="file"
                   multiple
@@ -292,10 +275,7 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose, isStandalon
 
             <div
               className={`sources-dropzone ${dragOver ? 'dragover' : ''} ${uploading ? 'uploading' : ''}`}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragOver(true);
-              }}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
               onDragLeave={() => setDragOver(false)}
               onDrop={async (e) => {
                 e.preventDefault();
@@ -312,17 +292,20 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose, isStandalon
                 }
               }}
             >
+              <Upload size={24} color={uploading ? "#94a3b8" : "#FF5A00"} style={{opacity: uploading ? 0.5 : 0.8}} />
               <p>{uploading ? 'Parsing and vector-indexing files...' : 'Drag & drop PDFs, Markdown, or text documents here'}</p>
+              {!uploading && <small>Supported: PDF, MD, TXT</small>}
             </div>
 
             <div className="sources-list">
               {activeNotebook.sources.length === 0 && !uploading && (
-                <div style={{ padding: '24px 12px', textAlign: 'center', color: '#64748b', fontSize: '12px' }}>
-                  No sources added yet. Drop PDFs or notes above to begin.
+                <div className="empty-sources">
+
+                  <p>No sources added yet.<br/>Drop PDFs or notes above to begin.</p>
                 </div>
               )}
               {activeNotebook.sources.map((src) => (
-                <div key={src.id} className={`source-card ${src.active ? 'active' : 'inactive'}`}>
+                <div key={src.id} className={`source-card ${src.active ? 'active' : 'inactive'}`} style={{display: 'flex', gap: '12px', padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '8px', marginBottom: '8px', border: '1px solid rgba(255,255,255,0.05)', opacity: src.active ? 1 : 0.5}}>
                   <input
                     type="checkbox"
                     checked={src.active}
@@ -330,15 +313,15 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose, isStandalon
                     className="source-checkbox"
                     title={src.active ? 'Disable from grounded context' : 'Enable in grounded context'}
                   />
-                  <div className="source-info">
-                    <span className="source-name" title={src.source_name}>
+                  <div className="source-info" style={{flex: 1, minWidth: 0}}>
+                    <div className="source-name" title={src.source_name} style={{fontSize: '13px', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: '4px'}}>
                       {src.source_name}
-                    </span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '3px' }}>
-                      <span className={`source-badge-type ${src.file_type.toLowerCase()}`}>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span className={`source-badge-type`} style={{fontSize: '10px', background: 'rgba(255,255,255,0.1)', padding: '2px 6px', borderRadius: '4px', fontWeight: 600}}>
                         {src.file_type.toUpperCase()}
                       </span>
-                      <span className="source-meta">
+                      <span className="source-meta" style={{fontSize: '11px', color: 'rgba(255,255,255,0.5)'}}>
                         {src.word_count.toLocaleString()} words
                       </span>
                     </div>
@@ -351,19 +334,35 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose, isStandalon
           {/* CENTER COLUMN: GROUNDED CHAT STREAM */}
           <div className="notebook-col notebook-chat-col">
             <div className="chat-stream">
-              {messages.map((msg) => (
-                <div key={msg.id} className={`message-bubble ${msg.sender}`}>
-                  <div className="bubble-header">
-                    <span className="sender-name">{msg.sender === 'user' ? 'You' : 'Blinky Notebook AI'}</span>
-                    <span className="timestamp">{msg.timestamp}</span>
+              {messages.length === 1 && messages[0].sender === 'ai' ? (
+                <div className="welcome-card">
+                  <div className="welcome-icon">
+                    <Sparkles size={24} color="#FF5A00" />
                   </div>
-                  <div className="bubble-text">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                  <div className="welcome-content">
+                    <div className="welcome-header">
+                      <span className="ai-label">Blinky Notebook AI</span>
+                      <span className="time-label">{messages[0].timestamp}</span>
+                    </div>
+                    <h2>Welcome to your <span className="highlight">Blinky Knowledge Hub!</span> 📚</h2>
+                    <p>Upload your PDFs, Markdown files, or notes on the left to ground the AI. When active, every answer is synthesized with verifiable inline citations.</p>
                   </div>
                 </div>
-              ))}
+              ) : (
+                messages.map((msg) => (
+                  <div key={msg.id} className={`message-bubble ${msg.sender}`} style={{maxWidth: '80%', padding: '16px', borderRadius: '16px'}}>
+                    <div className="bubble-header" style={{display: 'flex', justifyContent: 'space-between', marginBottom: '8px', fontSize: '12px', color: 'rgba(255,255,255,0.5)'}}>
+                      <span className="sender-name">{msg.sender === 'user' ? 'You' : 'Blinky Notebook AI'}</span>
+                      <span className="timestamp">{msg.timestamp}</span>
+                    </div>
+                    <div className="bubble-text" style={{fontSize: '14px', lineHeight: 1.6}}>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                    </div>
+                  </div>
+                ))
+              )}
               {loading && (
-                <div className="message-bubble ai loading">
+                <div className="message-bubble ai loading" style={{padding: '16px'}}>
                   <div className="typing-indicator">
                     <span></span><span></span><span></span>
                   </div>
@@ -375,86 +374,114 @@ export const NotebookView: React.FC<NotebookViewProps> = ({ onClose, isStandalon
               <div ref={chatEndRef} />
             </div>
 
-            <div className="notebook-input-area">
-              <input
-                type="text"
-                className="notebook-input"
-                placeholder={
-                  activeNotebook.sources.length === 0
-                    ? 'Add a source document first to ask grounded questions...'
-                    : useVectorSearch
-                    ? 'Query notebook using Dense Vector Search...'
-                    : 'Ask a grounded question across active sources...'
-                }
-                value={queryInput}
-                onChange={(e) => setQueryInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-              />
-              <button className="send-btn" onClick={() => handleSendMessage()} disabled={loading}>
-                Send
-              </button>
+            <div className={`composer-wrapper ${queryInput || dragOver ? 'expanded' : ''}`}>
+              <div className="composer-row">
+                <button className="composer-btn-icon" title="Attach file" type="button" tabIndex={-1}>
+                  <Paperclip size={20} />
+                </button>
+
+                <div className="composer-input-container">
+                  <input
+                    type="text"
+                    className="composer-input"
+                    value={queryInput}
+                    onChange={(e) => setQueryInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                    placeholder=""
+                  />
+                  {!queryInput && (
+                    <div className="composer-placeholder">
+                      {(activeNotebook.sources.length === 0
+                        ? 'Add a source document first to ask grounded questions...'
+                        : useVectorSearch
+                        ? 'Query notebook using Dense Vector Search...'
+                        : 'Ask a grounded question across active sources...'
+                      ).split('').map((char, i) => (
+                        <span key={i} className="composer-placeholder-char" style={{animationDelay: `${i * 0.02}s`}}>
+                          {char === ' ' ? '\u00A0' : char}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <button className="composer-btn-icon" title="Voice input" type="button" tabIndex={-1}>
+                  <Mic size={20} />
+                </button>
+                <button className="composer-send" onClick={() => handleSendMessage()} disabled={loading} type="button" tabIndex={-1}>
+                  <Send size={18} />
+                </button>
+              </div>
+
+              <div className="composer-expanded-controls">
+                <button
+                  className="composer-toggle-btn active"
+                  title="Think"
+                  type="button"
+                >
+                  <Lightbulb size={16} /> Think
+                </button>
+                <button
+                  className={`composer-toggle-btn ${useVectorSearch ? 'active' : ''}`}
+                  title="Deep Search"
+                  type="button"
+                  onClick={() => setUseVectorSearch(!useVectorSearch)}
+                >
+                  <Globe size={16} /> Deep Search
+                </button>
+              </div>
             </div>
           </div>
 
           {/* RIGHT COLUMN: STUDIO ARTIFACTS */}
           <div className="notebook-col notebook-artifacts-col">
-            <div className="col-header">
-              <h3>Studio Artifacts</h3>
+            <div className="col-header-flex">
+              <h3 style={{display:'flex', alignItems:'center', gap:'8px'}}><Box size={16} /> STUDIO ARTIFACTS</h3>
             </div>
             <p className="artifacts-desc">One-click generate structured knowledge artifacts from your active sources:</p>
 
-            <div className="artifacts-buttons">
-              <button
-                className="artifact-btn"
-                onClick={() => handleArtifactGenerate('summary')}
-                disabled={activeNotebook.sources.length === 0 || loading}
-              >
-                <span className="btn-icon">📋</span>
-                <div className="btn-text">
-                  <strong>Executive Summary</strong>
-                  <small>High-level key points overview</small>
+            <div className="artifact-cards">
+              <div className="artifact-card ac-exec" onClick={() => handleArtifactGenerate('summary')}>
+                <div className="ac-icon"><FileText size={18} /></div>
+                <div className="ac-text">
+                  <h4>Executive Summary</h4>
+                  <p>High-level key points overview</p>
                 </div>
-              </button>
+                <ChevronRight size={16} />
+              </div>
 
-              <button
-                className="artifact-btn"
-                onClick={() => handleArtifactGenerate('faq')}
-                disabled={activeNotebook.sources.length === 0 || loading}
-              >
-                <span className="btn-icon">❓</span>
-                <div className="btn-text">
-                  <strong>FAQ Generator</strong>
-                  <small>Question & Answer study guide</small>
+              <div className="artifact-card ac-faq" onClick={() => handleArtifactGenerate('faq')}>
+                <div className="ac-icon"><MessageCircleQuestion size={18} /></div>
+                <div className="ac-text">
+                  <h4>FAQ Generator</h4>
+                  <p>Question & Answer study guide</p>
                 </div>
-              </button>
+                <ChevronRight size={16} />
+              </div>
 
-              <button
-                className="artifact-btn"
-                onClick={() => handleArtifactGenerate('study')}
-                disabled={activeNotebook.sources.length === 0 || loading}
-              >
-                <span className="btn-icon">📚</span>
-                <div className="btn-text">
-                  <strong>Study Guide</strong>
-                  <small>Definitions & core concepts</small>
+              <div className="artifact-card ac-study" onClick={() => handleArtifactGenerate('study')}>
+                <div className="ac-icon"><Layers size={18} /></div>
+                <div className="ac-text">
+                  <h4>Study Guide</h4>
+                  <p>Definitions & core concepts</p>
                 </div>
-              </button>
+                <ChevronRight size={16} />
+              </div>
 
-              <button
-                className="artifact-btn"
-                onClick={() => handleArtifactGenerate('action')}
-                disabled={activeNotebook.sources.length === 0 || loading}
-              >
-                <span className="btn-icon">✅</span>
-                <div className="btn-text">
-                  <strong>Action Checklist</strong>
-                  <small>Extracted step-by-step tasks</small>
+              <div className="artifact-card ac-action" onClick={() => handleArtifactGenerate('action')}>
+                <div className="ac-icon"><CheckSquare size={18} /></div>
+                <div className="ac-text">
+                  <h4>Action Checklist</h4>
+                  <p>Extracted step-by-step tasks</p>
                 </div>
-              </button>
+                <ChevronRight size={16} />
+              </div>
             </div>
           </div>
+
         </div>
       </div>
     </div>
   );
 };
+
