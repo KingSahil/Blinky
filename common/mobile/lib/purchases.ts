@@ -79,7 +79,8 @@ export async function initializePurchases(): Promise<boolean> {
 
   try {
     if (__DEV__) {
-      await Purchases.setLogLevel(LOG_LEVEL.DEBUG);
+      // Keep SDK errors visible without flooding the debug app with Test Store warnings.
+      await Purchases.setLogLevel(LOG_LEVEL.ERROR);
     }
 
     Purchases.configure({ apiKey });

@@ -38,17 +38,14 @@ exit /b 1
 
 :run_install
 echo.
-:: Detect if release APK exists, otherwise default to debug APK
-set APK_PATH=android\app\build\outputs\apk\release\app-release.apk
-if not exist "%APK_PATH%" (
-    set APK_PATH=android\app\build\outputs\apk\debug\app-debug.apk
-)
+:: Debug is the default for device testing. A stale release APK must not override it.
+set APK_PATH=android\app\build\outputs\apk\debug\app-debug.apk
+if /I "%~1"=="release" set APK_PATH=android\app\build\outputs\apk\release\app-release.apk
 
 if not exist "%APK_PATH%" (
     echo [ERROR] Could not find any APK.
-    echo Expected:
-    echo - Release: android\app\build\outputs\apk\release\app-release.apk
-    echo - Debug:   android\app\build\outputs\apk\debug\app-debug.apk
+    echo Expected APK:
+    echo %APK_PATH%
     echo.
     echo Please make sure you successfully ran the local build command first.
     pause
@@ -65,9 +62,12 @@ if %ERRORLEVEL% equ 0 (
     echo [SUCCESS] APK successfully installed on your phone!
     echo.
     echo Next steps:
-    echo 1. Keep your phone connected via USB.
-    echo 2. Run 'connect_usb.bat' to forward ports 9001 and 9002.
-    echo 3. Open the 'mobile' app on your phone, type 'localhost' as IP, and click connect!
+    echo 1. For debug testing, start the PC app with 'bun run dev' from the repository root.
+    echo    This starts Metro and the desktop development transport required by the debug APK.
+    echo 2. Keep your phone connected via USB. 'connect_usb.bat' forwards ports 9001, 9002, 9004, and 8081.
+    echo 3. Connect using 'localhost' in the mobile app.
+    echo.
+    echo To explicitly install a release APK, run this script with the 'release' argument.
 ) else (
     echo.
     echo [ERROR] Failed to install APK.

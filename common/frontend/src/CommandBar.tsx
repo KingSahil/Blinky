@@ -2585,25 +2585,23 @@ export function CommandBar() {
               </div>
             )}
 
-            {transportInfo?.mode === 'release' && transportInfo.certificate_pin && (
-              <div className="dropdown-section">
-                <h4>Mobile Release Link</h4>
-                <div style={{ fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', lineHeight: 1.45 }}>
-                  <div>Enter this certificate pin and your BLINKY_REMOTE_TOKEN in the mobile release build.</div>
-                  <code style={{ display: 'block', marginTop: '8px', wordBreak: 'break-all', color: '#fff' }}>
-                    {transportInfo.certificate_pin}
-                  </code>
-                  <button
-                    type="button"
-                    className="dropdown-option"
-                    style={{ marginTop: '8px', width: '100%' }}
-                    onClick={() => void navigator.clipboard?.writeText(transportInfo.certificate_pin || '')}
-                  >
-                    Copy certificate pin
-                  </button>
-                </div>
+            <div className="dropdown-section">
+              <h4>Mobile Companion</h4>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', lineHeight: 1.45 }}>
+                <div>Pair your phone to control Blinky remotely over local Wi-Fi.</div>
+                <button
+                  type="button"
+                  className="dropdown-option"
+                  style={{ marginTop: '8px', width: '100%' }}
+                  onClick={() => {
+                    setShowSettings(false);
+                    openMobileModal();
+                  }}
+                >
+                  <QrCode size={16} /> Show Mobile Pairing QR
+                </button>
               </div>
-            )}
+            </div>
 
             <div className="dropdown-section">
               <h4>WhatsApp</h4>

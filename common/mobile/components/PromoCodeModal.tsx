@@ -128,7 +128,7 @@ export function PromoCodeModal({ visible, onClose, onSuccess }: PromoCodeModalPr
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
         <View style={styles.overlay}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={styles.keyboardAvoid}
           >
             <Animated.View

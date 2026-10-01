@@ -1,6 +1,12 @@
 <div align="center">
 
-<img src="common/mobile/assets/logo_text.png" alt="Blinky" width="72%">
+<img src="docs/assets/logo_text.png" alt="Blinky" width="72%">
+
+<br>
+
+<img src="docs/assets/blinky_mascot_logo.png" alt="Blinky mascot" width="140">
+
+# Blinky
 
 ### The AI desktop tutor that sees your screen, guides you through it, and can act on your behalf.
 
@@ -31,11 +37,11 @@ Screen-aware tutoring · Voice interaction · Desktop automation · Mobile contr
 
 Learning complex desktop software often means switching between tutorials, documentation, and the application itself. Blinky brings help into the workflow: ask a question about the current screen, get a grounded next step, and see the relevant control highlighted in the app. When requested, Blinky can also carry out bounded desktop actions. A companion app extends selected controls to an Android phone.
 
-| **Element** | **Description** |
+| | |
 |---|---|
 | **For** | Students, developers, and anyone learning unfamiliar desktop software |
 | **Problem** | Tutorials and documentation are disconnected from the interface being learned |
-| **Approach** | Screen understanding, contextual guidance, visual highlights, voice interaction, and optional automation |
+| **Approach** | Screen understanding, contextual guidance, visual highlights, voice, and optional automation |
 
 ## Features
 

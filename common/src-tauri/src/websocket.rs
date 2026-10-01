@@ -517,6 +517,13 @@ pub fn secure_transport_info(
         None
     };
 
+    let local_ip = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|socket| {
+            socket.connect("8.8.8.8:80")?;
+            socket.local_addr()
+        })
+        .ok()
+        .map(|address| address.ip().to_string());
     Ok(serde_json::json!({
         "mode": if mode.is_release() { "release" } else { "development" },
         "desktop_url": if mode.is_release() {
@@ -530,6 +537,8 @@ pub fn secure_transport_info(
             "http://127.0.0.1:9002"
         },
         "certificate_pin": pin,
+        "local_ip": local_ip,
+        "remote_token": if mode.is_release() { Some(get_remote_token()) } else { None },
     }))
 }
 
@@ -2155,7 +2164,13 @@ fn get_voice_provider() -> String {
 /// Reads the remote token if explicitly configured by the user in environment or .env.
 /// Development may continue without one for compatibility; release remote peers then fail auth.
 /// In release mode, auto-generates and persists a token on first run.
+static REMOTE_TOKEN: OnceLock<String> = OnceLock::new();
+
 fn get_remote_token() -> String {
+    REMOTE_TOKEN.get_or_init(load_or_create_remote_token).clone()
+}
+
+fn load_or_create_remote_token() -> String {
     if let Ok(val) = std::env::var("BLINKY_REMOTE_TOKEN") {
         let trimmed = val.trim().to_string();
         if !trimmed.is_empty() {
