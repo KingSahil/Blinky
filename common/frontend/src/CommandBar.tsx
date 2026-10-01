@@ -243,8 +243,6 @@ export function CommandBar() {
   const [customModel, setCustomModel] = useState('');
   const [customApiKey, setCustomApiKey] = useState('');
   const [transportInfo, setTransportInfo] = useState<SecureTransportInfo | null>(null);
-  const [showPairQr, setShowPairQr] = useState(false);
-  const pairQrCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sarvamApiKeyRef = useRef('');
 
   useEffect(() => {
@@ -303,22 +301,6 @@ export function CommandBar() {
       .then(setTransportInfo)
       .catch(() => setTransportInfo(null));
   }, []);
-
-  useEffect(() => {
-    if (!showPairQr || transportInfo?.mode !== 'release' || !transportInfo.local_ip || !transportInfo.remote_token || !transportInfo.certificate_pin || !pairQrCanvasRef.current) return;
-    const pairingData = JSON.stringify({
-      type: 'blinky-pair', version: 1, ip: transportInfo.local_ip, port: 9001,
-      token: transportInfo.remote_token, pin: transportInfo.certificate_pin,
-    });
-    QRCode.toCanvas(pairQrCanvasRef.current, pairingData, {
-      width: 320,
-      margin: 4,
-      errorCorrectionLevel: 'L',
-      color: { dark: '#000000', light: '#ffffff' },
-    }, (error) => {
-      if (error) console.error('Failed to render Blinky pairing QR:', error);
-    });
-  }, [showPairQr, transportInfo]);
 
   // Workflow-save prompt (emitted by the agent loop after a successful task)
 
@@ -2603,32 +2585,23 @@ export function CommandBar() {
               </div>
             )}
 
-            {transportInfo?.mode === 'release' && transportInfo.certificate_pin && (
-              <div className="dropdown-section">
-                <h4>Connect your phone</h4>
-                <div style={{ fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', lineHeight: 1.45 }}>
-                  Scan once in Blinky on your phone to pair it with this PC.
-                  <button
-                    type="button"
-                    className="dropdown-option"
-                    style={{ marginTop: '8px', width: '100%' }}
-                    onClick={() => setShowPairQr((visible) => !visible)}
-                  >
-                    <QrCode size={16} /> {showPairQr ? 'Hide pairing code' : 'Show phone pairing code'}
-                  </button>
-                  {showPairQr && (
-                    <div style={{ marginTop: 12, textAlign: 'center' }}>
-                      {transportInfo.local_ip && transportInfo.remote_token ? (
-                        <canvas ref={pairQrCanvasRef} aria-label="Blinky phone pairing QR code" style={{ width: 280, height: 280, maxWidth: '100%', background: '#fff', borderRadius: 10, imageRendering: 'pixelated' }} />
-                      ) : (
-                        <div>Could not find this PC’s Wi-Fi address. Connect it to the same network as your phone and try again.</div>
-                      )}
-                      <div style={{ marginTop: 8 }}>Open Blinky on your phone and tap “Scan PC QR”.</div>
-                    </div>
-                  )}
-                </div>
+            <div className="dropdown-section">
+              <h4>Mobile Companion</h4>
+              <div style={{ fontSize: '12px', color: 'var(--text-secondary, #9ca3af)', lineHeight: 1.45 }}>
+                <div>Pair your phone to control Blinky remotely over local Wi-Fi.</div>
+                <button
+                  type="button"
+                  className="dropdown-option"
+                  style={{ marginTop: '8px', width: '100%' }}
+                  onClick={() => {
+                    setShowSettings(false);
+                    openMobileModal();
+                  }}
+                >
+                  <QrCode size={16} /> Show Mobile Pairing QR
+                </button>
               </div>
-            )}
+            </div>
 
             <div className="dropdown-section">
               <h4>WhatsApp</h4>
