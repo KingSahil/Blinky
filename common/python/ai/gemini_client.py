@@ -46,7 +46,8 @@ def _get_gemini_client():
                     break
         if not api_key:
             return None
-        return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=20.0))
+        # The SDK takes milliseconds, not seconds.
+        return genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=20_000))
     except ImportError:
         return None
     except Exception as e:

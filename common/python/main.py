@@ -298,7 +298,7 @@ def run(
             return run_attached_image_vision(question or "Explain what is in this image.", attached_image, started, warnings)
         except Exception as exc:
             LOGGER.warning("Attached-image vision failed: %s", exc)
-            warnings.append(f"Image vision error: {exc}")
+            raise RuntimeError(f"Image analysis failed: {exc}") from exc
 
     # Deterministic intercept for RPC calls passed via question prefix
     if question.startswith("[NOTEBOOK_RPC:"):
