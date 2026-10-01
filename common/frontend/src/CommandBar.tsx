@@ -1,7 +1,7 @@
 import { emit, listen } from '@tauri-apps/api/event';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen, Cpu, Zap, Brain, Cloud, Wrench, Key, Smartphone, MessageSquare, Command, Palette, Info, Clock, Trash2, Plus, Search, ChevronDown, Edit3 } from 'lucide-react';
+import { ArrowUp, Bot, Loader2, Minus, Sparkles, X, Settings, Check, Mic, Volume2, Globe, Square, QrCode, Paperclip, Film, Image as ImageIcon, Music, FileVideo, BookOpen, Cpu, Zap, Brain, Cloud, Wrench, Key, Smartphone, MessageSquare, Command, Palette, Info, Clock, Trash2, Plus, Search, ChevronDown, Edit3, RefreshCw } from 'lucide-react';
 import { AnchorHTMLAttributes, FormEvent, useEffect, useRef, useState, cloneElement, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -18,6 +18,12 @@ import {
 import { runTutor, showOverlay, hideOverlay, resizeCommandWindow, setCommandWindowSize, getSettings, saveSettings, resizeAndMoveCommandWindow, clickElement, clickScreenPoint, openUrl, typeText, scrollAtPoint, pauseWakeWord, resumeWakeWord, logDebugMessage, confirmRecipeSave, setAgentCursorVisibility, getSecureTransportInfo, getMobilePairingPayload, regenerateRemoteToken, openNotebookWindow } from './lib/tauri';
 
 import { linkCitationMarkers, preprocessMarkdown } from './lib/citations';
+import {
+  fetchDynamicModels,
+  type DynamicModelItem,
+  DEFAULT_GROQ_CATALOG,
+  DEFAULT_GEMINI_CATALOG,
+} from './lib/modelCatalog';
 import { getSarvamErrorMessage } from './lib/tts';
 import { SarvamSpeechToTextStream, SarvamTextToSpeechStream } from './lib/sarvamStream';
 import {
@@ -109,15 +115,6 @@ function ExternalMarkdownLink({ href, children }: AnchorHTMLAttributes<HTMLAncho
   );
 }
 
-const GEMINI_MODELS_CATALOG = [
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', badge: 'Default / Fast', desc: '1M context, ultra-fast RAG & reasoning' },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', badge: 'Deep Reasoning', desc: 'Complex reasoning, advanced STEM & 2M context synthesis' },
-  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', badge: 'Next-Gen', desc: 'Realtime multimodal processing and high throughput' },
-  { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite', badge: 'Ultra-Fast', desc: 'Lowest latency & highest efficiency for short queries' },
-  { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', badge: 'Stable', desc: 'Reliable workhorse model with 1M token context' },
-  { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', badge: 'High-Capacity', desc: '2M context window for massive multi-document analysis' },
-  { id: 'gemini-flash-latest', name: 'Gemini Flash Latest', badge: 'Dynamic', desc: 'Points continuously to Google’s latest Flash checkpoint' },
-];
 
 /** Renders the desktop command bar and coordinates its interactive workflows. */
 export function CommandBar() {
@@ -285,6 +282,47 @@ export function CommandBar() {
   const [pingTesting, setPingTesting] = useState(false);
   const [pingResult, setPingResult] = useState<PingResult | null>(null);
 
+  // Agent 1: Computer-Use / Actuator
+  const [agent1Model, setAgent1Model] = useState<string>(() => {
+    return localStorage.getItem('blinky_agent1_model') || 'qwen/qwen3.8-27b';
+  });
+  const [agent1SearchQuery, setAgent1SearchQuery] = useState<string>('');
+  const [isAgent1SearchOpen, setIsAgent1SearchOpen] = useState<boolean>(false);
+  const [showAgent1Config, setShowAgent1Config] = useState<boolean>(false);
+  const [agent1ModelsList, setAgent1ModelsList] = useState<DynamicModelItem[]>(DEFAULT_GROQ_CATALOG);
+  const [agent1ModelsLoading, setAgent1ModelsLoading] = useState<boolean>(false);
+
+  const updateAgent1Model = (newModel: string) => {
+    const clean = newModel.trim();
+    if (!clean) return;
+    setAgent1Model(clean);
+    localStorage.setItem('blinky_agent1_model', clean);
+    if (provider.toLowerCase().trim() === 'custom') {
+      void updateCustomModel(clean);
+    }
+  };
+
+  const refreshAgent1Models = async (
+    prov = provider,
+    gKey = groqApiKey,
+    dKey = deepseekApiKey,
+    cUrl = customUrl,
+    cKey = customApiKey
+  ) => {
+    setAgent1ModelsLoading(true);
+    const key = prov === 'groq' ? gKey : prov === 'deepseek' ? dKey : prov === 'custom' ? cKey : '';
+    try {
+      const res = await fetchDynamicModels(prov, key, cUrl);
+      if (res.models && res.models.length > 0) {
+        setAgent1ModelsList(res.models);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch Agent 1 models dynamically:', e);
+    } finally {
+      setAgent1ModelsLoading(false);
+    }
+  };
+
   // Agent 2: Knowledge & RAG (Gemini) Model Configuration & Search
   const [geminiModel, setGeminiModel] = useState<string>(() => {
     return localStorage.getItem('blinky_gemini_model') || 'gemini-2.5-flash';
@@ -294,7 +332,9 @@ export function CommandBar() {
   });
   const [geminiSearchQuery, setGeminiSearchQuery] = useState<string>('');
   const [isGeminiSearchOpen, setIsGeminiSearchOpen] = useState<boolean>(false);
-  const [showGeminiConfig, setShowGeminiConfig] = useState<boolean>(true);
+  const [showGeminiConfig, setShowGeminiConfig] = useState<boolean>(false);
+  const [geminiModelsList, setGeminiModelsList] = useState<DynamicModelItem[]>(DEFAULT_GEMINI_CATALOG);
+  const [geminiModelsLoading, setGeminiModelsLoading] = useState<boolean>(false);
 
   const updateGeminiModel = (newModel: string) => {
     const clean = newModel.trim();
@@ -306,6 +346,23 @@ export function CommandBar() {
   const updateGeminiApiKey = (newKey: string) => {
     setGeminiApiKey(newKey);
     localStorage.setItem('blinky_gemini_api_key', newKey);
+    if (newKey.trim().length > 10) {
+      void refreshGeminiModels(newKey);
+    }
+  };
+
+  const refreshGeminiModels = async (key = geminiApiKey) => {
+    setGeminiModelsLoading(true);
+    try {
+      const res = await fetchDynamicModels('gemini', key);
+      if (res.models && res.models.length > 0) {
+        setGeminiModelsList(res.models);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch Gemini models dynamically:', e);
+    } finally {
+      setGeminiModelsLoading(false);
+    }
   };
 
   const handleTestPing = async (prov: string, key: string, model?: string, url?: string) => {
@@ -371,8 +428,15 @@ export function CommandBar() {
         if (s.groq_api_key) setGroqApiKey(s.groq_api_key);
         if (s.deepseek_api_key) setDeepseekApiKey(s.deepseek_api_key);
         if (s.custom_url) setCustomUrl(s.custom_url);
-        if (s.custom_model) setCustomModel(s.custom_model);
+        if (s.custom_model) {
+          setCustomModel(s.custom_model);
+          if (s.provider === 'custom') setAgent1Model(s.custom_model);
+        }
         if (s.custom_api_key) setCustomApiKey(s.custom_api_key);
+
+        const prov = s.provider || 'groq';
+        void refreshAgent1Models(prov, s.groq_api_key, s.deepseek_api_key, s.custom_url, s.custom_api_key);
+        void refreshGeminiModels(geminiApiKey);
       } catch (err) {
         console.error('Failed to load initial settings in CommandBar:', err);
       }
@@ -1917,6 +1981,7 @@ export function CommandBar() {
   const updateProvider = async (newProvider: string) => {
     const cleanProvider = newProvider.toLowerCase().trim();
     setProvider(cleanProvider);
+    void refreshAgent1Models(cleanProvider, groqApiKey, deepseekApiKey, customUrl, customApiKey);
     try {
       await saveSettings(
         cleanProvider,
@@ -1978,6 +2043,9 @@ export function CommandBar() {
 
   const updateGroqApiKey = async (newKey: string) => {
     setGroqApiKey(newKey);
+    if (newKey.trim().length > 10) {
+      void refreshAgent1Models('groq', newKey, deepseekApiKey, customUrl, customApiKey);
+    }
     try {
       await saveSettings(
         provider,
@@ -1998,6 +2066,9 @@ export function CommandBar() {
 
   const updateDeepseekApiKey = async (newKey: string) => {
     setDeepseekApiKey(newKey);
+    if (newKey.trim().length > 10) {
+      void refreshAgent1Models('deepseek', groqApiKey, newKey, customUrl, customApiKey);
+    }
     try {
       await saveSettings(
         provider,
@@ -2018,6 +2089,7 @@ export function CommandBar() {
 
   const updateCustomUrl = async (newUrl: string) => {
     setCustomUrl(newUrl);
+    void refreshAgent1Models('custom', groqApiKey, deepseekApiKey, newUrl, customApiKey);
     try {
       await saveSettings(
         provider,
@@ -2733,16 +2805,35 @@ export function CommandBar() {
                 <Bot size={14} /> Agent Model Assignment
               </h4>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
-                <div style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                {/* Agent 1 Card */}
+                <div
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.04)',
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    border: showAgent1Config ? '1px solid rgba(255, 90, 54, 0.5)' : '1px solid rgba(255, 255, 255, 0.08)',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                  onClick={() => {
+                    setShowAgent1Config(!showAgent1Config);
+                    if (!showAgent1Config) setShowGeminiConfig(false);
+                  }}
+                  title="Click to search, edit model, or change provider"
+                >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                     <span style={{ fontSize: '11px', fontWeight: 600, color: '#e2e8f0' }}>🖥️ Agent 1: Computer-Use / Actuator</span>
-                    <span style={{ fontSize: '9px', background: 'rgba(255, 90, 54, 0.2)', color: '#ff8b6a', padding: '1px 5px', borderRadius: '3px' }}>Active</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '9px', background: 'rgba(255, 90, 54, 0.2)', color: '#ff8b6a', padding: '1px 5px', borderRadius: '3px' }}>Active</span>
+                      <span style={{ fontSize: '10px', color: '#ff8b6a', fontWeight: 600 }}>{showAgent1Config ? '▲ Close' : '▼ Edit'}</span>
+                    </div>
                   </div>
                   <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                    Model: <strong style={{ color: '#fff' }}>{provider.toUpperCase()} (Qwen 3.8-27B)</strong>
+                    Provider: <strong style={{ color: '#fff' }}>{provider.toUpperCase()}</strong> • Model: <strong style={{ color: '#fff' }}>{agent1Model}</strong>
                   </div>
                 </div>
 
+                {/* Agent 2 Card */}
                 <div
                   style={{
                     background: 'rgba(255, 255, 255, 0.04)',
@@ -2752,7 +2843,10 @@ export function CommandBar() {
                     cursor: 'pointer',
                     transition: 'all 0.15s ease',
                   }}
-                  onClick={() => setShowGeminiConfig(!showGeminiConfig)}
+                  onClick={() => {
+                    setShowGeminiConfig(!showGeminiConfig);
+                    if (!showGeminiConfig) setShowAgent1Config(false);
+                  }}
                   title="Click to search, edit model, or configure API key"
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
@@ -2767,6 +2861,7 @@ export function CommandBar() {
                   </div>
                 </div>
 
+                {/* Agent 3 Card */}
                 <div style={{ background: 'rgba(255, 255, 255, 0.04)', padding: '8px', borderRadius: '6px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                     <span style={{ fontSize: '11px', fontWeight: 600, color: '#e2e8f0' }}>🎙️ Agent 3: Realtime Voice</span>
@@ -2778,6 +2873,343 @@ export function CommandBar() {
                 </div>
               </div>
             </div>
+
+            {/* Agent 1: Actuator Model Configuration & Dynamic Search */}
+            {showAgent1Config && (
+              <div
+                className="dropdown-section"
+                style={{
+                  background: 'rgba(255, 90, 54, 0.06)',
+                  borderRadius: '10px',
+                  padding: '12px',
+                  border: '1px solid rgba(255, 90, 54, 0.25)',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <h4 style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#ff8b6a', margin: 0 }}>
+                    <Zap size={14} /> Agent 1: Actuator Model Selection
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const key = provider === 'groq' ? groqApiKey : provider === 'deepseek' ? deepseekApiKey : provider === 'custom' ? customApiKey : '';
+                      handleTestPing(provider, key, agent1Model, provider === 'custom' ? customUrl : undefined);
+                    }}
+                    disabled={pingTesting}
+                    style={{
+                      background: 'rgba(255, 90, 54, 0.15)',
+                      border: '1px solid rgba(255, 90, 54, 0.35)',
+                      color: '#ff8b6a',
+                      borderRadius: '6px',
+                      padding: '2px 8px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: pingTesting ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                  >
+                    {pingTesting ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+                    {pingTesting ? 'Testing...' : 'Test Ping ⚡'}
+                  </button>
+                </div>
+
+                {/* Provider switcher pills */}
+                <div style={{ display: 'flex', gap: '4px', marginBottom: '8px', flexWrap: 'wrap' }}>
+                  {(['groq', 'ollama', 'deepseek', 'custom'] as const).map((p) => {
+                    const isSelected = provider.toLowerCase().trim() === p;
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => updateProvider(p)}
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: '5px',
+                          fontSize: '10.5px',
+                          fontWeight: isSelected ? 600 : 400,
+                          background: isSelected ? 'rgba(255, 90, 54, 0.25)' : 'rgba(255, 255, 255, 0.05)',
+                          border: isSelected ? '1px solid #FF5A36' : '1px solid rgba(255, 255, 255, 0.08)',
+                          color: isSelected ? '#fff' : '#94a3b8',
+                          cursor: 'pointer',
+                          textTransform: 'capitalize',
+                        }}
+                      >
+                        {p === 'custom' ? 'Custom OpenAI' : p}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '6px', lineHeight: 1.4 }}>
+                  Type to filter models or enter a custom name:
+                </div>
+
+                {/* Model Search Input with live filter */}
+                <div style={{ position: 'relative', marginBottom: '8px' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      background: 'rgba(0, 0, 0, 0.35)',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(255, 90, 54, 0.3)',
+                      padding: '0 8px',
+                    }}
+                  >
+                    <Search size={14} style={{ color: '#ff8b6a', marginRight: '6px', opacity: 0.8 }} />
+                    <input
+                      type="text"
+                      className="settings-input"
+                      style={{ border: 'none', background: 'transparent', padding: '7px 0', fontSize: '12px' }}
+                      value={agent1SearchQuery}
+                      onChange={(e) => {
+                        setAgent1SearchQuery(e.target.value);
+                        setIsAgent1SearchOpen(true);
+                      }}
+                      onFocus={() => setIsAgent1SearchOpen(true)}
+                      placeholder={`Search ${provider.toUpperCase()} models (e.g. qwen, gpt, llama)...`}
+                    />
+                    <button
+                      type="button"
+                      title="Fetch live models from provider API"
+                      onClick={() => refreshAgent1Models()}
+                      style={{ background: 'transparent', border: 'none', color: '#ff8b6a', cursor: 'pointer', padding: '2px 4px', display: 'flex', alignItems: 'center' }}
+                    >
+                      <RefreshCw size={12} className={agent1ModelsLoading ? 'animate-spin' : ''} />
+                    </button>
+                    {agent1SearchQuery ? (
+                      <button
+                        type="button"
+                        onClick={() => setAgent1SearchQuery('')}
+                        style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px' }}
+                      >
+                        <X size={12} />
+                      </button>
+                    ) : (
+                      <ChevronDown size={14} style={{ color: '#94a3b8', opacity: 0.6 }} />
+                    )}
+                  </div>
+
+                  {/* Filtered Search Results Dropdown List */}
+                  {isAgent1SearchOpen && (
+                    <div
+                      style={{
+                        marginTop: '4px',
+                        maxHeight: '190px',
+                        overflowY: 'auto',
+                        background: '#151722',
+                        border: '1px solid rgba(255, 90, 54, 0.35)',
+                        borderRadius: '8px',
+                        padding: '4px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '2px',
+                        boxShadow: '0 10px 30px rgba(0,0,0,0.6)',
+                        zIndex: 20,
+                      }}
+                    >
+                      {/* Custom typed option if not exact match */}
+                      {agent1SearchQuery.trim() &&
+                        !agent1ModelsList.some(
+                          (m) => m.id.toLowerCase() === agent1SearchQuery.trim().toLowerCase()
+                        ) && (
+                          <button
+                            type="button"
+                            className="dropdown-option"
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              padding: '6px 8px',
+                              borderRadius: '6px',
+                              background: 'rgba(255, 90, 54, 0.12)',
+                              border: '1px dashed rgba(255, 90, 54, 0.4)',
+                            }}
+                            onClick={() => {
+                              updateAgent1Model(agent1SearchQuery.trim());
+                              setIsAgent1SearchOpen(false);
+                            }}
+                          >
+                            <Sparkles size={13} style={{ color: '#ff8b6a' }} />
+                            <div style={{ flex: 1, textAlign: 'left' }}>
+                              <div style={{ fontSize: '11px', fontWeight: 600, color: '#ff8b6a' }}>
+                                Use custom model: "{agent1SearchQuery.trim()}"
+                              </div>
+                              <div style={{ fontSize: '10px', color: '#94a3b8' }}>Select this custom model ID</div>
+                            </div>
+                            <Check size={13} className="active-dot" />
+                          </button>
+                        )}
+
+                      {agent1ModelsList.filter((m) => {
+                        const q = agent1SearchQuery.toLowerCase().trim();
+                        if (!q) return true;
+                        return (
+                          m.id.toLowerCase().includes(q) ||
+                          m.name.toLowerCase().includes(q) ||
+                          (m.desc && m.desc.toLowerCase().includes(q)) ||
+                          (m.badge && m.badge.toLowerCase().includes(q))
+                        );
+                      }).map((m) => {
+                        const isSelected = agent1Model.toLowerCase().trim() === m.id.toLowerCase().trim();
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            className={`dropdown-option ${isSelected ? 'active' : ''}`}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '8px',
+                              padding: '6px 8px',
+                              borderRadius: '6px',
+                              textAlign: 'left',
+                            }}
+                            onClick={() => {
+                              updateAgent1Model(m.id);
+                              setAgent1SearchQuery('');
+                              setIsAgent1SearchOpen(false);
+                            }}
+                          >
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ fontSize: '11.5px', fontWeight: 600, color: isSelected ? '#fff' : '#e2e8f0' }}>
+                                  {m.name}
+                                </span>
+                                {m.badge && (
+                                  <span
+                                    style={{
+                                      fontSize: '9px',
+                                      padding: '1px 4px',
+                                      borderRadius: '3px',
+                                      background: isSelected ? 'rgba(255, 90, 54, 0.3)' : 'rgba(255, 255, 255, 0.06)',
+                                      color: isSelected ? '#ff8b6a' : '#94a3b8',
+                                    }}
+                                  >
+                                    {m.badge}
+                                  </span>
+                                )}
+                              </div>
+                              {m.desc && (
+                                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {m.desc}
+                                </div>
+                              )}
+                            </div>
+                            {isSelected && <Check size={14} className="active-dot" style={{ color: '#ff8b6a' }} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Selected Model indicator pill */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    background: 'rgba(0, 0, 0, 0.25)',
+                    padding: '5px 8px',
+                    borderRadius: '6px',
+                    marginBottom: '8px',
+                    fontSize: '11px',
+                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                  }}
+                >
+                  <span style={{ color: '#94a3b8' }}>Selected Model:</span>
+                  <span style={{ fontWeight: 600, color: '#ff8b6a' }}>{agent1Model}</span>
+                </div>
+
+                {/* Provider specific inputs */}
+                {provider === 'groq' && (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                      <h5 style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#e2e8f0', margin: 0 }}>
+                        <Key size={12} /> Groq API Key
+                      </h5>
+                      <span style={{ fontSize: '9.5px', color: 'rgba(255, 255, 255, 0.45)' }}>console.groq.com</span>
+                    </div>
+                    <input
+                      type="password"
+                      className="settings-input"
+                      value={groqApiKey}
+                      onChange={(e) => updateGroqApiKey(e.target.value)}
+                      placeholder="Paste Groq API Key (gsk_...)"
+                      style={{ fontSize: '11.5px', marginTop: '4px' }}
+                    />
+                  </div>
+                )}
+
+                {provider === 'deepseek' && (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                      <h5 style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#e2e8f0', margin: 0 }}>
+                        <Key size={12} /> DeepSeek API Key
+                      </h5>
+                      <span style={{ fontSize: '9.5px', color: 'rgba(255, 255, 255, 0.45)' }}>platform.deepseek.com</span>
+                    </div>
+                    <input
+                      type="password"
+                      className="settings-input"
+                      value={deepseekApiKey}
+                      onChange={(e) => updateDeepseekApiKey(e.target.value)}
+                      placeholder="Paste DeepSeek API Key (sk-...)"
+                      style={{ fontSize: '11.5px', marginTop: '4px' }}
+                    />
+                  </div>
+                )}
+
+                {provider === 'custom' && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div>
+                      <h5 style={{ fontSize: '11px', color: '#e2e8f0', margin: '0 0 4px 0' }}>Custom Endpoint URL</h5>
+                      <input
+                        type="text"
+                        className="settings-input"
+                        value={customUrl}
+                        onChange={(e) => updateCustomUrl(e.target.value)}
+                        placeholder="http://localhost:1234/v1"
+                        style={{ fontSize: '11.5px' }}
+                      />
+                    </div>
+                    <div>
+                      <h5 style={{ fontSize: '11px', color: '#e2e8f0', margin: '0 0 4px 0' }}>Custom API Key (optional)</h5>
+                      <input
+                        type="password"
+                        className="settings-input"
+                        value={customApiKey}
+                        onChange={(e) => updateCustomApiKey(e.target.value)}
+                        placeholder="Bearer token if required..."
+                        style={{ fontSize: '11.5px' }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Ping Result Display */}
+                {pingResult && pingResult.provider === provider && (
+                  <div
+                    style={{
+                      marginTop: '6px',
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      fontSize: '11px',
+                      background: pingResult.ok ? 'rgba(34, 197, 94, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                      color: pingResult.ok ? '#22c55e' : '#ef4444',
+                      border: `1px solid ${pingResult.ok ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                    }}
+                  >
+                    {pingResult.ok
+                      ? `✓ Online (${pingResult.latency_ms}ms) • ${pingResult.model}`
+                      : `✗ ${pingResult.error}`}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Agent 2: Gemini RAG Model Configuration & Search */}
             {showGeminiConfig && (
@@ -2846,6 +3278,14 @@ export function CommandBar() {
                       onFocus={() => setIsGeminiSearchOpen(true)}
                       placeholder="Type model name to search (e.g. 2.5-pro, flash)..."
                     />
+                    <button
+                      type="button"
+                      title="Fetch live models from Google Gemini API"
+                      onClick={() => refreshGeminiModels()}
+                      style={{ background: 'transparent', border: 'none', color: '#c084fc', cursor: 'pointer', padding: '2px 4px', display: 'flex', alignItems: 'center' }}
+                    >
+                      <RefreshCw size={12} className={geminiModelsLoading ? 'animate-spin' : ''} />
+                    </button>
                     {geminiSearchQuery ? (
                       <button
                         type="button"
@@ -2881,7 +3321,7 @@ export function CommandBar() {
                     >
                       {/* Custom typed option if not exact match */}
                       {geminiSearchQuery.trim() &&
-                        !GEMINI_MODELS_CATALOG.some(
+                        !geminiModelsList.some(
                           (m) => m.id.toLowerCase() === geminiSearchQuery.trim().toLowerCase()
                         ) && (
                           <button
@@ -2912,14 +3352,14 @@ export function CommandBar() {
                           </button>
                         )}
 
-                      {GEMINI_MODELS_CATALOG.filter((m) => {
+                      {geminiModelsList.filter((m) => {
                         const q = geminiSearchQuery.toLowerCase().trim();
                         if (!q) return true;
                         return (
                           m.id.toLowerCase().includes(q) ||
                           m.name.toLowerCase().includes(q) ||
-                          m.desc.toLowerCase().includes(q) ||
-                          m.badge.toLowerCase().includes(q)
+                          (m.desc && m.desc.toLowerCase().includes(q)) ||
+                          (m.badge && m.badge.toLowerCase().includes(q))
                         );
                       }).map((m) => {
                         const isSelected = geminiModel.toLowerCase().trim() === m.id.toLowerCase().trim();
@@ -2947,21 +3387,25 @@ export function CommandBar() {
                                 <span style={{ fontSize: '11.5px', fontWeight: 600, color: isSelected ? '#fff' : '#e2e8f0' }}>
                                   {m.name}
                                 </span>
-                                <span
-                                  style={{
-                                    fontSize: '9px',
-                                    padding: '1px 4px',
-                                    borderRadius: '3px',
-                                    background: isSelected ? 'rgba(192, 132, 252, 0.3)' : 'rgba(255, 255, 255, 0.06)',
-                                    color: isSelected ? '#c084fc' : '#94a3b8',
-                                  }}
-                                >
-                                  {m.badge}
-                                </span>
+                                {m.badge && (
+                                  <span
+                                    style={{
+                                      fontSize: '9px',
+                                      padding: '1px 4px',
+                                      borderRadius: '3px',
+                                      background: isSelected ? 'rgba(192, 132, 252, 0.3)' : 'rgba(255, 255, 255, 0.06)',
+                                      color: isSelected ? '#c084fc' : '#94a3b8',
+                                    }}
+                                  >
+                                    {m.badge}
+                                  </span>
+                                )}
                               </div>
-                              <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {m.desc}
-                              </div>
+                              {m.desc && (
+                                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                  {m.desc}
+                                </div>
+                              )}
                             </div>
                             {isSelected && <Check size={14} className="active-dot" style={{ color: '#c084fc' }} />}
                           </button>

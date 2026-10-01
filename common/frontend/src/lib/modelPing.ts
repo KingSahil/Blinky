@@ -232,6 +232,33 @@ export async function pingModel(
       };
     }
 
+    if (prov === 'ollama') {
+      const activeModel = model || 'qwen2.5:7b';
+      const base = (customUrl || 'http://localhost:11434').replace(/\/+$/, '');
+      const url = `${base}/api/tags`;
+      const res = await fetch(url);
+      const latency = Date.now() - t0;
+      if (res.ok) {
+        return {
+          ok: true,
+          provider: prov,
+          model: activeModel,
+          latency_ms: latency,
+          status_code: 200,
+          details: `Online (${latency}ms) • Ollama local daemon`,
+        };
+      }
+      return {
+        ok: false,
+        provider: prov,
+        model: activeModel,
+        latency_ms: latency,
+        status_code: res.status,
+        error: `Ollama HTTP ${res.status}`,
+        details: 'Ollama daemon responded with an error.',
+      };
+    }
+
     return {
       ok: false,
       provider: prov,
@@ -239,7 +266,7 @@ export async function pingModel(
       latency_ms: 0,
       status_code: 400,
       error: `Unsupported provider: ${provider}`,
-      details: 'Supported: groq, gemini, deepseek, custom',
+      details: 'Supported: groq, gemini, ollama, deepseek, custom',
     };
   } catch (err: any) {
     return {
