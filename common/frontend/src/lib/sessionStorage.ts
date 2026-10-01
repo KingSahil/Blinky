@@ -26,13 +26,41 @@ export function generatePcSessionTitle(prompt: string): string {
   return words.slice(0, 5).join(' ') + '...';
 }
 
+function isValidChatMessage(m: unknown): m is PcChatMessage {
+  if (!m || typeof m !== 'object') return false;
+  const msg = m as Record<string, unknown>;
+  if (msg.role !== 'user' && msg.role !== 'assistant') return false;
+  if (typeof msg.text !== 'string') return false;
+  if (typeof msg.timestamp !== 'number') return false;
+  if (msg.steps !== undefined && !Array.isArray(msg.steps)) return false;
+  return true;
+}
+
 export function listPcChatSessions(): PcChatSession[] {
   try {
     const raw = localStorage.getItem(PC_SESSIONS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.sort((a, b) => b.updatedAt - a.updatedAt);
+
+    const validSessions: PcChatSession[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object') continue;
+      const s = item as Record<string, unknown>;
+      if (typeof s.id !== 'string' || !s.id.trim()) continue;
+      if (!Array.isArray(s.messages)) continue;
+
+      const validMessages = s.messages.filter(isValidChatMessage);
+      validSessions.push({
+        id: s.id,
+        title: typeof s.title === 'string' ? s.title : 'New Conversation',
+        createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now(),
+        updatedAt: typeof s.updatedAt === 'number' ? s.updatedAt : (typeof s.createdAt === 'number' ? s.createdAt : Date.now()),
+        messages: validMessages,
+      });
+    }
+
+    return validSessions.sort((a, b) => b.updatedAt - a.updatedAt);
   } catch (err) {
     console.warn('[sessionStorage] Failed to read PC sessions:', err);
     return [];
