@@ -79,7 +79,7 @@ Some capabilities need API credentials, optional system packages, or connected h
 ## Architecture
 
 ```mermaid
-flowchart TD
+flowchart  LR
     U(["👤 User"])
 
     subgraph FRONT["🖥️ Frontend"]
