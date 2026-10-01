@@ -291,6 +291,7 @@ export function CommandBar() {
   const [showAgent1Config, setShowAgent1Config] = useState<boolean>(false);
   const [agent1ModelsList, setAgent1ModelsList] = useState<DynamicModelItem[]>(DEFAULT_GROQ_CATALOG);
   const [agent1ModelsLoading, setAgent1ModelsLoading] = useState<boolean>(false);
+  const agent1FetchSeqRef = useRef<number>(0);
 
   const updateAgent1Model = (newModel: string) => {
     const clean = newModel.trim();
@@ -309,17 +310,20 @@ export function CommandBar() {
     cUrl = customUrl,
     cKey = customApiKey
   ) => {
+    const seq = ++agent1FetchSeqRef.current;
     setAgent1ModelsLoading(true);
     const key = prov === 'groq' ? gKey : prov === 'deepseek' ? dKey : prov === 'custom' ? cKey : '';
     try {
       const res = await fetchDynamicModels(prov, key, cUrl);
-      if (res.models && res.models.length > 0) {
+      if (seq === agent1FetchSeqRef.current && res.models && res.models.length > 0) {
         setAgent1ModelsList(res.models);
       }
     } catch (e) {
       console.warn('Failed to fetch Agent 1 models dynamically:', e);
     } finally {
-      setAgent1ModelsLoading(false);
+      if (seq === agent1FetchSeqRef.current) {
+        setAgent1ModelsLoading(false);
+      }
     }
   };
 
@@ -335,6 +339,7 @@ export function CommandBar() {
   const [showGeminiConfig, setShowGeminiConfig] = useState<boolean>(false);
   const [geminiModelsList, setGeminiModelsList] = useState<DynamicModelItem[]>(DEFAULT_GEMINI_CATALOG);
   const [geminiModelsLoading, setGeminiModelsLoading] = useState<boolean>(false);
+  const geminiFetchSeqRef = useRef<number>(0);
 
   const updateGeminiModel = (newModel: string) => {
     const clean = newModel.trim();
@@ -352,16 +357,19 @@ export function CommandBar() {
   };
 
   const refreshGeminiModels = async (key = geminiApiKey) => {
+    const seq = ++geminiFetchSeqRef.current;
     setGeminiModelsLoading(true);
     try {
       const res = await fetchDynamicModels('gemini', key);
-      if (res.models && res.models.length > 0) {
+      if (seq === geminiFetchSeqRef.current && res.models && res.models.length > 0) {
         setGeminiModelsList(res.models);
       }
     } catch (e) {
       console.warn('Failed to fetch Gemini models dynamically:', e);
     } finally {
-      setGeminiModelsLoading(false);
+      if (seq === geminiFetchSeqRef.current) {
+        setGeminiModelsLoading(false);
+      }
     }
   };
 
