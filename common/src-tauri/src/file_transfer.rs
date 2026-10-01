@@ -143,6 +143,12 @@ pub(crate) async fn handle_control_message(
     }
 
     match kind {
+        "file_route" => {
+            let message = message.clone();
+            tauri::async_runtime::spawn(async move {
+                route_attachment(&message, sender).await;
+            });
+        }
         "file_offer" => offer_file(&app, message, sender).await,
         "file_resume" => resume_file(message, sender).await,
         "file_cancel" => cancel_file(message, sender).await,
@@ -317,6 +323,45 @@ async fn offer_file(app: &AppHandle, message: &Value, sender: ClientSender) {
             "destinationWarning": destination_warning,
         }),
     );
+}
+
+async fn route_attachment(message: &Value, sender: ClientSender) {
+    let request_id = message.get("requestId").and_then(Value::as_str).unwrap_or("");
+    let instruction = message.get("instruction").and_then(Value::as_str).unwrap_or("");
+    let files = message.get("files").and_then(Value::as_array);
+    if instruction.len() > 16000 || files.is_none_or(|files| files.is_empty() || files.len() > 100) {
+        send_json(&sender, json!({"type":"file_route_error", "requestId":request_id, "message":"Invalid attachment planning request."}));
+        return;
+    }
+    let root = crate::websocket::project_root();
+    let mut command = Command::new(crate::websocket::python_executable(&root));
+    command.kill_on_drop(true);
+    command.arg(root.join("common").join("python").join("attachment_router_ai.py"))
+        .current_dir(&root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .envs(crate::websocket::read_env_file(&root));
+    #[cfg(target_os = "windows")]
+    command.creation_flags(0x08000000);
+    let result = async {
+        let mut child = command.spawn()?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(json!({"instruction":instruction, "files":files}).to_string().as_bytes()).await?;
+        }
+        child.wait_with_output().await
+    };
+    let response = match timeout(Duration::from_secs(55), result).await {
+        Ok(Ok(output)) if output.status.success() => serde_json::from_slice::<Value>(&output.stdout).ok(),
+        _ => None,
+    };
+    let action = response.as_ref().and_then(|value| value.get("action")).and_then(Value::as_str);
+    if matches!(action, Some("transfer" | "analyze-image" | "unsupported")) {
+        send_json(&sender, json!({"type":"file_route_result", "requestId":request_id, "action":action}));
+    } else {
+        send_json(&sender, json!({"type":"file_route_error", "requestId":request_id,
+            "message":"The PC AI could not choose an attachment action. Check the AI provider settings and try again."}));
+    }
 }
 
 async fn resolve_ai_destination(

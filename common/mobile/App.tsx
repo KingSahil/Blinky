@@ -67,6 +67,7 @@ import {
   restorePurchases,
 } from './lib/purchases';
 import { FileTransferPanel, FileTransferPanelRef, SelectedFile } from './FileTransferPanel';
+import type { AttachmentRoute } from './lib/attachmentRouting';
 import { TabScreen, AttachedFile } from './types';
 import { colors } from './theme/theme';
 import { useFonts } from 'expo-font';
@@ -692,6 +693,8 @@ export default function App() {
     dismissAntigravityComplete,
     sendFileTransferMessage,
     getFileTransferModule,
+    planAttachments,
+    cancelAttachmentPlanning,
   } = usePCWebSocket();
   const [macAddress, setMacAddress] = useState('');
   const [wolBroadcastIp, setWolBroadcastIp] = useState('255.255.255.255');
@@ -709,6 +712,8 @@ export default function App() {
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [discoveryProgress, setDiscoveryProgress] = useState<string | null>(null);
   const fileTransferPanelRef = useRef<FileTransferPanelRef>(null);
+  const attachmentPlanningAttempt = useRef(0);
+  const attachmentPreparationAttempt = useRef<number | null>(null);
   // Tracks the chat message ID showing live transfer status
   const transferStatusMsgIdRef = useRef<string | null>(null);
 
@@ -1207,12 +1212,6 @@ export default function App() {
       .trim();
   };
 
-  const isImageExplainIntent = (text: string): boolean => {
-    const t = text.toLowerCase();
-    if (!text.trim()) return true; // image with no question = explain it
-    return /\b(explain|describe|what is|what's|whats|what color|what colour|look at|analyze|analyse|tell me about|identify|recognize|recognise)\b/.test(t);
-  };
-
   const readUriAsBase64 = async (uri: string): Promise<string | null> => {
     try {
       // New expo-file-system File API
@@ -1221,7 +1220,7 @@ export default function App() {
         return await (f as any).base64();
       }
       if (typeof (f as any).text === 'function') {
-        // Fallback: not base64-capable, bail to transfer path
+        // A question about an image must never silently become a file transfer.
         return null;
       }
       return null;
@@ -1230,22 +1229,45 @@ export default function App() {
     }
   };
 
-  const handleQuery = (attachedFiles: AttachedFile[] = []) => {
+  const handleQuery = async (attachedFiles: AttachedFile[] = []): Promise<boolean> => {
     let query = queryText.trim();
     if (!query && attachedFiles.length === 0) {
       triggerHaptic('selection');
       Alert.alert('Empty query', 'Please enter a search/browsing query or attach a file first.');
-      return;
+      return false;
     }
 
-    // Image explain: a single attached image + explain/describe/what question
-    // goes to Gemini/Groq vision via sendQuery — NOT the file-transfer path.
-    const imageFiles = attachedFiles.filter(f =>
-      f.type === 'image' || (f.mimeType || '').startsWith('image/')
-    );
-    if (imageFiles.length === 1 && attachedFiles.length === 1 && isImageExplainIntent(query)) {
-      const img = imageFiles[0];
-      const explainQuery = query || 'Explain what is in this image in detail.';
+    let attachmentRoute: AttachmentRoute | null = null;
+    if (attachedFiles.length) {
+      const attempt = ++attachmentPlanningAttempt.current;
+      attachmentPreparationAttempt.current = attempt;
+      setAgentStatus('processing');
+      try {
+        attachmentRoute = await planAttachments(query, attachedFiles);
+        if (attempt !== attachmentPlanningAttempt.current) return false;
+      } catch (error) {
+        if (attempt !== attachmentPlanningAttempt.current) return false;
+        Alert.alert('Attachment not sent', error instanceof Error ? error.message : 'Could not plan this attachment.');
+        setAgentStatus('error');
+        return false;
+      } finally {
+        if (attachmentPreparationAttempt.current === attempt) attachmentPreparationAttempt.current = null;
+      }
+      setAgentStatus('idle');
+    }
+    if (attachmentRoute === 'unsupported') {
+      Alert.alert(
+        'Attachment not sent',
+        'Chat analysis currently supports one image at a time. To transfer these files instead, ask me to put them in a PC folder, or send them without a prompt for Downloads/Blinky.',
+      );
+      return false;
+    }
+
+    if (attachmentRoute === 'analyze-image') {
+      const attempt = attachmentPlanningAttempt.current;
+      attachmentPreparationAttempt.current = attempt;
+      const img = attachedFiles[0];
+      const explainQuery = query;
       const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       const userMsgId = generateUuid();
       const blinkyMsgId = generateUuid();
@@ -1259,29 +1281,41 @@ export default function App() {
           progress: { percent: 20, statusText: 'Analyzing image with Gemini vision...', duration: 0 },
         },
       ]);
-      setQueryText('');
       setAgentStatus('processing');
       setTimerSeconds(0);
       triggerHaptic('medium');
-      void (async () => {
-        let b64: string | null = img.base64 || null;
-        if (!b64 && img.uri) b64 = await readUriAsBase64(img.uri);
-        if (b64) {
+        try {
+          let b64: string | null = img.base64 || null;
+          if (!b64 && img.uri) b64 = await readUriAsBase64(img.uri);
+          if (attempt !== attachmentPlanningAttempt.current) return false;
+          if (!b64) throw new Error('Could not read this image. Please attach it again.');
           const clean = b64.includes('base64,') ? b64.split('base64,')[1] : b64;
-          sendQuery(explainQuery, generateUuid(), clean);
-        } else {
-          // Could not inline the image: fall back to transfer + ask PC to explain path
-          sendQuery(`Explain what is in this image: ${img.name}. The file is being transferred to PC.`, generateUuid());
-          const filesToSend: SelectedFile[] = [{ uri: img.uri, name: img.name }];
-          fileTransferPanelRef.current?.startTransfer(filesToSend, '', '', explainQuery);
+          if (!sendQuery(explainQuery, generateUuid(), clean)) {
+            throw new Error('Could not send the image to Blinky. Check the PC connection.');
+          }
+          setQueryText('');
+          return true;
+        } catch (error) {
+          if (attempt !== attachmentPlanningAttempt.current) return false;
+          activeBlinkyMsgIdRef.current = null;
+          setAgentStatus('error');
+          setMessages(prev => prev.map(message => message.id === blinkyMsgId
+            ? { ...message, text: error instanceof Error ? error.message : 'Image analysis failed.', progress: undefined }
+            : message));
+          return false;
+        } finally {
+          if (attachmentPreparationAttempt.current === attempt) attachmentPreparationAttempt.current = null;
         }
-      })();
-      return;
     }
 
-    // Attachments always use the verified streaming transfer path. The PC
-    // resolves the natural-language destination before accepting any bytes.
-    if (attachedFiles.length > 0) {
+    // Blank prompts and explicit PC placement requests use the streaming
+    // transfer path. The PC resolves any natural-language destination.
+    if (attachmentRoute === 'transfer') {
+      const transferPanel = fileTransferPanelRef.current;
+      if (!transferPanel) {
+        Alert.alert('Attachment not sent', 'File transfer is not ready. Please try again.');
+        return false;
+      }
       const instruction = extractTransferEdit(query);
       const filesToSend: SelectedFile[] = attachedFiles.map(file => ({
         uri: file.uri,
@@ -1312,8 +1346,8 @@ export default function App() {
       setQueryText('');
       triggerHaptic('medium');
 
-      fileTransferPanelRef.current?.startTransfer(filesToSend, instruction, '', query);
-      return;
+      transferPanel.startTransfer(filesToSend, instruction, '', query);
+      return true;
     }
 
     // Direct prompt to Antigravity IDE
@@ -1353,7 +1387,7 @@ export default function App() {
         ]);
         setQueryText('');
         triggerHaptic('medium');
-        return;
+        return true;
       }
     }
 
@@ -1416,6 +1450,7 @@ export default function App() {
         return m;
       }));
     }
+    return true;
   };
 
   // Voice recording handlers
@@ -1699,10 +1734,14 @@ export default function App() {
   };
 
   const handleStopQuery = () => {
+    const preparingAttachment = attachmentPreparationAttempt.current !== null;
+    attachmentPreparationAttempt.current = null;
+    attachmentPlanningAttempt.current++;
+    cancelAttachmentPlanning();
     triggerHaptic('heavy');
     setAgentStatus('idle');
     setRunningQuery('');
-    setQueryText('');
+    if (!preparingAttachment) setQueryText('');
     const currentActiveId = activeBlinkyMsgIdRef.current;
     if (currentActiveId) {
       setMessages(prev => prev.map(m => {

@@ -1270,7 +1270,7 @@ where
             } else if trimmed.starts_with("query:") || trimmed.starts_with("{") {
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
                     let msg_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                    if matches!(msg_type, "file_offer" | "file_resume" | "file_cancel" | "file_edit") {
+                    if matches!(msg_type, "file_route" | "file_offer" | "file_resume" | "file_cancel" | "file_edit") {
                         crate::file_transfer::handle_control_message(
                             app.clone(),
                             &parsed,
