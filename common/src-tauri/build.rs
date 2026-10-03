@@ -1,5 +1,8 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=BLINKY_TRANSPORT_MODE");
+    println!("cargo:rerun-if-changed=icons/icon.ico");
+    println!("cargo:rerun-if-changed=icons/icon.png");
+    println!("cargo:rerun-if-changed=tauri.conf.json");
     let mode = std::env::var("BLINKY_TRANSPORT_MODE").unwrap_or_else(|_| "development".to_string());
     assert!(
         matches!(
