@@ -532,3 +532,63 @@ def test_format_aicut_summary_with_aligned_captions():
     assert "Automatically synced to audio speech" in summary
 
 
+# ── Silence Removal (AI Jump-Cut) Tests ────────────────────────────────
+
+def test_resolve_silence_removal_query():
+    q = "remove silence from dance.mp4"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "remove_silence"
+    assert "dance.mp4" in res["video_path"].lower()
+    assert res["min_silence_sec"] == 0.5
+
+
+def test_resolve_silence_removal_with_custom_params():
+    q = "cut silent pauses longer than 0.8s in dance.mp4 with -35db threshold"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "remove_silence"
+    assert res["min_silence_sec"] == 0.8
+    assert res["threshold_db"] == -35.0
+
+
+def test_resolve_silence_removal_pipeline():
+    q = "remove silence from dance.mp4 and burn subtitles with instagram preset"
+    res = resolve_aicut_request(q)
+    assert res is not None
+    assert res["action"] == "pipeline"
+    assert res.get("remove_silence") is True
+    assert res.get("subtitles") is True
+    assert res.get("preset") == "instagram"
+
+
+def test_calculate_keep_intervals_logic():
+    import aicut_mcp
+    silences = [(3.0, 7.0)]
+    total_duration = 10.0
+    intervals = aicut_mcp.calculate_keep_intervals(silences, total_duration, padding_sec=0.15)
+    assert len(intervals) == 2
+    assert intervals[0] == (0.0, 3.15)
+    assert intervals[1] == (6.85, 10.0)
+
+
+def test_format_aicut_summary_silence():
+    res = {
+        "success": True,
+        "action": "remove_silence",
+        "input_path": "C:\\dance.mp4",
+        "output_path": "C:\\dance_nosilence.mp4",
+        "silence_detected": True,
+        "original_duration": 10.0,
+        "new_duration": 6.3,
+        "silence_removed_seconds": 3.7,
+        "percentage_reduced": 37.0,
+        "cuts_count": 1,
+    }
+    summary = format_aicut_summary(res)
+    assert "Silence Removed Successfully" in summary
+    assert "3.7s" in summary
+    assert "37.0%" in summary
+
+
+

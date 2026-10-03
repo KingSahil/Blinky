@@ -56,7 +56,7 @@
   },
   "aicut_tool": {
     "name": "aicut_tool",
-    "description": "AI Video Editor (AiCut) for trimming videos, adding background music/songs, merging video clips, burning styled subtitles (Instagram Reels / TikTok word-by-word pop, hormozi, neon-blur, glassmorphism, etc.), transcribing audio to SRT via faster-whisper, inspecting media, and querying active Windows File Explorer context.",
+    "description": "AI Video Editor (AiCut) for removing silent pauses (AI jump-cut), trimming videos, adding background music/songs, merging video clips, burning styled subtitles (Instagram Reels / TikTok word-by-word pop, hormozi, neon-blur, glassmorphism, etc.), transcribing audio to SRT via faster-whisper, inspecting media, and querying active Windows File Explorer context.",
     "filepath": "python/tools/aicut_tool.py",
     "arguments": [
       "action",
@@ -72,7 +72,10 @@
       "output_path",
       "start_seconds",
       "end_seconds",
-      "music_volume"
+      "music_volume",
+      "min_silence_sec",
+      "padding_sec",
+      "threshold_db"
     ],
     "status": "generalized",
     "verification_args": {

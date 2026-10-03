@@ -68,7 +68,7 @@ def run_transfer_edit(
         }
 
     action = request.get("action")
-    allowed = {"trim", "subtitles", "transcribe", "pipeline", "merge", "add_song"}
+    allowed = {"trim", "subtitles", "transcribe", "pipeline", "merge", "add_song", "remove_silence"}
     if action not in allowed:
         return {
             "success": False,

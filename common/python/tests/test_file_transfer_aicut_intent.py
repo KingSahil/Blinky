@@ -97,3 +97,13 @@ def test_remote_edit_requires_explicit_instruction(tmp_path, monkeypatch):
     assert result["success"] is False
     assert "instruction" in result["error"].lower()
     assert requests == []
+
+
+def test_remote_silence_removal_instruction(tmp_path, monkeypatch):
+    result, requests, sources = _run(
+        tmp_path, monkeypatch, ["lecture.mp4"], "remove silence from this video"
+    )
+    assert result["success"] is True
+    assert requests[0]["action"] == "remove_silence"
+    assert requests[0]["video_path"] == sources[0]
+
