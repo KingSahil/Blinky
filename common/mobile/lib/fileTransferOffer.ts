@@ -12,6 +12,15 @@ export function transferIntent(instruction: string): 'upload' | 'edit' {
   return instruction.trim() ? 'edit' : 'upload';
 }
 
+/** Keep media editing separate from the destination requested in chat. */
+export function extractTransferEdit(text: string): string {
+  const match = /\b((?:add|burn|generate|create)\s+(?:caption|subtitles?|captions?|audio|song|music)|caption|subtitles?|trim|cut|merge|crop|rotate|speed up|slow down|add background music|remove audio|(?:remove|cut|delete|trim|drop|strip|clean|clear)\b.*?\b(?:silence|silent|pauses?|dead\s*air)|remove\s+silence|cut\s+silence|silence|pauses?|jump\s*cut|auto\s*cut|dead\s*air|transcribe)\b/i.exec(text);
+  if (!match) return '';
+  return text.slice(match.index)
+    .replace(/\s+(?:and\s+)?(?:send|save|put|copy|transfer|upload)\b.*$/i, '')
+    .trim();
+}
+
 /** Match a rendered picker card to its item after the upload order changes. */
 export function findTransferItem<T extends { file: { uri: string } }>(
   items: readonly T[] | undefined,

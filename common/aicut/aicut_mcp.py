@@ -419,43 +419,123 @@ def merge_videos(
         return {"success": False, "action": "merge", "error": str(exc)}
 
 
-def detect_silence_intervals(
-    media_path: str,
-    noise_threshold_db: float = -30.0,
-    min_silence_sec: float = 0.5,
-) -> list[tuple[float, float]]:
-    """Detect silent intervals using FFmpeg's native silencedetect audio filter."""
+def get_audio_volume_stats(media_path: str) -> dict[str, float]:
+    """Inspect audio volume levels (mean_volume, max_volume) using FFmpeg volumedetect filter."""
     p = Path(media_path).resolve()
     if not p.exists():
-        return []
-
+        return {}
     cmd = [
         "ffmpeg",
         "-i", str(p),
-        "-af", f"silencedetect=noise={noise_threshold_db}dB:d={min_silence_sec}",
+        "-vn",
+        "-af", "volumedetect",
         "-f", "null",
         "-",
     ]
     proc = subprocess.run(cmd, stderr=subprocess.PIPE, text=True, errors="replace")
-
-    silences: list[tuple[float, float]] = []
-    start: float | None = None
+    stats: dict[str, float] = {}
     for line in proc.stderr.splitlines():
-        sm = re.search(r"silence_start:\s*([\d\.]+)", line)
-        if sm:
-            start = float(sm.group(1))
-        em = re.search(r"silence_end:\s*([\d\.]+)", line)
-        if em and start is not None:
-            silences.append((start, float(em.group(1))))
-            start = None
+        if "mean_volume:" in line:
+            m = re.search(r"mean_volume:\s*(-?[\d\.]+)\s*dB", line)
+            if m:
+                stats["mean_volume"] = float(m.group(1))
+        elif "max_volume:" in line:
+            m = re.search(r"max_volume:\s*(-?[\d\.]+)\s*dB", line)
+            if m:
+                stats["max_volume"] = float(m.group(1))
+    return stats
 
-    if start is not None:
-        info = get_media_info(str(p))
-        total_dur = float(info.get("duration_seconds", 0.0))
-        if total_dur > start:
-            silences.append((start, total_dur))
 
-    return silences
+def detect_silence_intervals(
+    media_path: str,
+    noise_threshold_db: float | None = None,
+    min_silence_sec: float = 0.4,
+    effective_threshold_out: list[float] | None = None,
+) -> list[tuple[float, float]]:
+    """Detect silent intervals using FFmpeg's native silencedetect audio filter.
+
+    When noise_threshold_db is omitted or set to default (-30.0), automatically
+    adapts to the ambient noise floor (e.g. phone microphones with hum/room noise at
+    -22 dB to -26 dB) using volumedetect and a multi-threshold ladder.
+    """
+    p = Path(media_path).resolve()
+    if not p.exists():
+        return []
+
+    stats = get_audio_volume_stats(str(p))
+    mean_vol = stats.get("mean_volume")
+
+    # If caller requested a specific custom threshold (e.g. user prompt asked for -35dB or -20dB), respect it first
+    if noise_threshold_db is not None and noise_threshold_db != -30.0:
+        candidates = [noise_threshold_db]
+    elif mean_vol is not None:
+        # Dynamic calculation based on ambient volume floor:
+        # e.g. Phone recording with fan/room noise (mean_volume = -21.6 dB) -> primary = -20.1 dB
+        if mean_vol >= -23.0:
+            primary = round(mean_vol + 1.5, 1)
+            candidates = [primary, -20.0, -22.0, -25.0, -28.0, -30.0]
+        elif mean_vol >= -27.0:
+            primary = round(mean_vol + 0.5, 1)
+            candidates = [primary, -24.0, -26.0, -28.0, -30.0]
+        elif mean_vol >= -32.0:
+            candidates = [-28.0, -30.0, -32.0]
+        else:
+            candidates = [-30.0, -35.0, -40.0]
+    else:
+        candidates = [-30.0, -25.0, -22.0, -20.0]
+
+    durations = [min_silence_sec]
+    if min_silence_sec >= 0.4:
+        durations = [min_silence_sec, 0.35]
+
+    best_silences: list[tuple[float, float]] = []
+    chosen_threshold = candidates[0]
+
+    info = get_media_info(str(p))
+    total_dur = float(info.get("duration_seconds", 0.0))
+
+    for dur in durations:
+        for threshold in candidates:
+            cmd = [
+                "ffmpeg",
+                "-i", str(p),
+                "-vn",
+                "-af", f"silencedetect=noise={threshold}dB:d={dur}",
+                "-f", "null",
+                "-",
+            ]
+            proc = subprocess.run(cmd, stderr=subprocess.PIPE, text=True, errors="replace")
+
+            silences: list[tuple[float, float]] = []
+            start: float | None = None
+            for line in proc.stderr.splitlines():
+                sm = re.search(r"silence_start:\s*([\d\.]+)", line)
+                if sm:
+                    start = float(sm.group(1))
+                em = re.search(r"silence_end:\s*([\d\.]+)", line)
+                if em and start is not None:
+                    silences.append((start, float(em.group(1))))
+                    start = None
+
+            if start is not None and total_dur > start:
+                silences.append((start, total_dur))
+
+            if silences:
+                silence_total = sum(end - s for s, end in silences)
+                # If threshold was too aggressive (> 85% of total audio duration marked silence), try next
+                if total_dur > 0 and (silence_total / total_dur) > 0.85:
+                    continue
+
+                best_silences = silences
+                chosen_threshold = threshold
+                break
+        if best_silences:
+            break
+
+    if effective_threshold_out is not None:
+        effective_threshold_out.append(chosen_threshold)
+
+    return best_silences
 
 
 def calculate_keep_intervals(
@@ -499,9 +579,9 @@ def calculate_keep_intervals(
 def remove_silence(
     video_path: str,
     output_path: str | None = None,
-    min_silence_sec: float = 0.5,
+    min_silence_sec: float = 0.4,
     padding_sec: float = 0.15,
-    threshold_db: float = -30.0,
+    threshold_db: float | None = None,
 ) -> dict[str, Any]:
     """Detect and remove inaudible/silent gaps from video or audio using FFmpeg."""
     inp = Path(video_path).resolve()
@@ -516,18 +596,29 @@ def remove_silence(
     if total_duration <= 0.0:
         return {"success": False, "error": f"Invalid media duration: {total_duration}s"}
 
+    effective_thresh: list[float] = []
     silences = detect_silence_intervals(
         str(inp),
         noise_threshold_db=threshold_db,
         min_silence_sec=min_silence_sec,
+        effective_threshold_out=effective_thresh,
     )
+    applied_threshold = effective_thresh[0] if effective_thresh else (threshold_db or -30.0)
 
     if not silences:
+        out_path_str = str(inp)
+        if output_path and Path(output_path).resolve() != inp:
+            out = Path(output_path).resolve()
+            out.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(str(inp), str(out))
+            out_path_str = str(out)
+
         return {
             "success": True,
             "action": "remove_silence",
             "input_path": str(inp),
-            "output_path": str(inp),
+            "output_path": out_path_str,
             "silence_detected": False,
             "message": f"No silent pauses exceeding {min_silence_sec}s were found in this media.",
             "original_duration": round(total_duration, 2),
@@ -537,7 +628,7 @@ def remove_silence(
             "percentage_reduced": 0.0,
             "min_silence_sec": min_silence_sec,
             "padding_sec": padding_sec,
-            "threshold_db": threshold_db,
+            "threshold_db": applied_threshold,
         }
 
     keep_intervals = calculate_keep_intervals(
@@ -617,7 +708,7 @@ def remove_silence(
             "percentage_reduced": pct_reduced,
             "min_silence_sec": min_silence_sec,
             "padding_sec": padding_sec,
-            "threshold_db": threshold_db,
+            "threshold_db": applied_threshold,
             "keep_intervals_count": len(keep_intervals),
         }
     except Exception as exc:

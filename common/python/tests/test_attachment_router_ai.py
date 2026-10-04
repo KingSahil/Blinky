@@ -39,6 +39,24 @@ class AttachmentRouterTests(unittest.TestCase):
         with patch("attachment_router_ai.ask_text_model", return_value={"action": "analyze-image"}):
             self.assertEqual(choose_action("summarize", [{"name": "report.pdf"}]), "unsupported")
 
+    def test_silence_removal_routes_to_transfer_without_calling_ai(self):
+        video = [{"name": "VID_20261003_112942.mp4", "type": "video", "mimeType": "video/mp4"}]
+        with patch("attachment_router_ai.ask_text_model") as model:
+            self.assertEqual(choose_action("remove silence", video), "transfer")
+            model.assert_not_called()
+
+    def test_video_trim_routes_to_transfer_without_calling_ai(self):
+        video = [{"name": "clip.mov", "type": "video"}]
+        with patch("attachment_router_ai.ask_text_model") as model:
+            self.assertEqual(choose_action("trim from 2 to 10 seconds", video), "transfer")
+            model.assert_not_called()
+
+    def test_audio_subtitles_route_to_transfer_without_calling_ai(self):
+        audio = [{"name": "voice.mp3", "type": "audio"}]
+        with patch("attachment_router_ai.ask_text_model") as model:
+            self.assertEqual(choose_action("generate subtitles", audio), "transfer")
+            model.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

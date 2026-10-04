@@ -1,5 +1,10 @@
 import { requireOptionalNativeModule, type EventSubscription } from 'expo-modules-core';
 import { toExactArrayBuffer, acceptReadBuffer } from '../../lib/fileBytes';
+import {
+  hashFileStreaming,
+  uploadFileStreaming,
+  readUriAsArrayBufferStreaming,
+} from '../../lib/fileTransferStream';
 
 type NativeSecureSocketFunctions = {
   connect(id: string, url: string, pin: string): Promise<void>;
@@ -181,66 +186,7 @@ async function expectedFileSize(uri: string): Promise<number | null> {
 }
 
 async function readUriAsArrayBuffer(uri: string): Promise<ArrayBuffer> {
-  const expected = await expectedFileSize(uri);
-  const accept = (buf: ArrayBuffer | null | undefined): ArrayBuffer | null =>
-    acceptReadBuffer(buf, expected);
-
-  // Method 1: Modern expo-file-system File class (direct bytes, no blob store).
-  try {
-    const { File } = require('expo-file-system');
-    if (typeof File === 'function') {
-      const file = new File(uri);
-      const bytes = await file.bytes();
-      if (bytes && bytes.length > 0) {
-        // Defensive copy: bytes may be a view into a larger pooled buffer —
-        // returning bytes.buffer raw would hash/upload surrounding garbage.
-        const exact = toExactArrayBuffer(bytes);
-        const ok = accept(exact);
-        if (ok) return ok;
-      }
-    }
-  } catch {}
-
-  // Method 2: React Native fetch() handles content:// and file:// natively.
-  // (Kept second: it round-trips through the native blob store + base64.)
-  try {
-    const res = await fetch(uri);
-    const blob = await res.blob();
-    if (blob && typeof blob.size === 'number' && blob.size > 0) {
-      const buf = await new Promise<ArrayBuffer>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as ArrayBuffer);
-        reader.onerror = () => reject(reader.error || new Error('Failed to read file content'));
-        reader.readAsArrayBuffer(blob);
-      });
-      const ok = accept(buf);
-      if (ok) return ok;
-    }
-  } catch {}
-
-  // Method 3: expo-file-system/legacy base64 read.
-  try {
-    const FileSystem = require('expo-file-system/legacy');
-    if (FileSystem?.readAsStringAsync) {
-      const b64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType?.Base64 || 'base64',
-      });
-      const binaryStr = atob(b64);
-      const len = binaryStr.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) {
-        bytes[i] = binaryStr.charCodeAt(i);
-      }
-      const ok = accept(bytes.buffer);
-      if (ok) return ok;
-    }
-  } catch {}
-
-  throw new Error(
-    expected !== null
-      ? `Could not read ${expected} exact bytes from the selected file (got a short/long read).`
-      : 'Unable to read selected file on this device.'
-  );
+  return readUriAsArrayBufferStreaming(uri);
 }
 
 function getNative(): NativeSecureSocketModule {
@@ -262,12 +208,7 @@ export const hashFile = async (uri: string): Promise<{ size: number; sha256: str
   if (NativeModule) {
     return NativeModule.hashFile(uri);
   }
-  const buffer = await readUriAsArrayBuffer(uri);
-  const digest = await computeSha256(buffer);
-  return {
-    size: buffer.byteLength,
-    sha256: digest,
-  };
+  return hashFileStreaming(uri);
 };
 
 export const uploadFile = async (
@@ -276,57 +217,9 @@ export const uploadFile = async (
   if (NativeModule) {
     return NativeModule.uploadFile(options);
   }
-
-  const buffer = await readUriAsArrayBuffer(options.sourceUri);
-  const totalSize = buffer.byteLength;
-  let offset = options.offset || 0;
-  const chunkSize = options.chunkSize || 16 * 1024 * 1024;
-
-  while (offset < totalSize) {
-    const nextEnd = Math.min(offset + chunkSize, totalSize);
-    const chunk = buffer.slice(offset, nextEnd);
-
-    const uploadRes = await fetch(options.url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${options.token}`,
-        'Upload-Offset': String(offset),
-        'Content-Length': String(chunk.byteLength),
-        'Content-Type': 'application/octet-stream',
-      },
-      body: chunk,
-    });
-
-    if (uploadRes.status === 409) {
-      const nextOffsetHeader = uploadRes.headers.get('Upload-Offset');
-      if (nextOffsetHeader) {
-        offset = parseInt(nextOffsetHeader, 10);
-        continue;
-      }
-    }
-
-    if (!uploadRes.ok) {
-      const errorText = await uploadRes.text().catch(() => '');
-      throw new Error(`Upload failed (${uploadRes.status})${errorText ? ': ' + errorText : ''}`);
-    }
-
-    const nextOffsetHeader = uploadRes.headers.get('Upload-Offset');
-    const updatedOffset = nextOffsetHeader ? parseInt(nextOffsetHeader, 10) : nextEnd;
-    offset = updatedOffset;
-
-    emitFallbackEvent('onTransferProgress', {
-      id: options.transferId,
-      direction: 'upload',
-      bytes: offset,
-      total: totalSize,
-    });
-  }
-
-  return {
-    transferId: options.transferId,
-    uploadOffset: offset,
-    complete: true,
-  };
+  return uploadFileStreaming(options, (event) => {
+    emitFallbackEvent('onTransferProgress', event);
+  });
 };
 
 export const downloadFile = async (

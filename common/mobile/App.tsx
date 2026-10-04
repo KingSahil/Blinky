@@ -84,6 +84,7 @@ import {
 } from './lib/purchases';
 import { FileTransferPanel, FileTransferPanelRef, SelectedFile } from './FileTransferPanel';
 import type { AttachmentRoute } from './lib/attachmentRouting';
+import { extractTransferEdit } from './lib/fileTransferOffer';
 import { TabScreen, AttachedFile } from './types';
 import { colors } from './theme/theme';
 import { useFonts } from 'expo-font';
@@ -1268,14 +1269,6 @@ export default function App() {
     });
   };
 
-  /** Keep media editing separate from the destination requested in chat. */
-  const extractTransferEdit = (text: string): string => {
-    const match = /\b(trim|cut|merge|crop|rotate|caption|subtitle|speed up|slow down|add background music|remove audio)\b/i.exec(text);
-    if (!match) return '';
-    return text.slice(match.index)
-      .replace(/\s+(?:and\s+)?(?:send|save|put|copy|transfer|upload)\b.*$/i, '')
-      .trim();
-  };
 
   const readUriAsBase64 = async (uri: string): Promise<string | null> => {
     try {
