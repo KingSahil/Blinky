@@ -45,46 +45,35 @@ struct AgentQueryRequest {
 }
 
 #[tauri::command]
-async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::Value, String> {
-    let overlay = app.get_webview_window("overlay");
-    let command = app.get_webview_window("command");
-
-    if let Some(ref w) = overlay {
-        set_window_capture_exclusion(w, true);
-    }
-    if let Some(ref w) = command {
-        set_window_capture_exclusion(w, true);
+async fn run_tutor(_app: AppHandle, request: TutorRequest) -> Result<serde_json::Value, String> {
+    let query = request.question.trim();
+    if query.is_empty() {
+        return Err("Question is required.".to_string());
     }
 
-    thread::sleep(Duration::from_millis(40));
+    let provider = blinky_agent::providers::create_provider_from_env()
+        .map_err(|e| format!("Failed to create AI provider: {e}"))?;
+    let tools = std::sync::Arc::new(blinky_agent::tools::ToolRegistry::new());
+    let agent = blinky_agent::agent::AgentLoop::new(provider, tools);
 
-    let output_res = run_python_worker(
-        &app,
-        &request.question,
-        request.previous_question.as_deref(),
-        request.progress.as_ref(),
-        request.conversation_history.as_ref(),
-        request.web_search_enabled.unwrap_or(false),
-        request.agent_mode.unwrap_or(false),
-        request.attached_image.as_deref(),
-        request.attached_file.as_ref(),
-        command.clone(),
-        overlay.clone(),
-    );
+    let res = agent.run(query, 150).await
+        .map_err(|e| format!("Agent execution failed: {e}"))?;
 
-    if let Some(ref w) = command {
-        set_window_capture_exclusion(w, false);
-    }
-    if let Some(ref w) = overlay {
-        set_window_capture_exclusion(w, false);
-    }
+    let summary = res.answer.clone().unwrap_or_else(|| "Task completed.".to_string());
 
-    let output = output_res?;
-
-    let parsed: serde_json::Value = serde_json::from_str(&output)
-        .map_err(|err| format!("Python worker returned invalid JSON: {err}. Raw: {output}"))?;
-
-    Ok(parsed)
+    Ok(serde_json::json!({
+        "summary": summary,
+        "steps": [
+            {
+                "instruction": summary,
+                "completed": res.success
+            }
+        ],
+        "active_app": "Desktop",
+        "ocr": [],
+        "elapsed_ms": res.elapsed_ms,
+        "agent_mode": request.agent_mode.unwrap_or(false),
+    }))
 }
 
 #[tauri::command]
@@ -910,6 +899,31 @@ fn start_whatsapp_backend(app: &AppHandle) {
 }
 
 #[allow(dead_code)]
+fn start_blinky_daemon(app: &AppHandle) {
+    #[cfg(target_os = "linux")]
+    {
+        let app_handle = app.clone();
+        std::thread::spawn(move || {
+            let runtime = std::env::var("XDG_RUNTIME_DIR")
+                .unwrap_or_else(|_| format!("/run/user/1000"));
+            let sock_path = std::path::PathBuf::from(runtime).join("blinky-daemon.sock");
+            if !sock_path.exists() {
+                if let Ok(root) = project_root(&app_handle) {
+                    let bin = root.join("target").join("debug").join("blinky-daemon");
+                    if bin.exists() {
+                        let _ = std::process::Command::new(bin)
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn();
+                    }
+                }
+            }
+        });
+    }
+}
+
+#[allow(dead_code)]
 fn start_ydotoold() {
     #[cfg(target_os = "linux")]
     std::thread::spawn(|| {
@@ -1111,6 +1125,7 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             {
                 start_ydotoold();
+                start_blinky_daemon(app.handle());
             }
 
             let app_handle = app.handle().clone();

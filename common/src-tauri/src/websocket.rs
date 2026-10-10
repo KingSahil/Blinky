@@ -818,24 +818,28 @@ fn parse_local_wss_url(url: &str) -> Result<(String, u16, String), String> {
     Ok((host.to_string(), port, path))
 }
 
-pub async fn run_agent_query(app: &AppHandle, query: &str) -> Result<serde_json::Value, String> {
+pub async fn run_agent_query(_app: &AppHandle, query: &str) -> Result<serde_json::Value, String> {
     let query = query.trim();
     if query.is_empty() {
         return Err("Question is required.".to_string());
     }
 
-    let request_id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| format!("desktop-{}", duration.as_nanos()))
-        .unwrap_or_else(|_| "desktop-unknown".to_string());
-    let req_payload = serde_json::json!({
-        "requestId": request_id,
-        "query": query,
-    })
-    .to_string();
+    let provider = blinky_agent::providers::create_provider_from_env()
+        .map_err(|e| format!("Failed to create AI provider: {e}"))?;
+    let tools = std::sync::Arc::new(blinky_agent::tools::ToolRegistry::new());
+    let agent = blinky_agent::agent::AgentLoop::new(provider, tools);
 
-    let lines = forward_query_to_daemon_collect(&req_payload, app).await?;
-    agent_responses_to_tutor_result(&lines)
+    let res = agent.run(query, 150).await
+        .map_err(|e| format!("Agent execution failed: {e}"))?;
+
+    let summary = res.answer.clone().unwrap_or_else(|| "Task completed.".to_string());
+
+    Ok(serde_json::json!({
+        "summary": summary,
+        "success": res.success,
+        "elapsed_ms": res.elapsed_ms,
+        "steps": res.steps,
+    }))
 }
 
 /// Authenticates a client and handles commands received over its WebSocket.

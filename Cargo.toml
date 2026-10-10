@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "crates/blinky-daemon",
+    "crates/blinky-agent",
+    "common/src-tauri",
+]
+resolver = "2"

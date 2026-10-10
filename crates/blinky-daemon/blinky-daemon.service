@@ -1,0 +1,14 @@
+[Unit]
+Description=Blinky Headless Desktop Automation & OS Daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/home/fev/GitRepos/Blinky/target/debug/blinky-daemon
+Restart=always
+RestartSec=2
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+
+[Install]
+WantedBy=graphical-session.target

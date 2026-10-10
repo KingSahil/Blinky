@@ -1,0 +1,20 @@
+{
+  "temperature": 0.9999983906745911,
+  "accuracy": 1.0,
+  "ece_before": 1.5795230865478516e-05,
+  "ece_after": 1.5795230865478516e-05,
+  "label2id": {
+    "DAEMON_SYSTEM": 0,
+    "OCR_EXACT": 1,
+    "VISION_SPATIAL": 2,
+    "VISION_VISUAL": 3,
+    "HYBRID_CONSENSUS": 4
+  },
+  "id2label": {
+    "0": "DAEMON_SYSTEM",
+    "1": "OCR_EXACT",
+    "2": "VISION_SPATIAL",
+    "3": "VISION_VISUAL",
+    "4": "HYBRID_CONSENSUS"
+  }
+}

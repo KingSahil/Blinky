@@ -229,6 +229,7 @@ mod tests {
 
     #[tokio::test]
     async fn pinned_wss_round_trip_works() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let (private_key_pem, certificate_pem) = generate_identity().expect("identity");
         let identity =
             TlsIdentity::from_pem(private_key_pem, certificate_pem).expect("parse identity");

@@ -1,0 +1,35 @@
+[package]
+name = "blinky-agent"
+version = "0.1.0"
+edition = "2021"
+authors = ["FeV"]
+description = "Pure Rust AI Orchestrator, Autonomous Agent Loop & Multi-Provider Tool Calling Engine for Blinky"
+
+[dependencies]
+blinky-daemon = { path = "../blinky-daemon" }
+tokio = { version = "1.43", features = ["full"] }
+tokio-util = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+directories = "6.0"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.33", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+async-trait = "0.1"
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+anyhow = "1.0"
+thiserror = "2.0"
+tempfile = "3.17"
+walkdir = "2.5"
+regex = "1.11"
+url = "2.5"
+urlencoding = "2.1"
+nix = { version = "0.29", features = ["user"] }
+dotenvy = "0.15"
+lopdf = { version = "0.34", features = ["nom_parser"] }
+
+[dev-dependencies]
+tokio = { version = "1.43", features = ["full", "test-util"] }

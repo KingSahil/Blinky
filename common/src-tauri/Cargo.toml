@@ -2,7 +2,7 @@
 name = "blinky"
 version = "0.1.0"
 description = "Blinky AI desktop tutor"
-authors = ["Blinky Team"]
+authors = ["SupremeSahil", "KhannaSparsh0001", "FeV"]
 edition = "2021"
 
 [lib]
@@ -31,6 +31,7 @@ tokio-rustls = "0.26"
 tokio-tungstenite = { version = "0.29.0", features = ["native-tls"] }
 axum = { version = "0.8", features = ["macros"] }
 http = "1"
+blinky-agent = { path = "../../crates/blinky-agent" }
+blinky-daemon = { path = "../../crates/blinky-daemon" }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_System_SystemInformation", "Win32_System_Power", "Win32_System_StationsAndDesktops", "Win32_System_Threading"] }
-

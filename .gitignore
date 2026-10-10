@@ -20,6 +20,9 @@ tmp/
 .agent/
 .agents/
 !.agents/hooks.json
+target/
+*.pt
+*.safetensors
 src-tauri/target/
 common/src-tauri/target/
 common/src-tauri/target-nsis-release/
