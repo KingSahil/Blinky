@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { buildFileOffer, findTransferItem, transferIntent } from '../lib/fileTransferOffer';
+import { buildFileOffer, findTransferItem, transferIntent, extractTransferEdit } from '../lib/fileTransferOffer';
 
 test('a mixed batch without instruction remains an upload', () => {
   expect(transferIntent('')).toBe('upload');
@@ -34,4 +34,20 @@ test('file-card status follows file identity after transfer priority reorders it
   ];
   expect(findTransferItem(items, pdf)?.phase).toBe('pending');
   expect(findTransferItem(items, audio)?.phase).toBe('uploading');
+});
+
+test('extractTransferEdit identifies silence removal instructions', () => {
+  expect(extractTransferEdit('remove silence')).toBe('remove silence');
+  expect(extractTransferEdit('remove silence from video')).toBe('remove silence from video');
+  expect(extractTransferEdit('cut the silence from this clip')).toBe('cut the silence from this clip');
+  expect(extractTransferEdit('jump cut this video')).toBe('jump cut this video');
+  expect(extractTransferEdit('remove silence and save to PC')).toBe('remove silence');
+  expect(extractTransferEdit('put this in videos and remove silence')).toBe('remove silence');
+});
+
+test('extractTransferEdit preserves standard media edits and ignores pure destinations', () => {
+  expect(extractTransferEdit('trim from 1 to 3 seconds')).toBe('trim from 1 to 3 seconds');
+  expect(extractTransferEdit('add subtitles with instagram preset')).toBe('add subtitles with instagram preset');
+  expect(extractTransferEdit('save to Downloads/Blinky')).toBe('');
+  expect(extractTransferEdit('put these in my receipts folder')).toBe('');
 });

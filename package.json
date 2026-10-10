@@ -6,8 +6,10 @@
   "description": "Blinky is an offline-first AI desktop tutor for Windows.",
   "scripts": {
     "dev": "bun scripts/dev.ts",
+    "dev:clean": "cargo clean --manifest-path common/src-tauri/Cargo.toml -p blinky && bun scripts/dev.ts",
     "dev:no-docker": "bun scripts/dev.ts --no-docker",
     "dev:app": "bun run tauri:dev",
+    "clean:app": "cargo clean --manifest-path common/src-tauri/Cargo.toml -p blinky",
     "mobile:dev": "cd common/mobile && bun run start",
     "tauri:dev": "bun tauri dev",
     "build": "bun run typecheck && vite build --config common/frontend/vite.config.ts",

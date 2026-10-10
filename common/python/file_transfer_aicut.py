@@ -11,15 +11,22 @@ from pathlib import Path
 from tools.aicut_tool import resolve_aicut_request, run_aicut
 
 
+def _normalize_path(p: Path | str) -> Path:
+    s = str(p)
+    if s.startswith("\\\\?\\"):
+        s = s[4:]
+    return Path(s).resolve()
+
+
 def run_transfer_edit(
     instruction: str,
     input_path: str,
     input_paths: list[str] | None = None,
 ) -> dict:
     if input_paths:
-        sources = [Path(p).resolve(strict=True) for p in input_paths if p]
+        sources = [_normalize_path(p) for p in input_paths if p]
     elif input_path:
-        sources = [Path(input_path).resolve(strict=True)]
+        sources = [_normalize_path(input_path)]
     else:
         return {"success": False, "error": "No input files provided for edit."}
 
@@ -31,7 +38,7 @@ def run_transfer_edit(
             return {"success": False, "error": f"The uploaded file is unavailable: {source.name}"}
 
     primary_source = sources[0]
-    output_dir = Path(os.environ["BLINKY_TRANSFER_OUTPUT_DIR"]).resolve()
+    output_dir = _normalize_path(os.environ["BLINKY_TRANSFER_OUTPUT_DIR"])
     transfer_id = os.environ["BLINKY_TRANSFER_ID"]
 
     isolated_explorer = {
@@ -68,7 +75,7 @@ def run_transfer_edit(
         }
 
     action = request.get("action")
-    allowed = {"trim", "subtitles", "transcribe", "pipeline", "merge", "add_song"}
+    allowed = {"trim", "subtitles", "transcribe", "pipeline", "merge", "add_song", "remove_silence"}
     if action not in allowed:
         return {
             "success": False,
@@ -127,8 +134,17 @@ def run_transfer_edit(
     output_path = result.get("output_path") or result.get("srt_path")
     if not output_path:
         return {"success": False, "error": "AiCut finished without returning an output path."}
-    final_output = Path(output_path).resolve()
-    if final_output.parent != output_dir or not final_output.is_file():
+    final_output = _normalize_path(output_path)
+    is_in_dest = False
+    try:
+        is_in_dest = os.path.samefile(final_output.parent, output_dir)
+    except Exception:
+        is_in_dest = (
+            _normalize_path(final_output.parent) == _normalize_path(output_dir)
+            or str(final_output.parent).lower() == str(output_dir).lower()
+        )
+
+    if not is_in_dest or not final_output.is_file():
         return {"success": False, "error": "AiCut output did not remain inside the chosen destination folder."}
 
     return {"success": True, "output_path": str(final_output), "action": result.get("action", action)}

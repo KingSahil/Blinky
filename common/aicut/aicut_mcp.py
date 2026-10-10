@@ -419,6 +419,302 @@ def merge_videos(
         return {"success": False, "action": "merge", "error": str(exc)}
 
 
+def get_audio_volume_stats(media_path: str) -> dict[str, float]:
+    """Inspect audio volume levels (mean_volume, max_volume) using FFmpeg volumedetect filter."""
+    p = Path(media_path).resolve()
+    if not p.exists():
+        return {}
+    cmd = [
+        "ffmpeg",
+        "-i", str(p),
+        "-vn",
+        "-af", "volumedetect",
+        "-f", "null",
+        "-",
+    ]
+    proc = subprocess.run(cmd, stderr=subprocess.PIPE, text=True, errors="replace")
+    stats: dict[str, float] = {}
+    for line in proc.stderr.splitlines():
+        if "mean_volume:" in line:
+            m = re.search(r"mean_volume:\s*(-?[\d\.]+)\s*dB", line)
+            if m:
+                stats["mean_volume"] = float(m.group(1))
+        elif "max_volume:" in line:
+            m = re.search(r"max_volume:\s*(-?[\d\.]+)\s*dB", line)
+            if m:
+                stats["max_volume"] = float(m.group(1))
+    return stats
+
+
+def detect_silence_intervals(
+    media_path: str,
+    noise_threshold_db: float | None = None,
+    min_silence_sec: float = 0.4,
+    effective_threshold_out: list[float] | None = None,
+) -> list[tuple[float, float]]:
+    """Detect silent intervals using FFmpeg's native silencedetect audio filter.
+
+    When noise_threshold_db is omitted or set to default (-30.0), automatically
+    adapts to the ambient noise floor (e.g. phone microphones with hum/room noise at
+    -22 dB to -26 dB) using volumedetect and a multi-threshold ladder.
+    """
+    p = Path(media_path).resolve()
+    if not p.exists():
+        return []
+
+    stats = get_audio_volume_stats(str(p))
+    mean_vol = stats.get("mean_volume")
+
+    # If caller requested a specific custom threshold (e.g. user prompt asked for -35dB or -20dB), respect it first
+    if noise_threshold_db is not None and noise_threshold_db != -30.0:
+        candidates = [noise_threshold_db]
+    elif mean_vol is not None:
+        # Dynamic calculation based on ambient volume floor:
+        # e.g. Phone recording with fan/room noise (mean_volume = -21.6 dB) -> primary = -20.1 dB
+        if mean_vol >= -23.0:
+            primary = round(mean_vol + 1.5, 1)
+            candidates = [primary, -20.0, -22.0, -25.0, -28.0, -30.0]
+        elif mean_vol >= -27.0:
+            primary = round(mean_vol + 0.5, 1)
+            candidates = [primary, -24.0, -26.0, -28.0, -30.0]
+        elif mean_vol >= -32.0:
+            candidates = [-28.0, -30.0, -32.0]
+        else:
+            candidates = [-30.0, -35.0, -40.0]
+    else:
+        candidates = [-30.0, -25.0, -22.0, -20.0]
+
+    durations = [min_silence_sec]
+    if min_silence_sec >= 0.4:
+        durations = [min_silence_sec, 0.35]
+
+    best_silences: list[tuple[float, float]] = []
+    chosen_threshold = candidates[0]
+
+    info = get_media_info(str(p))
+    total_dur = float(info.get("duration_seconds", 0.0))
+
+    for dur in durations:
+        for threshold in candidates:
+            cmd = [
+                "ffmpeg",
+                "-i", str(p),
+                "-vn",
+                "-af", f"silencedetect=noise={threshold}dB:d={dur}",
+                "-f", "null",
+                "-",
+            ]
+            proc = subprocess.run(cmd, stderr=subprocess.PIPE, text=True, errors="replace")
+
+            silences: list[tuple[float, float]] = []
+            start: float | None = None
+            for line in proc.stderr.splitlines():
+                sm = re.search(r"silence_start:\s*([\d\.]+)", line)
+                if sm:
+                    start = float(sm.group(1))
+                em = re.search(r"silence_end:\s*([\d\.]+)", line)
+                if em and start is not None:
+                    silences.append((start, float(em.group(1))))
+                    start = None
+
+            if start is not None and total_dur > start:
+                silences.append((start, total_dur))
+
+            if silences:
+                silence_total = sum(end - s for s, end in silences)
+                # If threshold was too aggressive (> 85% of total audio duration marked silence), try next
+                if total_dur > 0 and (silence_total / total_dur) > 0.85:
+                    continue
+
+                best_silences = silences
+                chosen_threshold = threshold
+                break
+        if best_silences:
+            break
+
+    if effective_threshold_out is not None:
+        effective_threshold_out.append(chosen_threshold)
+
+    return best_silences
+
+
+def calculate_keep_intervals(
+    silence_intervals: list[tuple[float, float]],
+    total_duration: float,
+    padding_sec: float = 0.15,
+    min_speech_sec: float = 0.1,
+) -> list[tuple[float, float]]:
+    """Invert silence intervals into speech/keep intervals with pre/post-roll cushion."""
+    if not silence_intervals:
+        return [(0.0, total_duration)] if total_duration > 0 else []
+
+    raw_speech: list[tuple[float, float]] = []
+    last_end = 0.0
+    for s_start, s_end in silence_intervals:
+        if s_start > last_end:
+            raw_speech.append((last_end, s_start))
+        last_end = s_end
+    if last_end < total_duration:
+        raw_speech.append((last_end, total_duration))
+
+    padded: list[list[float]] = []
+    for s, e in raw_speech:
+        p_start = max(0.0, s - padding_sec)
+        p_end = min(total_duration, e + padding_sec)
+        padded.append([p_start, p_end])
+
+    merged: list[list[float]] = []
+    for s, e in padded:
+        if not merged:
+            merged.append([s, e])
+        else:
+            if s <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], e)
+            else:
+                merged.append([s, e])
+
+    return [(round(s, 3), round(e, 3)) for s, e in merged if (e - s) >= min_speech_sec]
+
+
+def remove_silence(
+    video_path: str,
+    output_path: str | None = None,
+    min_silence_sec: float = 0.4,
+    padding_sec: float = 0.15,
+    threshold_db: float | None = None,
+) -> dict[str, Any]:
+    """Detect and remove inaudible/silent gaps from video or audio using FFmpeg."""
+    inp = Path(video_path).resolve()
+    if not inp.exists():
+        return {"success": False, "error": f"Input media file not found: {video_path}"}
+
+    info = get_media_info(str(inp))
+    if not info.get("has_audio"):
+        return {"success": False, "error": f"Media file '{inp.name}' has no audio track to detect speech or silence."}
+
+    total_duration = float(info.get("duration_seconds", 0.0))
+    if total_duration <= 0.0:
+        return {"success": False, "error": f"Invalid media duration: {total_duration}s"}
+
+    effective_thresh: list[float] = []
+    silences = detect_silence_intervals(
+        str(inp),
+        noise_threshold_db=threshold_db,
+        min_silence_sec=min_silence_sec,
+        effective_threshold_out=effective_thresh,
+    )
+    applied_threshold = effective_thresh[0] if effective_thresh else (threshold_db or -30.0)
+
+    if not silences:
+        out_path_str = str(inp)
+        if output_path and Path(output_path).resolve() != inp:
+            out = Path(output_path).resolve()
+            out.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(str(inp), str(out))
+            out_path_str = str(out)
+
+        return {
+            "success": True,
+            "action": "remove_silence",
+            "input_path": str(inp),
+            "output_path": out_path_str,
+            "silence_detected": False,
+            "message": f"No silent pauses exceeding {min_silence_sec}s were found in this media.",
+            "original_duration": round(total_duration, 2),
+            "new_duration": round(total_duration, 2),
+            "silence_removed_seconds": 0.0,
+            "cuts_count": 0,
+            "percentage_reduced": 0.0,
+            "min_silence_sec": min_silence_sec,
+            "padding_sec": padding_sec,
+            "threshold_db": applied_threshold,
+        }
+
+    keep_intervals = calculate_keep_intervals(
+        silences,
+        total_duration,
+        padding_sec=padding_sec,
+    )
+
+    if not keep_intervals:
+        return {"success": False, "error": "Entire media file was detected as silence below the volume threshold."}
+
+    if not output_path:
+        output_path = resolve_output_path(str(inp), "_nosilence")
+
+    out = Path(output_path).resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    has_video = info.get("has_video", False)
+    select_expr = "+".join(f"between(t,{s},{e})" for s, e in keep_intervals)
+
+    try:
+        if has_video:
+            vf = f"[0:v]select='{select_expr}',setpts=N/FRAME_RATE/TB[v]"
+            af = f"[0:a]aselect='{select_expr}',asetpts=N/SR/TB[a]"
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(inp),
+                "-filter_complex", f"{vf};{af}",
+                "-map", "[v]",
+                "-map", "[a]",
+                "-c:v", "libx264",
+                "-crf", "18",
+                "-preset", "fast",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                str(out),
+            ]
+        else:
+            af = f"aselect='{select_expr}',asetpts=N/SR/TB"
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", str(inp),
+                "-af", af,
+                "-c:a", "aac" if out.suffix.lower() in {".m4a", ".aac"} else "libmp3lame",
+                "-b:a", "192k",
+                str(out),
+            ]
+
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        success = proc.returncode == 0 and out.exists()
+
+        if not success:
+            return {
+                "success": False,
+                "action": "remove_silence",
+                "error": proc.stderr.strip() or "FFmpeg silence removal cut failed.",
+            }
+
+        out_info = get_media_info(str(out))
+        new_duration = float(out_info.get("duration_seconds", 0.0))
+        if new_duration <= 0.0:
+            new_duration = sum(e - s for s, e in keep_intervals)
+
+        time_saved = max(0.0, total_duration - new_duration)
+        pct_reduced = round((time_saved / total_duration) * 100, 1) if total_duration > 0 else 0.0
+
+        return {
+            "success": True,
+            "action": "remove_silence",
+            "input_path": str(inp),
+            "output_path": str(out),
+            "silence_detected": True,
+            "original_duration": round(total_duration, 2),
+            "new_duration": round(new_duration, 2),
+            "silence_removed_seconds": round(time_saved, 2),
+            "cuts_count": len(silences),
+            "percentage_reduced": pct_reduced,
+            "min_silence_sec": min_silence_sec,
+            "padding_sec": padding_sec,
+            "threshold_db": applied_threshold,
+            "keep_intervals_count": len(keep_intervals),
+        }
+    except Exception as exc:
+        return {"success": False, "action": "remove_silence", "error": str(exc)}
+
+
 # ==============================================================================
 # Model Context Protocol (MCP) Server Implementation
 # ==============================================================================
@@ -532,6 +828,21 @@ MCP_TOOL_SCHEMAS = [
                 "srt_output": {"type": "string", "description": "Optional destination path for the SRT file. Defaults to <input>.srt next to the source."},
             },
             "required": ["audio_path"],
+        },
+    },
+    {
+        "name": "aicut_remove_silence",
+        "description": "Automatically detect and remove silent/inaudible pauses from video or audio using speech-aware thresholding and FFmpeg.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "video_path": {"type": "string", "description": "Path to the input video or audio file."},
+                "output_path": {"type": "string", "description": "Optional destination path for the edited file."},
+                "min_silence_sec": {"type": "number", "description": "Minimum pause duration in seconds to trigger a cut (default: 0.5s).", "default": 0.5},
+                "padding_sec": {"type": "number", "description": "Padding cushion in seconds retained before and after speech (default: 0.15s).", "default": 0.15},
+                "threshold_db": {"type": "number", "description": "Audio volume threshold in dB below which audio is considered silence (default: -30.0dB).", "default": -30.0},
+            },
+            "required": ["video_path"],
         },
     },
 ]
@@ -862,6 +1173,14 @@ def handle_mcp_request(request: dict[str, Any]) -> dict[str, Any]:
                     language=args.get("language"),
                     srt_output=args.get("srt_output"),
                 )
+            elif tool_name == "aicut_remove_silence":
+                res = remove_silence(
+                    video_path=args.get("video_path") or args.get("input_path") or args.get("media_path", ""),
+                    output_path=args.get("output_path"),
+                    min_silence_sec=float(args.get("min_silence_sec", 0.5)),
+                    padding_sec=float(args.get("padding_sec", 0.15)),
+                    threshold_db=float(args.get("threshold_db", -30.0)),
+                )
             else:
                 return {
                     "jsonrpc": "2.0",
@@ -968,8 +1287,16 @@ def run_cli_direct(args_json_str: str):
                 language=data.get("language"),
                 srt_output=data.get("srt_output"),
             )
+        elif action in {"remove_silence", "silence_remover", "cut_silence", "jump_cut", "jumpcut"}:
+            res = remove_silence(
+                video_path=data.get("video_path") or data.get("input_path") or data.get("media_path", ""),
+                output_path=data.get("output_path"),
+                min_silence_sec=float(data.get("min_silence_sec", 0.5)),
+                padding_sec=float(data.get("padding_sec", 0.15)),
+                threshold_db=float(data.get("threshold_db", -30.0)),
+            )
         else:
-            res = {"error": f"Unknown action: {action}", "available_actions": ["trim", "add_song", "merge", "media_info", "explorer_context", "subtitles"]}
+            res = {"error": f"Unknown action: {action}", "available_actions": ["trim", "add_song", "merge", "media_info", "explorer_context", "subtitles", "remove_silence"]}
 
         print(json.dumps(res, indent=2))
     except Exception as err:

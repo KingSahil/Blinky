@@ -345,6 +345,22 @@ def resolve_aicut_request(
         or explicitly_added_audio
     )
 
+    silence_pattern = (
+        r"\b(?:remove|cut|delete|trim|drop|strip|clean|clear)\b.*?\b(?:silence|silent|pauses|dead\s*air|inaudible)\b"
+        r"|\b(?:silence\s*remover|remove\s*silence|cut\s*silence|jump\s*cut|auto\s*cut|jumpcut)\b"
+        r"|\b(?:remove|cut)\s+(?:all\s+)?(?:the\s+)?(?:silent\s+parts?|pauses?)\b"
+    )
+    has_silence = bool(re.search(silence_pattern, q_lower))
+
+    min_silence_match = (
+        re.search(r"(?:pauses?|silences?)\s*(?:longer\s*than|greater\s*than|>)?\s*(\d+(?:\.\d+)?)\s*(?:s|sec|seconds)?", q_lower)
+        or re.search(r"(\d+(?:\.\d+)?)\s*(?:s|sec|seconds)?\s*(?:pauses?|silences?)", q_lower)
+    )
+    min_silence_val = float(min_silence_match.group(1)) if min_silence_match else 0.5
+
+    thresh_match = re.search(r"(-?\d+(?:\.\d+)?)\s*(?:db|decibels)", q_lower)
+    thresh_val = float(thresh_match.group(1)) if thresh_match else -30.0
+
     # ── Candidate Resolution ──
     # Videos
     resolved_videos: list[str] = []
@@ -447,12 +463,14 @@ def resolve_aicut_request(
     op_trim = has_trim
     op_audio = has_audio and (resolved_audio is not None)
     op_subtitles = has_subtitles
+    op_silence = has_silence
 
     active_ops_count = sum([
         1 if op_merge else 0,
         1 if op_trim else 0,
         1 if op_audio else 0,
         1 if op_subtitles else 0,
+        1 if op_silence else 0,
     ])
 
     # If multiple operations requested (e.g. merge + captions, merge + audio + captions, trim + captions, audio + captions)
@@ -467,6 +485,10 @@ def resolve_aicut_request(
             "music_volume": music_vol,
             "start_seconds": trim_start,
             "end_seconds": trim_end,
+            "remove_silence": op_silence,
+            "min_silence_sec": min_silence_val,
+            "padding_sec": 0.15,
+            "threshold_db": thresh_val,
             "subtitles": has_subtitles,
             "preset": preset_name or "instagram",
             "srt_path": resolved_srt,
@@ -534,7 +556,19 @@ def resolve_aicut_request(
             "explorer": explorer,
         }
 
-    # 6. Transcribe fallback
+    # 6. Silence Removal
+    if op_silence and (resolved_videos or resolved_audio):
+        target_media = resolved_videos[0] if resolved_videos else resolved_audio
+        return {
+            "action": "remove_silence",
+            "video_path": target_media,
+            "min_silence_sec": min_silence_val,
+            "padding_sec": 0.15,
+            "threshold_db": thresh_val,
+            "explorer": explorer,
+        }
+
+    # 7. Transcribe fallback
     if is_transcribe_only:
         target_trans = resolved_videos[0] if resolved_videos else resolved_audio
         return {
@@ -587,12 +621,15 @@ def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
         target_output = payload.get("output_path")
         music_vol = float(payload.get("music_volume", 0.25))
 
+        has_silence_step = bool(payload.get("remove_silence") or action == "remove_silence")
+
         # Check if this is a pipeline or composite execution
         is_pipeline = (
             action == "pipeline"
-            or (action == "merge" and (song_path or has_subtitles))
-            or (action == "add_song" and has_subtitles)
-            or (action == "trim" and (song_path or has_subtitles))
+            or (action == "merge" and (song_path or has_subtitles or payload.get("remove_silence")))
+            or (action == "add_song" and (has_subtitles or payload.get("remove_silence")))
+            or (action == "trim" and (song_path or has_subtitles or payload.get("remove_silence")))
+            or (action == "remove_silence" and (song_path or has_subtitles or (input_paths and len(input_paths) >= 2)))
         )
 
         if is_pipeline:
@@ -667,6 +704,34 @@ def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
 
                 if not current_video or not Path(current_video).exists():
                     return {"success": False, "error": "Video preparation failed; no video output produced."}
+
+                # ── Step 1.5: Silence Removal ──
+                if has_silence_step and current_video:
+                    is_last_step = not has_audio_step and not has_subs_step
+                    step_silence_out = final_output if is_last_step else str(base_dir / f".tmp_{base_stem}_nosilence.mp4")
+                    if not is_last_step:
+                        temp_files_to_cleanup.append(step_silence_out)
+
+                    silence_res = aicut_mcp.remove_silence(
+                        video_path=current_video,
+                        output_path=step_silence_out,
+                        min_silence_sec=float(payload.get("min_silence_sec", 0.5)),
+                        padding_sec=float(payload.get("padding_sec", 0.15)),
+                        threshold_db=float(payload.get("threshold_db", -30.0)),
+                    )
+                    if not silence_res.get("success"):
+                        return silence_res
+                    if silence_res.get("silence_detected"):
+                        current_video = silence_res["output_path"]
+                        steps_completed.append({
+                            "action": "remove_silence",
+                            "output_path": current_video,
+                            "original_duration": silence_res.get("original_duration"),
+                            "new_duration": silence_res.get("new_duration"),
+                            "silence_removed_seconds": silence_res.get("silence_removed_seconds"),
+                            "cuts_count": silence_res.get("cuts_count"),
+                            "percentage_reduced": silence_res.get("percentage_reduced"),
+                        })
 
                 # ── Step 2: Audio / Song Mixing ──
                 if has_audio_step and current_video:
@@ -847,6 +912,20 @@ def run_aicut(payload: dict[str, Any]) -> dict[str, Any]:
                 srt_output=payload.get("srt_output"),
             )
 
+        elif action in {"remove_silence", "silence_remover", "cut_silence", "jump_cut", "jumpcut"}:
+            if not video_path:
+                return {
+                    "success": False,
+                    "error": "No media file specified or found in File Explorer. Please select a video or audio file to remove silence.",
+                }
+            return aicut_mcp.remove_silence(
+                video_path=video_path,
+                output_path=payload.get("output_path"),
+                min_silence_sec=float(payload.get("min_silence_sec", 0.5)),
+                padding_sec=float(payload.get("padding_sec", 0.15)),
+                threshold_db=float(payload.get("threshold_db", -30.0)),
+            )
+
         else:
             return {"success": False, "error": f"Unknown AiCut action: {action}"}
 
@@ -874,6 +953,11 @@ def format_aicut_summary(result: dict[str, Any], query: str = "") -> str:
                 lines.append(f"- **Combined {len(inputs)} Clips**:\n{clips_str}\n")
             elif act == "trim":
                 lines.append(f"- **Trim Range**: `{step.get('start_seconds')}s` to `{step.get('end_seconds')}s` (Duration: `{step.get('duration')}s`)\n")
+            elif act == "remove_silence":
+                saved = step.get("silence_removed_seconds", 0)
+                pct = step.get("percentage_reduced", 0)
+                cuts = step.get("cuts_count", 0)
+                lines.append(f"- **Silence Removed**: `{cuts}` pauses eliminated ({saved}s cut, {pct}% tighter)\n")
             elif act == "add_song":
                 song_name = Path(step.get("song_path", "")).name
                 vol = int(step.get("music_volume", 0.25) * 100)
@@ -932,6 +1016,32 @@ def format_aicut_summary(result: dict[str, Any], query: str = "") -> str:
             f"- **Combined {len(inputs)} Clips**:\n{clips_str}\n"
             f"- **Saved Output**: `{out}`\n\n"
             f"All video clips joined seamlessly into a single sequence."
+        )
+
+    if action in {"remove_silence", "silence_remover", "cut_silence", "jump_cut", "jumpcut"}:
+        inp = result.get("input_path", "")
+        out = result.get("output_path", "")
+        orig_d = result.get("original_duration", 0)
+        new_d = result.get("new_duration", 0)
+        saved = result.get("silence_removed_seconds", 0)
+        pct = result.get("percentage_reduced", 0)
+        cuts = result.get("cuts_count", 0)
+        if not result.get("silence_detected", True):
+            return (
+                f"**Silence Check Complete** \n\n"
+                f"- **Media**: `{Path(inp).name}`\n"
+                f"- **Duration**: `{orig_d}s`\n"
+                f"- **Result**: No silent pauses longer than {result.get('min_silence_sec', 0.5)}s were detected."
+            )
+        return (
+            f"**Silence Removed Successfully** ✂️\n\n"
+            f"- **Input Media**: `{Path(inp).name}`\n"
+            f"- **Original Duration**: `{orig_d}s`\n"
+            f"- **New Duration**: `{new_d}s`\n"
+            f"- **Time Cut**: `{saved}s` ({pct}% reduction)\n"
+            f"- **Cuts Applied**: `{cuts}` silent pauses eliminated\n"
+            f"- **Saved Output**: `{out}`\n\n"
+            f"All silent gaps removed with natural speech padding cushion (+150ms) to ensure smooth transitions."
         )
 
     if action == "subtitles" or "output_path" in result and "preset" in result:
