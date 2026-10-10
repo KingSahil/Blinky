@@ -23,7 +23,6 @@ Screen-aware tutoring · Voice interaction · Desktop automation · Mobile contr
 ![Tauri](https://img.shields.io/badge/Tauri-2.x-FFC131?logo=tauri&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![Bun](https://img.shields.io/badge/Bun-1.3+-F9F1E1?logo=bun&logoColor=black)
-![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Ollama](https://img.shields.io/badge/Ollama-gemma4:e4b-black?logo=ollama&logoColor=white)
 ![Platform](https://img.shields.io/badge/Windows%20%7C%20Linux%20%7C%20Android-supported-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
@@ -98,79 +97,62 @@ flowchart  LR
     U(["👤 User"])
 
     subgraph FRONT["🖥️ Frontend"]
-        UI["React<br/>command bar + overlay"]
+        UI["React 19 / Vite UI<br/>(Command bar, overlay)"]
     end
 
     subgraph HOST["⚙️ Desktop host"]
-        T["Tauri + Rust"]
-        F["Files, system controls,<br/>telemetry"]
+        T["Tauri + Rust (IPC)"]
+        F["blinky-agent<br/>(Pure Rust Orchestrator)"]
+        D["blinky-daemon<br/>(Rust OS Subsystem)"]
     end
 
-    subgraph BRAIN["🧠 Assistant"]
-        P["Python assistant<br/>+ tool router"]
-        R{"Request<br/>router"}
+    subgraph BRAIN["🧠 Intelligence"]
+        R["System 1 Intent Classifier<br/>(<4ms Non-autoregressive)"]
+        AI["System 2 Reasoning<br/>(OmniRoute, Groq, Ollama)"]
     end
 
-    subgraph VISION["👁️ Screen guidance"]
-        C["Screen capture"]
-        O["OCR, accessibility,<br/>visual grounding"]
-        AI["Ollama or<br/>cloud model"]
-        H["Guidance +<br/>highlight overlay"]
-        C --> O --> AI --> H
-    end
-
-    subgraph TOOLS["🧰 Tools"]
-        A["Computer-use<br/>tools"]
-        X["Web, WhatsApp, AiCut,<br/>Spotify, others"]
-        I["ESP32 +<br/>integrations"]
+    subgraph SYSTEM["🛠️ Subsystems"]
+        C["Capture & Desktop<br/>(Hyprland, wlroots)"]
+        O["Inputs & Accessibility<br/>(uinput, AT-SPI2)"]
     end
 
     M["📱 Android companion"]
 
     U --> UI
     UI <--> T
-    T <--> P
-    T --> F
+    T <--> F
     M <-->|"Authenticated<br/>WebSocket"| T
 
-    P --> R
-    P --> I
-    R -->|"Screen guidance"| C
-    R -->|"Desktop actions"| A
-    R -->|"Search + integrations"| X
+    F --> R
+    F --> AI
+    F <-->|"UNIX Socket (:9001)"| D
+    
+    D --> C
+    D --> O
 
     classDef user fill:#ea580c,stroke:#9a3412,color:#fff,stroke-width:2px
     classDef front fill:#fb923c,stroke:#c2410c,color:#1c1917
     classDef host fill:#f97316,stroke:#9a3412,color:#1c1917
     classDef brain fill:#c2410c,stroke:#7c2d12,color:#fff
-    classDef vision fill:#fdba74,stroke:#ea580c,color:#1c1917
-    classDef tool fill:#fed7aa,stroke:#ea580c,color:#431407
+    classDef system fill:#fdba74,stroke:#ea580c,color:#1c1917
     classDef mobile fill:#fbbf24,stroke:#b45309,color:#1c1917
 
     class U user
     class UI front
-    class T,F host
-    class P,R brain
-    class C,O,AI,H vision
-    class A,X,I tool
+    class T,F,D host
+    class R,AI brain
+    class C,O system
     class M mobile
 
     linkStyle default stroke:#f97316,stroke-width:2px
-
-    style FRONT fill:none,stroke:#fb923c,stroke-width:2px,stroke-dasharray:5 5
-    style HOST fill:none,stroke:#f97316,stroke-width:2px,stroke-dasharray:5 5
-    style BRAIN fill:none,stroke:#c2410c,stroke-width:2px,stroke-dasharray:5 5
-    style VISION fill:none,stroke:#fdba74,stroke-width:2px,stroke-dasharray:5 5
-    style TOOLS fill:none,stroke:#ea580c,stroke-width:2px,stroke-dasharray:5 5
 ```
 
 | Layer | Main components |
 |---|---|
 | Desktop interface | React 19, TypeScript, Tauri 2, and Rust |
-| Assistant | Python 3.11+, request routing, AI clients, tools, and screen understanding |
-| Vision and input | Windows capture/UIA, Linux desktop backends, OCR, and configurable OmniParser grounding |
-| AI and voice | Ollama, optional Groq and other configured providers, AssemblyAI and Sarvam voice integrations |
-| Search and media | SearXNG/WIL, Playwright, FFmpeg, faster-whisper, and the AiCut service |
+| Assistant (`blinky-agent`) | Pure Rust orchestrator, multi-provider AI engine, System 1 reflex logic, request routing |
+| OS & Inputs (`blinky-daemon`) | Headless Rust daemon for Hyprland/wlroots, visual capture, AT-SPI2, /dev/uinput, coordinate transformations |
+| AI and voice | Local Ollama, Groq, assembly/sarvam APIs, with grounded visual targets and normalized JSON-RPC outputs |
 | Mobile | Expo and React Native with authenticated desktop transport |
 
 ## Installation
@@ -181,7 +163,7 @@ flowchart  LR
 |---|---|
 | Git | Clone the repository |
 | Bun 1.3 or newer | Desktop JavaScript dependencies and development scripts |
-| Python 3.11 or newer | Assistant backend and platform packages |
+| Python 3.11+ | Wake-word local ONNX model and decision engine training |
 | Rust stable toolchain | Tauri desktop application |
 | Ollama or a configured cloud AI provider | Assistant responses |
 | Docker Compose | Optional local SearXNG search service |
@@ -261,12 +243,13 @@ docker compose -f common/docker-compose.yml up -d
 |---|---|
 | `common/frontend/` | React command bar, visual overlay, voice, guidance, and autopilot UI |
 | `common/src-tauri/` | Tauri desktop host, Rust platform services, authenticated WebSocket, and file transfer |
-| `common/python/` | Assistant orchestration, screen capture, OCR, AI clients, computer use, web research, and tools |
 | `common/whatsapp_backend/` | WhatsApp Web session, chat, and summary service |
 | `common/aicut/` | C++ video processing components used by AiCut |
 | `common/mobile/` | Expo/React Native Android companion, remote control, files, and system screens |
-| `windows/` | Windows-specific Python, Rust, setup, and system integrations |
-| `linux/` | Linux desktop backends, setup scripts, and quick-start guide |
+| `windows/` | Windows-specific Rust, setup, and system integrations |
+| `crates/blinky-daemon/` | Pure Rust OS/hardware headless Linux daemon (Wayland/X11) |
+| `crates/blinky-agent/` | Pure Rust AI agent orchestration loop, intent classifier, tools |
+| `linux/` | Linux setup scripts and quick-start guide |
 | `python/` | Shared wake-word listener and bundled `hey_blinky.onnx` model |
 | `esp32_firmware/` | ESP32 universal daemon firmware for lighting and device control |
 | `docs/` | Platform, security, voice, distribution, and architecture guides |
