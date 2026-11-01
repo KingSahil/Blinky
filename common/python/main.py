@@ -2309,15 +2309,30 @@ def resolve_locator_fast_path(question: str, screenshot, target_pid: int | None,
         uia_all = [item for item in uia_all if item.get("y", 0) >= 35]
 
     merged = merge_visible_items(ocr_items, uia_all)
-    icon_boxes = get_icon_boxes_for_screenshot(screenshot)
-    if icon_boxes:
-        merged = merge_icon_boxes(merged, icon_boxes, screenshot)
-        textless = [item for item in merged if str(item.get("source", "")).lower() == "icon"]
-        if textless:
-            recover_icon_labels(textless, screenshot)
     visible_items = assign_screen_element_refs(merged)
     visible_items.sort(key=lambda item: (int(item.get("y", 0) / 10), item.get("x", 0)))
     pool = locator_match_items(question, visible_items)
+
+    # Lazy Icon Detection: Check if all targets are already satisfied with high confidence
+    # by OCR and UIA accessibility tree. If so, completely bypass heavy ONNX/YOLO execution!
+    needs_icon_pass = False
+    for target in targets:
+        instruction = f"Locate the {target} control."
+        match_result = find_best_match_with_score(target, pool, instruction) if pool else None
+        if not match_result or not should_accept_locator_match(question, match_result):
+            needs_icon_pass = True
+            break
+
+    if needs_icon_pass:
+        icon_boxes = get_icon_boxes_for_screenshot(screenshot)
+        if icon_boxes:
+            merged = merge_icon_boxes(merged, icon_boxes, screenshot)
+            textless = [item for item in merged if str(item.get("source", "")).lower() == "icon"]
+            if textless:
+                recover_icon_labels(textless, screenshot)
+            visible_items = assign_screen_element_refs(merged)
+            visible_items.sort(key=lambda item: (int(item.get("y", 0) / 10), item.get("x", 0)))
+            pool = locator_match_items(question, visible_items)
 
     resolved: list[tuple[str, dict, dict | None]] = []
     occluded_notes: list[str] = []
