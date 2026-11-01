@@ -1112,7 +1112,8 @@ def _apply_icon_pass(items: list[dict], screenshot) -> list[dict]:
 
 def _build_visible_ui_map(active_app: dict, screenshot, target_pid: int | None, include_icons: bool) -> list[dict]:
     ocr_started = time.perf_counter()
-    ocr_items = extract_visible_text(screenshot.path)
+    crop_rect = _get_active_window_crop_rect(screenshot)
+    ocr_items = extract_visible_text(screenshot.path, crop_rect=crop_rect)
     ocr_items = filter_ignored_overlay_items(ocr_items, screenshot)
     log_stage_timing("ocr", ocr_started)
     uia_started = time.perf_counter()
@@ -1970,6 +1971,36 @@ def _icons_enabled() -> bool:
     return os.environ.get("BLINKY_ICON_DETECT", "1").strip() not in {"0", "false", "no", "off"}
 
 
+
+def _get_active_window_crop_rect(screenshot) -> tuple[int, int, int, int] | None:
+    """Calculate active window bounding box in screenshot pixel space for targeted fast-path OCR."""
+    try:
+        active_rect = _active_window_rect()
+        if not active_rect:
+            return None
+        left, top, right, bottom = active_rect
+        w = right - left
+        h = bottom - top
+        if w < 100 or h < 100:
+            return None
+            
+        sx = screenshot.width / screenshot.screen_width
+        sy = screenshot.height / screenshot.screen_height
+        
+        cx = int(left * sx)
+        cy = int(top * sy)
+        cw = int(w * sx)
+        ch = int(h * sy)
+        
+        # If the window occupies more than 92% of the screen, full-screen OCR is cleaner
+        if cw * ch >= (screenshot.width * screenshot.height * 0.92):
+            return None
+            
+        return (cx, cy, cw, ch)
+    except Exception as exc:
+        LOGGER.debug("Could not calculate active window crop: %s", exc)
+        return None
+
 def _active_window_rect() -> tuple[int, int, int, int] | None:
     """Active window rect in screen coords, or None when it is the desktop."""
     try:
@@ -2269,7 +2300,8 @@ def resolve_locator_fast_path(question: str, screenshot, target_pid: int | None,
     uia_all = [*uia_items, *shell_visible] if shell_visible else uia_items
 
     ocr_started = time.perf_counter()
-    ocr_items = extract_visible_text(screenshot.path)
+    crop_rect = _get_active_window_crop_rect(screenshot)
+    ocr_items = extract_visible_text(screenshot.path, crop_rect=crop_rect)
     ocr_items = filter_ignored_overlay_items(ocr_items, screenshot)
     log_stage_timing("locator.ocr", ocr_started)
     if os.name != "nt":
