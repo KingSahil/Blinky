@@ -297,6 +297,18 @@ def resolve_light_request(question: str) -> dict | None:
     q = question.strip().lower()
     q_clean = re.sub(r"[?!.,;:']", "", q)
 
+    from computer_use.dedicated_routes import is_guidance_question, appearance_request
+    if is_guidance_question(q):
+        return None
+    if appearance_request(q) and not re.search(r"\b(?:esp32|led\s+strip|rgb\s+(?:lamp|light|led))\b", q, re.I):
+        return None
+    # Hardware execution requires an imperative physical-light request, or an
+    # exact legacy quick-action phrase. Mentioning a light/colour is not enough.
+    imperative = bool(re.match(r"^(?:(?:please|can you|could you)\s+)?(?:turn|switch|shut|set|change|make|dim|brighten|toggle)\b", q_clean))
+    quick_action = q_clean in {"lights", "lights on", "light on", "lights off", "light off", "toggle lights", "toggle light", "toggle_lights"}
+    if not imperative and not quick_action:
+        return None
+
     # Never hijack media playback ("play ... lights ..." song titles).
     if re.search(r"\bplay\b", q_clean) and re.search(r"\b(spotify|youtube|song|music|track|artist|album|playlist)\b", q_clean):
         return None
@@ -312,7 +324,7 @@ def resolve_light_request(question: str) -> dict | None:
     # Toggle / turn-on bare commands (quick-action buttons send these)
     if re.search(r"\btoggle\b.*\b(light|led)s?\b", q_clean) or re.search(r"\b(light|led)s?\b.*\btoggle\b", q_clean):
         return {"action": "toggle"}
-    if q_clean in ("toggle lights", "toggle light", "toggle_lights", "lights", "toggle"):
+    if q_clean in ("toggle lights", "toggle light", "toggle_lights", "lights"):
         return {"action": "toggle"}
 
     is_light_mention = bool(re.search(r"\b(light|led)s?\b", q_clean))
@@ -343,7 +355,7 @@ def resolve_light_request(question: str) -> dict | None:
                 "brightness": brightness,
             }
 
-    if found_color and ("light" in q_clean or "led" in q_clean):
+    if found_color and is_light_mention:
         return {
             "action": "set_color",
             "color": found_color,

@@ -286,9 +286,8 @@ fn project_root_from_cwd() -> Result<std::path::PathBuf, String> {
 #[tauri::command]
 fn show_overlay(app: AppHandle) -> Result<(), String> {
     if let Some(overlay) = app.get_webview_window("overlay") {
-        overlay.show().map_err(|err| err.to_string())?;
         configure_overlay_passthrough(&overlay);
-        let _ = overlay.set_always_on_top(true);
+        overlay.show().map_err(|err| err.to_string())?;
     }
     Ok(())
 }
@@ -852,9 +851,8 @@ fn handle_worker_cursor_action(overlay: Option<&WebviewWindow>, parsed: &serde_j
                 .get("label")
                 .and_then(|value| value.as_str())
                 .unwrap_or("target");
-            let _ = overlay.show();
-            let _ = overlay.set_always_on_top(true);
             configure_overlay_passthrough(overlay);
+            let _ = overlay.show();
             let _ = overlay.emit(
                 "blinky://agent-cursor-move",
                 serde_json::json!({
