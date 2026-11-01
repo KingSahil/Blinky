@@ -30,6 +30,7 @@ use platform::{
 type ActivePythonWorkers = Mutex<HashMap<String, u32>>;
 static ACTIVE_PYTHON_WORKERS: OnceLock<ActivePythonWorkers> = OnceLock::new();
 static NEXT_PYTHON_WORKER_ID: AtomicU64 = AtomicU64::new(1);
+static CACHED_PROJECT_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
 fn active_python_workers() -> &'static ActivePythonWorkers {
     ACTIVE_PYTHON_WORKERS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -58,10 +59,19 @@ struct AgentQueryRequest {
 
 #[tauri::command]
 async fn run_tutor(app: AppHandle, request: TutorRequest) -> Result<serde_json::Value, String> {
-    if std::env::var("BLINKY_USE_NATIVE_AGENT")
+    let use_native_agent = std::env::var("BLINKY_USE_NATIVE_AGENT")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-    {
+        .unwrap_or_else(|_| {
+            if let Ok(root) = project_root(&app) {
+                read_env_file(&root).into_iter().any(|(k, v)| {
+                    k == "BLINKY_USE_NATIVE_AGENT" && (v == "1" || v.eq_ignore_ascii_case("true"))
+                })
+            } else {
+                false
+            }
+        });
+
+    if use_native_agent {
         let query = request.question.trim();
         if query.is_empty() {
             return Err("Question is required.".to_string());
@@ -953,6 +963,9 @@ fn parse_worker_error(stdout: &str) -> Option<String> {
 }
 
 fn project_root(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(cached) = CACHED_PROJECT_ROOT.get() {
+        return Ok(cached.clone());
+    }
     // Walk up from CWD to find the project root (directory containing common/python/)
     if let Ok(cwd) = std::env::current_dir() {
         let mut dir = Some(cwd.as_path());
