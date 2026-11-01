@@ -1701,13 +1701,9 @@ def run_screenshot_tool(started: float, warnings: list[str]) -> dict:
 
     _emit_status("screenshot", "Capturing PC screen...")
     shot = capture_screen()
-    b64_data = ""
-    try:
-        with open(shot.path, "rb") as f:
-            b64_data = base64.b64encode(f.read()).decode("utf-8")
-    except Exception as exc:
-        LOGGER.warning("Failed to encode screenshot: %s", exc)
-        warnings.append(f"Screenshot encode error: {exc}")
+    b64_data = shot.to_base64()
+    if not b64_data:
+        warnings.append("Screenshot base64 encoding returned empty")
 
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     return {

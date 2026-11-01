@@ -18,6 +18,20 @@ class Screenshot:
     height: int
     screen_width: int
     screen_height: int
+    _b64_cache: str | None = None
+
+    def to_base64(self) -> str:
+        """Return base64-encoded JPEG image string, cached in memory to avoid duplicate disk I/O."""
+        if self._b64_cache is not None:
+            return self._b64_cache
+        try:
+            import base64
+            with open(self.path, "rb") as f:
+                self._b64_cache = base64.b64encode(f.read()).decode("ascii")
+            return self._b64_cache
+        except Exception as exc:
+            LOGGER.warning("Failed to encode screenshot to base64: %s", exc)
+            return ""
 
 
 class CaptureError(Exception):
