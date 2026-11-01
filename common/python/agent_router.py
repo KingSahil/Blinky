@@ -4,6 +4,9 @@ import json
 import ast
 import re
 import time
+from runtime_limits import configure_worker_threads
+configure_worker_threads()
+
 import asyncio
 import subprocess
 import webbrowser
@@ -715,6 +718,34 @@ async def handle_request(line):
             send_response(request_id, "success", data={"response": "Hello! I'm Blinky, your AI assistant. How can I help you today?"})
             return
 
+    # Dedicated tools retain priority over browser/desktop UI-agent fallbacks.
+    from computer_use.dedicated_routes import resolve_dedicated_request, execute_dedicated_request
+    dedicated = resolve_dedicated_request(query)
+    if dedicated and dedicated["kind"] == "information":
+        from main import answer_without_screen
+        result = await asyncio.to_thread(answer_without_screen, query)
+        send_response(request_id, "success", data={"response": result["summary"], "tool": "chat", **result})
+        return
+    if dedicated and dedicated["kind"] == "web_search":
+        from main import run_web_intelligence
+        result = await asyncio.to_thread(run_web_intelligence, query, [], time.perf_counter(), [])
+        send_response(request_id, "success", data={"response": result.get("summary", ""), **result})
+        return
+    if dedicated and dedicated["kind"] not in {"information", "web_search"}:
+        direct = await asyncio.to_thread(execute_dedicated_request, dedicated)
+        if direct is not None:
+            send_response(request_id, "success" if direct.success else "error", data={"response": direct.message, "tool": direct.tool, **direct.to_dict()})
+            return
+
+    # Share PC accessibility routing with mobile requests.
+    from computer_use.vercel_engine import should_route, run_desktop_request
+    if should_route(query, agent_mode=bool(req.get("agent_mode", False))):
+        cursor_sink = lambda kind, x, y, label: send_response(request_id, "action", data={"type": kind, "x": x, "y": y, "label": label})
+        result = await asyncio.to_thread(run_desktop_request, query, time.perf_counter(), [], cursor_sink=cursor_sink)
+        send_response(request_id, "success" if result["success"] else "error",
+                      data={"response": result["summary"], "tool": "agent-desktop", **result})
+        return
+
     # ── Check for Local Desktop Agent Actions (aligning mobile behavior with PC chatbar) ──
     try:
         import platform
@@ -739,12 +770,18 @@ async def handle_request(line):
             bu_match = resolve_browser_use_request(query)
             if bu_match:
                 send_response(request_id, "processing", data={"message": "Starting autonomous browser agent...", "percent": 30})
-                bu_res = await run_browser_task(bu_match["task"])
+                cursor_sink = lambda kind, x, y, label: send_response(request_id, "action", data={"type": kind, "x": x, "y": y, "label": label})
+                bu_res = await run_browser_task(bu_match["task"], cursor_sink=cursor_sink)
                 summary = bu_res.get("result", "Browser task completed.")
-                send_response(request_id, "success", data={"response": summary, "tool": "browser_use"})
+                send_response(request_id, "success" if bu_res.get("success") else "error",
+                              data={"response": summary, "tool": bu_res.get("engine", "browser_use"), **bu_res,
+                                    "execution_steps": bu_res.get("steps", 0), "steps": bu_res.get("guidance_steps", [])})
                 return
         except Exception as exc:
             LOGGER.debug("Fast-path browser-use failed: %s", exc)
+            if locals().get("bu_match"):
+                send_response(request_id, "error", error={"code": "AGENT_BROWSER_FAILED", "message": str(exc)})
+                return
 
         # Check Spreadsheet direct request fast-path
         sheet_match = resolve_spreadsheet_request(query)
@@ -961,6 +998,12 @@ async def handle_request(line):
         if preflight:
             intent = preflight.get("intent", "DESKTOP_AUTOMATION")
             extracted_params = preflight.get("extracted_params", {}) or {}
+            from computer_use.vercel_engine import desktop_enabled
+            if desktop_enabled() and not dedicated and intent in {"DESKTOP_REFS", "DESKTOP_AUTOMATION", "COMPUTER_USE", "LOCATOR", "SCREEN_EXPLANATION"}:
+                cursor_sink = lambda kind, x, y, label: send_response(request_id, "action", data={"type": kind, "x": x, "y": y, "label": label})
+                result = await asyncio.to_thread(run_desktop_request, query, time.perf_counter(), [], cursor_sink=cursor_sink)
+                send_response(request_id, "success" if result["success"] else "error", data={"response": result["summary"], "tool": "agent-desktop", **result})
+                return
             
             # Match the routing logic in main.py
             if intent == "OPEN_APP" and _has_computer_use_action(query):
@@ -1005,9 +1048,10 @@ async def handle_request(line):
                 from tools.browser_use_tool import run_browser_task
                 task_desc = extracted_params.get("task", query)
                 send_response(request_id, "processing", data={"message": "Starting autonomous browser agent...", "percent": 30})
-                bu_res = await run_browser_task(task_desc)
+                cursor_sink = lambda kind, x, y, label: send_response(request_id, "action", data={"type": kind, "x": x, "y": y, "label": label})
+                bu_res = await run_browser_task(task_desc, cursor_sink=cursor_sink)
                 summary = bu_res.get("result", "Browser task completed.")
-                send_response(request_id, "success", data={"response": summary, "tool": "browser_use"})
+                send_response(request_id, "success" if bu_res.get("success") else "error", data={"response": summary, "tool": "agent-browser", **bu_res})
                 return
             elif intent == "WINDOWS_USE":
                 send_response(request_id, "processing", data={"message": "Executing Windows automation...", "percent": 50})
@@ -1200,6 +1244,11 @@ async def handle_request(line):
             "percent": 35,
         })
         try:
+            if os.getenv("BLINKY_BROWSER_ENGINE", "agent-browser") == "agent-browser":
+                from tools.browser_use_tool import run_browser_task
+                result = await run_browser_task(query)
+                send_response(request_id, "success" if result.get("success") else "error", data={"response": result.get("result"), **result})
+                return
             result = await run_browser_plan(browser_plan)
             send_response(request_id, "success", data=result)
             return

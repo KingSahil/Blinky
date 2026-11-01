@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from runtime_limits import configure_worker_threads
+configure_worker_threads()
+
 import json
 import os
 import platform
@@ -346,7 +349,31 @@ def run(
     if web_search_enabled:
         return run_web_intelligence(question, conversation_history, started, warnings)
 
-    if agent_mode:
+    from computer_use.dedicated_routes import resolve_dedicated_request, execute_dedicated_request
+    dedicated = resolve_dedicated_request(question)
+    if dedicated and dedicated["kind"] == "visual_guidance":
+        agent_mode = False
+        progress = None
+        previous_question = None
+    if dedicated and dedicated["kind"] == "web_search":
+        return run_web_intelligence(question, conversation_history, started, warnings)
+    if dedicated and dedicated["kind"] not in {"information", "web_search"}:
+        direct = execute_dedicated_request(dedicated)
+        if direct is not None:
+            return build_agent_tool_result(direct.to_dict(), started, warnings)
+
+    # Browser tasks must bypass desktop launchers and all legacy screen matching.
+    from tools.browser_use_tool import resolve_browser_use_request
+    browser_match = resolve_browser_use_request(question)
+    if browser_match:
+        return run_browser_use_tool(browser_match, started, warnings)
+
+    # Accessibility actions execute before the legacy label-matching path.
+    from computer_use.vercel_engine import should_route, run_desktop_request
+    if should_route(question, agent_mode=agent_mode):
+        return run_desktop_request(question, started, warnings, status=_emit_status)
+
+    if agent_mode and not dedicated:
         direct_result = try_run_agent_action(question)
         if direct_result is not None:
             # If the tool is a media control/shortcut or was successful, return it immediately without falling back to preflight
@@ -376,6 +403,8 @@ def run(
         log_stage_timing("preflight", preflight_started)
 
     intent = "SCREEN_EXPLANATION" if is_screen_explanation_question(question) else "DESKTOP_AUTOMATION"
+    if dedicated and dedicated["kind"] == "visual_guidance":
+        intent = "LOCATOR"
     extracted_params = {}
     is_continuation = False
 
@@ -385,6 +414,11 @@ def run(
         is_continuation = preflight.get("is_continuation", False)
     elif previous_question and is_followup_continuation_question(question):
         is_continuation = True
+
+    from computer_use.vercel_engine import desktop_enabled
+    if desktop_enabled() and not dedicated and intent in {"DESKTOP_AUTOMATION", "COMPUTER_USE", "LOCATOR", "SCREEN_EXPLANATION"}:
+        LOGGER.info("Routing classified %s through Vercel agent-desktop", intent)
+        return run_desktop_request(question, started, warnings, status=_emit_status)
 
     # Auto-enable or disable modes based on classified intent
     if intent == "WEB_SEARCH" or is_web_research_question(question):
@@ -420,6 +454,9 @@ def run(
         if "raw_prompt" not in extracted_params:
             extracted_params["raw_prompt"] = question
         return run_spreadsheet_tool(extracted_params, started, warnings)
+    elif intent == "DESKTOP_REFS":
+        from computer_use.vercel_engine import run_desktop_request
+        return run_desktop_request(question, started, warnings, status=_emit_status)
     elif intent == "BROWSER_USE":
         LOGGER.info("Routing to browser-use tool for intent: BROWSER_USE")
         return run_browser_use_tool(extracted_params, started, warnings)
@@ -1140,6 +1177,27 @@ def classify_request(
     from computer_use.agent import is_web_destination, is_in_app_action, looks_like_app_name
     from computer_use.tools import normalize_app_name, APP_PROTOCOLS, APP_NAME_ALIASES
     is_mocked = getattr(ask_text_model, "_mock_name", None) is not None or "Mock" in type(ask_text_model).__name__
+    from computer_use.dedicated_routes import resolve_dedicated_request
+    dedicated = resolve_dedicated_request(question)
+    if dedicated and dedicated["kind"] == "information":
+        return {"intent": "INFORMATIONAL_CHAT", "needs_screen": False, "is_continuation": False, "extracted_params": {}}
+    if dedicated and dedicated["kind"] == "visual_guidance":
+        return {"intent": "LOCATOR", "needs_screen": True, "is_continuation": False, "extracted_params": {}}
+    from computer_use.dedicated_routes import appearance_request
+    if not dedicated and appearance_request(question):
+        return {"intent": "DESKTOP_REFS", "needs_screen": False, "is_continuation": False, "extracted_params": {"task": question}}
+    if dedicated and dedicated["kind"] == "web_search":
+        return {"intent": "WEB_SEARCH", "needs_screen": False, "is_continuation": False, "extracted_params": {"query": dedicated["query"]}}
+    from tools.browser_use_tool import resolve_browser_use_request
+    browser_match = resolve_browser_use_request(question)
+    if browser_match:
+        return {"intent": "BROWSER_USE", "needs_screen": False,
+                "is_continuation": False, "extracted_params": browser_match}
+    from tools.vercel_desktop_tool import resolve_vercel_desktop_request
+    desktop_match = resolve_vercel_desktop_request(question)
+    if desktop_match:
+        return {"intent": "DESKTOP_REFS", "needs_screen": False,
+                "is_continuation": False, "extracted_params": desktop_match}
     if not is_mocked:
         # Compound Store searches must win before the broad OPEN_APP matcher; the
         # latter otherwise strips the search action and leaves it in an agent loop.
@@ -1193,18 +1251,6 @@ def classify_request(
             }
     except Exception as exc:
         LOGGER.debug("Fast-path WINDOWS_USE resolution failed: %s", exc)
-    try:
-        from tools.browser_use_tool import resolve_browser_use_request
-        bu_match = resolve_browser_use_request(question)
-        if bu_match:
-            return {
-                "intent": "BROWSER_USE",
-                "needs_screen": False,
-                "is_continuation": False,
-                "extracted_params": bu_match,
-            }
-    except Exception as exc:
-        LOGGER.debug("Fast-path BROWSER_USE resolution failed: %s", exc)
     try:
         from tools.aicut_tool import resolve_aicut_request
         aicut_match = resolve_aicut_request(question)
@@ -1324,6 +1370,13 @@ def classify_request(
 
     intent = payload.get("intent")
     extracted_params = payload.get("extracted_params", {}) or {}
+    if intent == "ESP32_LIGHT":
+        from tools.esp32_light_tool import resolve_light_request
+        confirmed = resolve_light_request(question)
+        if confirmed is None:
+            intent, extracted_params = "INFORMATIONAL_CHAT", {}
+        else:
+            extracted_params = confirmed
     
     # Safety check: if intent is OPEN_APP but targets web UI, an in-app
     # feature/action, or a query, override to DESKTOP_AUTOMATION (only if not in agent_mode).
@@ -1549,20 +1602,26 @@ def run_browser_use_tool(
     from tools.browser_use_tool import run_browser_task
     import asyncio
 
-    _emit_status("browser", "Executing autonomous browser-use task in Microsoft Edge...")
+    _emit_status("browser", "Inspecting your connected browser...")
     task = params.get("task") or params.get("raw_prompt") or "Open browser and perform task."
+    cdp_url = params.get("cdp_url")
+    res = {"success": False}
     try:
-        res = asyncio.run(run_browser_task(task))
+        from computer_use.cursor_bridge import emit_cursor_protocol_event
+        res = asyncio.run(run_browser_task(task, cdp_url=cdp_url, cursor_sink=emit_cursor_protocol_event))
         summary = res.get("result", "Browser task completed.")
     except Exception as exc:
         summary = f"Browser-use task failed: {exc}"
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    app_label = "Microsoft Edge"
-    app_proc = "msedge"
+    app_label = "Connected browser"
+    app_proc = ""
     return {
         "summary": summary,
-        "steps": [],
+        "steps": res.get("guidance_steps", []),
         "active_app": {"title": app_label, "process": app_proc, "supported": True},
+        "success": bool(res.get("success", False)),
+        "engine": res.get("engine", "browser_use"),
+        "debug_dir": res.get("debug_dir", ""),
         "ocr": {"count": 0, "items": []},
         "elapsed_ms": elapsed_ms,
         "provider": get_provider_label(),

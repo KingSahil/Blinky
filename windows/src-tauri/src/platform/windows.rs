@@ -535,14 +535,14 @@ pub fn register_exit_cursor_restorer() {
 
 
 pub fn configure_overlay_passthrough(window: &WebviewWindow) {
-    use windows_sys::Win32::Foundation::HWND;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongW, SetWindowLongW, SetWindowPos, GWL_EXSTYLE, HWND_TOPMOST,
-        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-        WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-    };
-
+    // Keep Tao's internal flags in sync with the native window. Setting only
+    // GWL_EXSTYLE is not enough: a later always-on-top/show update rebuilds
+    // those styles from Tao's flags and can make the overlay eat mouse input.
+    let _ = window.set_ignore_cursor_events(true);
+    let _ = window.set_focusable(false);
+    let _ = window.set_skip_taskbar(true);
     let _ = window.set_fullscreen(false);
+    let _ = window.set_always_on_top(true);
 
     let monitor = window
         .current_monitor()
@@ -550,43 +550,17 @@ pub fn configure_overlay_passthrough(window: &WebviewWindow) {
         .flatten()
         .or_else(|| window.primary_monitor().ok().flatten());
     if let Some(monitor) = monitor {
-        let size = monitor.size();
-        let position = monitor.position();
+        // Never cover the shell taskbar (including a taskbar on another edge
+        // or monitor), or present a monitor-sized topmost fullscreen surface.
+        let area = monitor.work_area();
         let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-            width: size.width,
-            height: size.height,
+            width: area.size.width,
+            height: area.size.height,
         }));
         let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-            x: position.x,
-            y: position.y,
+            x: area.position.x,
+            y: area.position.y,
         }));
-    }
-
-    if let Ok(hwnd) = window.hwnd() {
-        unsafe {
-            let hwnd = hwnd.0 as HWND;
-            let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
-            SetWindowLongW(
-                hwnd,
-                GWL_EXSTYLE,
-                style
-                    | WS_EX_TRANSPARENT as i32
-                    | WS_EX_LAYERED as i32
-                    | WS_EX_TOOLWINDOW as i32
-                    | WS_EX_TOPMOST as i32
-                    | WS_EX_NOACTIVATE as i32,
-            );
-            SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-        }
-        let _ = window.set_always_on_top(true);
     }
 }
 

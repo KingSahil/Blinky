@@ -12,7 +12,13 @@ from tools.browser_use_tool import (
 from main import classify_request, run_browser_use_tool
 
 
+@patch.dict("os.environ", {"BLINKY_BROWSER_ENGINE": "browser_use", "BLINKY_DESKTOP_ENGINE": "legacy"})
 class BrowserUseToolTests(unittest.TestCase):
+    def setUp(self):
+        discovery = patch("tools.browser_use_tool.get_existing_browser_endpoint", return_value=None)
+        discovery.start()
+        self.addCleanup(discovery.stop)
+
     def test_resolve_browser_use_request_phrasings(self):
         valid_queries = [
             "go to https://example.com and find the heading",
@@ -68,6 +74,32 @@ class BrowserUseToolTests(unittest.TestCase):
         self.assertEqual(res["action"], "browser_use")
         self.assertEqual(res["result"], "Found heading 'Example Domain'")
         self.assertEqual(res["steps"], 2)
+        mock_browser_cls.assert_called_with(channel="msedge", headless=True)
+
+    @patch("browser_use.Agent")
+    @patch("browser_use.Browser")
+    @patch.dict("os.environ", {"GEMINI_API_KEY": "dummy_gemini_key"})
+    def test_run_browser_task_with_cdp_url(self, mock_browser_cls, mock_agent_cls):
+        import asyncio
+
+        mock_history = MagicMock()
+        mock_history.final_result.return_value = "Connected to existing tab"
+        mock_history.action_names.return_value = ["click", "done"]
+        mock_history.errors.return_value = []
+
+        mock_agent_instance = MagicMock()
+        mock_agent_instance.run = AsyncMock(return_value=mock_history)
+        mock_agent_cls.return_value = mock_agent_instance
+
+        res = asyncio.run(run_browser_task("Complete form in existing browser", cdp_url="http://localhost:9222"))
+        self.assertTrue(res["success"])
+        mock_browser_cls.assert_called_with(
+            cdp_url="http://localhost:9222",
+            is_local=True,
+            use_cloud=False,
+            enable_default_extensions=False,
+            auto_download_pdfs=False,
+        )
 
     def test_classify_request_routes_to_browser_use(self):
         res = classify_request("go to https://example.com and extract heading", None, [])
@@ -92,8 +124,8 @@ class BrowserUseToolTests(unittest.TestCase):
             warnings=[],
         )
         self.assertEqual(res["summary"], "Completed web automation.")
-        self.assertEqual(res["active_app"]["title"], "Microsoft Edge")
-        self.assertEqual(res["active_app"]["process"], "msedge")
+        self.assertEqual(res["active_app"]["title"], "Connected browser")
+        self.assertEqual(res["active_app"]["process"], "")
 
 
 if __name__ == "__main__":

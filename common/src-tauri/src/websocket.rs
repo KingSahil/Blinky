@@ -1705,9 +1705,8 @@ async fn handle_desktop_action(app: &AppHandle, parsed: &serde_json::Value) {
 
                     // 1. Show overlay window so AI companion cursor is visible on PC
                     if let Some(overlay) = app.get_webview_window("overlay") {
-                        let _ = overlay.show();
-                        let _ = overlay.set_always_on_top(true);
                         crate::platform::configure_overlay_passthrough(&overlay);
+                        let _ = overlay.show();
 
                         // 2. Animate AI cursor glide towards target coordinates
                         let instruction = if action_type == "click" {

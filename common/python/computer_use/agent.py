@@ -341,6 +341,12 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
 
     open_and_type_match = OPEN_AND_TYPE_RE.match(question_cleaned)
     if open_and_type_match:
+        from .vercel_engine import desktop_enabled
+        if desktop_enabled():
+            # Let the selected ref-based engine own compound UI editing;
+            # do not launch/type using the old foreground-keyboard recipe.
+            return None
+    if open_and_type_match:
         app = cleanup_app_name(open_and_type_match.group("app"))
         raw_text = open_and_type_match.group("text").strip().strip("'\"")
         if app and raw_text:

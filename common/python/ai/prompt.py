@@ -28,6 +28,7 @@ Student request:
 Decide on the best intent category for the request, whether Blinky needs to inspect the user's screen to answer (needs_screen), and whether it is a continuation.
 
 Intents to choose from:
+0. `DESKTOP_REFS`: Control desktop apps using agent-desktop accessibility refs. Extract the task to "task". Use `BROWSER_USE` for website navigation and browser tasks; it uses agent-browser refs.
 1. `COMPUTER_USE`: The student wants to control their Windows or Linux desktop â€” open/list windows, click buttons, type text, press keys, or perform sequential actions on running applications (e.g. "type hello world", "list windows", "click the search box", "press Enter").
 2. `OPEN_APP`: The user explicitly requests to open, launch, or start a local desktop application (e.g. "open Spotify", "launch vscode", "start WhatsApp"). Extract the app name to "app_name".
    - Note: Do NOT classify web destinations, sites, or domains (e.g. YouTube, GitHub, Gmail, ChatGPT, or URLs) as `OPEN_APP`. Route those to `DESKTOP_AUTOMATION`.
@@ -68,7 +69,7 @@ Compound-request rule (IMPORTANT):
 
 Rules for needs_screen:
 - needs_screen is true ONLY when the student wants guidance tied to visible UI (like clicking, opening, selecting, locating, highlighting, installing, or navigating something in an app, menu, button, tab, or window), OR when the student asks what is on their screen ("what's on my screen", "whats on my screen", "describe my screen", "explain my screen", "what am I looking at").
-- needs_screen is false for COMPUTER_USE, OPEN_APP, MEDIA_PLAYBACK, SYSTEM_SHORTCUT, WEB_SEARCH, INFORMATIONAL_CHAT, WHATSAPP, VIDEO_EDIT, ESP32_LIGHT, and SPREADSHEET.
+- needs_screen is false for DESKTOP_REFS, BROWSER_USE, COMPUTER_USE, OPEN_APP, MEDIA_PLAYBACK, SYSTEM_SHORTCUT, WEB_SEARCH, INFORMATIONAL_CHAT, WHATSAPP, VIDEO_EDIT, ESP32_LIGHT, and SPREADSHEET.
 
 
 Rules for is_continuation:

@@ -1,4 +1,12 @@
 {
+  "vercel_desktop": {
+    "name": "vercel_desktop",
+    "description": "Operate local desktop apps with agent-desktop accessibility refs. Browser tasks use agent-browser separately.",
+    "filepath": "python/tools/vercel_desktop_tool.py",
+    "arguments": ["action", "task"],
+    "status": "generalized",
+    "verification_args": {"action": "status"}
+  },
   "lookup_youtube_stats": {
     "name": "lookup_youtube_stats",
     "description": "Lookup subscriber counts, views, and growth from a YouTube channel by handle or name",

@@ -212,6 +212,13 @@ def resolve_windows_use_request(query: str) -> dict[str, Any] | None:
             "raw_query": query,
         }
 
+    # These are legacy UI recipes, not dedicated API capabilities. Respect
+    # the selected desktop engine across every caller, including preflight.
+    # The dedicated Store search above retains its existing fast path.
+    from .vercel_engine import desktop_enabled
+    if desktop_enabled():
+        return None
+
     # 1. Notepad: new tab and type
     for r in NOTEPAD_TAB_TYPE_RES:
         m = r.match(q)

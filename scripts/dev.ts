@@ -1,9 +1,42 @@
 import { spawn, type Subprocess } from "bun";
 import { existsSync } from "fs";
+import { delimiter, join } from "path";
+
+// Existing terminals can retain a stale PATH after installing Bun/Rust.
+// Resolve the same per-user toolchains that run.ps1 uses for every child.
+if (process.platform === "win32") {
+  const home = process.env.USERPROFILE || "";
+  const toolDirs = [join(home, ".bun", "bin"), join(home, ".cargo", "bin")].filter(existsSync);
+  process.env.PATH = [...toolDirs, process.env.PATH || ""].join(delimiter);
+  process.env.CARGO_BUILD_JOBS ||= "1";
+}
+
+// Each Python worker otherwise creates a full BLAS/OpenMP thread pool. Those
+// per-worker buffers can exhaust Windows commit even when physical RAM is free.
+for (const variable of ["OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"]) {
+  process.env[variable] ||= "1";
+}
 
 const args = Bun.argv.slice(2);
 const noDocker = args.includes("--no-docker");
 const noMobile = args.includes("--no-mobile");
+
+// A second dev session used to kill the first app's ports while its watcher
+// restarted it, leaving competing Vite/Tauri/Python processes. Windows releases
+// this mutex automatically if the owner exits, including crashes.
+if (process.platform === "win32") {
+  const { dlopen, FFIType, ptr } = require("bun:ffi");
+  const kernel32 = dlopen("kernel32.dll", {
+    CreateMutexW: { args: [FFIType.ptr, FFIType.bool, FFIType.ptr], returns: FFIType.ptr },
+    GetLastError: { args: [], returns: FFIType.u32 },
+  });
+  const mutexName = Buffer.from("Local\\Blinky.Development.Session\0", "utf16le");
+  const mutex = kernel32.symbols.CreateMutexW(null, false, ptr(mutexName));
+  if (mutex && kernel32.symbols.GetLastError() === 183) {
+    console.log("[Blinky] A development session is already running. Use its app window; this launch will leave it running.");
+    process.exit(0);
+  }
+}
 
 function getDockerPath(): string {
   if (process.platform !== "win32") {
