@@ -12,6 +12,10 @@ from typing import Any, Callable
 import requests
 from PIL import Image
 
+# Reusable persistent HTTP session with connection pooling to eliminate
+# repeated TCP/TLS handshake latency on successive API queries.
+_HTTP_SESSION = requests.Session()
+
 from utils.logging import get_logger
 
 LOGGER = get_logger("blinky.groq")
@@ -256,7 +260,7 @@ def _post_groq_with_retry(
 
 def _post_groq(groq_url: str, api_key: str, payload: dict[str, Any], timeout_val: int) -> requests.Response:
     try:
-        return requests.post(
+        return _HTTP_SESSION.post(
             groq_url,
             headers={
                 "Authorization": f"Bearer {api_key}",

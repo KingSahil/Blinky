@@ -12,6 +12,9 @@ from utils.logging import get_logger
 
 LOGGER = get_logger("blinky.ollama")
 
+# Reusable HTTP session with connection keep-alive to local Ollama server
+_HTTP_SESSION = requests.Session()
+
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_OLLAMA_MODEL = "gemma4:e4b"
 DEFAULT_OLLAMA_TIMEOUT_SECONDS = 35
@@ -25,7 +28,7 @@ def ask_ollama(prompt: str) -> dict[str, Any]:
     last_error: Exception | None = None
     for attempt in range(2):
         try:
-            response = requests.post(
+            response = _HTTP_SESSION.post(
                 ollama_url,
                 json={
                     "model": model,
@@ -64,7 +67,7 @@ def ask_ollama_text(prompt: str, max_tokens: int = 300) -> dict[str, Any]:
     timeout_seconds = _ollama_timeout_seconds()
 
     try:
-        response = requests.post(
+        response = _HTTP_SESSION.post(
             ollama_url,
             json={
                 "model": model,

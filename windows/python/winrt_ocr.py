@@ -16,6 +16,14 @@ class OcrProvider(ABC):
 
 
 class WinRtOcrProvider(OcrProvider):
+    def __init__(self) -> None:
+        self._engine = None
+
+    def _get_engine(self, ocr_mod):
+        if self._engine is None:
+            self._engine = ocr_mod.OcrEngine.try_create_from_user_profile_languages()
+        return self._engine
+
     def extract_text(self, image_path: Path) -> list[dict[str, Any]]:
         import asyncio
         import winrt.windows.graphics.imaging as imaging
@@ -27,7 +35,7 @@ class WinRtOcrProvider(OcrProvider):
             stream = await file.open_async(storage.FileAccessMode.READ)
             decoder = await imaging.BitmapDecoder.create_async(stream)
             bitmap = await decoder.get_software_bitmap_async()
-            engine = ocr.OcrEngine.try_create_from_user_profile_languages()
+            engine = self._get_engine(ocr)
             result = await engine.recognize_async(bitmap)
             items: list[dict[str, Any]] = []
             for line in result.lines:
