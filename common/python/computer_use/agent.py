@@ -351,7 +351,16 @@ def try_run_agent_action(question: str, observation: dict[str, Any] | None = Non
         raw_text = open_and_type_match.group("text").strip().strip("'\"")
         if app and raw_text:
             open_res = _get_tool("open_app_tool")(app)
-            time.sleep(0.8)
+            # Event-driven wait: poll up to 0.8s for target app to focus instead of hard sleeping
+            deadline = time.monotonic() + 0.8
+            while time.monotonic() < deadline:
+                try:
+                    active = _get_tool("get_app_state_tool")()
+                    if active and app.lower() in str(active.data.get("title", "")).lower():
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.04)
             type_res = _get_tool("type_text_tool")(raw_text, target_app=app)
             if type_res.success:
                 return ToolResult(
